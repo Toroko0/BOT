@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Environment Variables / Secrets
+# This file contains your bot token and other secrets. NEVER commit it.
+.env
+
+# Log files and folders
+# Your specific log folder
+logs/
+# Your specific log file in the root directory
+bot.log
+
+# Local Development Database
+# This is your SQLite database file used for development.
+dev.sqlite3
+
+# NPM Cache folder seen in your project root
+# This folder (.npm) is likely an npm cache or temporary directory.
+.npm/
+
+# --- Potentially Ignored - User Decision Needed ---
+# The 'data' folder:
+# If your 'data/' folder contains user-specific information that changes at runtime
+# (like user scores, temporary files, or other dynamic content that shouldn't be versioned),
+# then you should uncomment the line below to ignore it.
+# If 'data/' contains static assets or configuration that are essential for the bot
+# and should be part of the repository, then leave this line commented out.
+data/
+
+
+# --- Standard Good-to-ignore (OS/Editor files) ---
+# These weren't explicitly in your screenshot's file list,
+# but are highly recommended for any project to avoid clutter.
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+
+# Editor/IDE specific (examples, uncomment if you use these editors)
+# .vscode/
+# .idea/

@@ -1,0 +1,54 @@
+{
+  "name": "growtopia-tracker-bot",
+  "version": "1.1.0",
+  "description": "A Discord bot to track Growtopia worlds",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "migrate": "npx knex migrate:latest",
+    "migrate:make": "npx knex migrate:make --migrations-directory ./migrations",
+    "migrate:rollback": "npx knex migrate:rollback",
+    "deploy:guild": "node deploy-commands.js --guild",
+    "deploy:global": "node deploy-commands.js",
+    "remove:commands": "node remove-commands.js",
+    "test": "npx jest",
+    "test:watch": "npx jest --watch"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "growtopia",
+    "tracker"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@discordjs/builders": "^1.10.1",
+    "@discordjs/collection": "1.5.3",
+    "@discordjs/formatters": "^0.6.0",
+    "@discordjs/rest": "^2.4.3",
+    "@discordjs/util": "^1.1.1",
+    "@discordjs/ws": "^1.2.1",
+    "@sapphire/async-queue": "^1.5.5",
+    "@sapphire/snowflake": "3.5.3",
+    "date-fns": "4.1.0",
+    "discord-api-types": "^0.37.119",
+    "discord.js": "14.18.0",
+    "dotenv": "16.4.7",
+    "fast-deep-equal": "3.1.3",
+    "knex": "3.1.0",
+    "lodash.snakecase": "4.1.1",
+    "luxon": "3.6.1",
+    "sqlite3": "5.1.7",
+    "table": "6.9.0",
+    "tslib": "^2.8.1",
+    "undici": "6.21.1"
+  },
+  "devDependencies": {
+    "jest": "29.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
