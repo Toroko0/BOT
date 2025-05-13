@@ -26,7 +26,6 @@ dev.sqlite3
 # then you should uncomment the line below to ignore it.
 # If 'data/' contains static assets or configuration that are essential for the bot
 # and should be part of the repository, then leave this line commented out.
-data/
 
 
 # --- Standard Good-to-ignore (OS/Editor files) ---
