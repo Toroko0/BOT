@@ -1,5 +1,4 @@
 # Dependencies
-node_modules/
 
 # Environment Variables / Secrets
 # This file contains your bot token and other secrets. NEVER commit it.
