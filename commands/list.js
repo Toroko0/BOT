@@ -10,6 +10,7 @@ const logger = require('../utils/logger.js');
 const { table, getBorderCharacters } = require('table');
 const { showWorldInfo, showEditWorldModal } = require('./info.js'); // Assuming info.js exports these
 const CONSTANTS = require('../utils/constants.js');
+const { showSearchModal } = require('./search.js');
 
 // --- Modal Definitions ---
 async function showRemoveWorldModal(interaction) {
@@ -243,7 +244,7 @@ module.exports = {
             case 'info': await showInfoWorldModal(interaction); break;
             case 'share': await showShareWorldModal(interaction, true); break;
             case 'unshare': await showShareWorldModal(interaction, false); break;
-            case 'search': await showAdvancedSearchModal(interaction); break; // Use imported advanced modal
+            case 'search': await showSearchModal(interaction); break; 
             case 'page': await interaction.deferUpdate(); break;
             case 'view': await showWorldsList(interaction, type, page); break; // Handle 'view' from help button
             default: logger.warn(`[list.js] Unknown list button action: ${action}`); await interaction.reply({ content: 'Unknown button action.', flags: 1 << 6 });
