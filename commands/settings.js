@@ -3,26 +3,27 @@ const db = require('../database.js'); // Or path to your database module
 const logger = require('../utils/logger.js'); // Or path to your logger
 
 // --- Helper Function to Generate Settings Reply ---
-// (Simulated preferences will be passed for now)
-async function getSettingsReplyOptions(interactionUser, currentViewMode = 'pc', currentTimezoneOffset = 0.0, currentReminderEnabled = false, currentReminderTime = null) {
-    // In a real scenario, these would be fetched via:
-    // const userPrefs = await db.getUserPreferences(interactionUser.id);
-    // For now, we use the passed-in or default values.
-    const userPrefs = {
-        timezone_offset: currentTimezoneOffset,
-        view_mode: currentViewMode,
-        reminder_enabled: currentReminderEnabled,
-        reminder_time_utc: currentReminderTime
-    };
+async function getSettingsReplyOptions(userId) {
+    const userPrefs = await db.getUserPreferences(userId);
+
+    // Provide default values if userPrefs is null or some fields are missing
+    const timezoneOffset = userPrefs?.timezone_offset ?? 0.0;
+    const viewMode = userPrefs?.view_mode ?? 'pc';
+    const reminderEnabled = userPrefs?.reminder_enabled ?? false;
+    const reminderTimeUtc = userPrefs?.reminder_time_utc ?? null;
+    
+    // In a real scenario, you might fetch the username separately if needed, or pass it
+    // For now, let's assume we don't need to display username in the title here, or handle it if interaction is available
+    // const userName = interactionUser ? interactionUser.username : 'User'; // Example if interactionUser was passed
 
     const settingsEmbed = new EmbedBuilder()
         .setColor(0x0099FF)
-        .setTitle(`${interactionUser.username}'s Settings`)
+        .setTitle(`Your Settings`) // Title can be generic or fetch username if needed
         .setDescription('Manage your preferences for the bot.')
         .addFields(
-            { name: '🌍 Timezone Offset', value: `GMT${userPrefs.timezone_offset >= 0 ? '+' : ''}${userPrefs.timezone_offset.toFixed(1)}`, inline: true },
-            { name: '🖥️ View Mode', value: userPrefs.view_mode === 'pc' ? 'PC Mode' : 'Phone Mode', inline: true },
-            { name: '⏰ Reminders', value: userPrefs.reminder_enabled ? `Enabled (${userPrefs.reminder_time_utc || 'Not Set'})` : 'Disabled', inline: true }
+            { name: '🌍 Timezone Offset', value: `GMT${timezoneOffset >= 0 ? '+' : ''}${timezoneOffset.toFixed(1)}`, inline: true },
+            { name: '🖥️ View Mode', value: viewMode === 'pc' ? 'PC Mode' : 'Phone Mode', inline: true },
+            { name: '⏰ Reminders', value: reminderEnabled ? `Enabled (${reminderTimeUtc || 'Not Set'})` : 'Disabled', inline: true }
         )
         .setFooter({ text: 'Use the buttons below to change your settings.' });
 
@@ -34,7 +35,7 @@ async function getSettingsReplyOptions(interactionUser, currentViewMode = 'pc', 
                 .setStyle(ButtonStyle.Primary),
             new ButtonBuilder()
                 .setCustomId('settings_button_toggleviewmode')
-                .setLabel(userPrefs.view_mode === 'pc' ? 'Switch to Phone Mode' : 'Switch to PC Mode')
+                .setLabel(viewMode === 'pc' ? 'Switch to Phone Mode' : 'Switch to PC Mode')
                 .setStyle(ButtonStyle.Primary)
         );
 
@@ -60,35 +61,20 @@ module.exports = {
         .setDescription('Access and manage your bot preferences.'),
 
     async execute(interaction) {
-        // Simulate fetching preferences (replace with actual db call in Phase 2)
-        const simulatedPrefs = { viewMode: 'pc', timezoneOffset: 0.0, reminderEnabled: false, reminderTime: null }; 
-        
-        const replyOptions = await getSettingsReplyOptions(
-            interaction.user, 
-            simulatedPrefs.viewMode, 
-            simulatedPrefs.timezoneOffset,
-            simulatedPrefs.reminderEnabled,
-            simulatedPrefs.reminderTime
-        );
+        const replyOptions = await getSettingsReplyOptions(interaction.user.id);
         await interaction.reply(replyOptions);
     },
 
     async handleButton(interaction, params) {
         const action = params[0];
-        const replyOptsEphemeral = { flags: 1 << 6 };
-
-        // Simulate fetching current preferences (replace with db calls in Phase 2)
-        // For now, we'll use some defaults and modify them based on actions.
-        // This is a very simplified mock for demonstration.
-        let currentViewMode = 'pc'; 
-        let currentTimezoneOffset = 0.0;
-        // In a real scenario: const userPrefs = await db.getUserPreferences(interaction.user.id);
-        // currentViewMode = userPrefs.view_mode; 
-        // currentTimezoneOffset = userPrefs.timezone_offset;
+        const replyOptsEphemeral = { flags: 1 << 6 }; // For error messages or non-update replies
 
         try {
+            await interaction.deferUpdate(); // Defer update for all button actions that will refresh the message
+
             switch (action) {
                 case 'settimezone':
+                    // Modal is shown, actual update happens in handleModal
                     const modal = new ModalBuilder()
                         .setCustomId('settings_modal_settimezone')
                         .setTitle('Set Your Timezone Offset');
@@ -114,74 +100,85 @@ module.exports = {
                     const row = new ActionRowBuilder().addComponents(selectMenu);
                     modal.addComponents(row);
                     await interaction.showModal(modal);
-                    break;
+                    // No immediate update to the original message here, modal submission will handle it.
+                    // However, deferUpdate() was called, so we should not reply further here.
+                    return; 
 
                 case 'toggleviewmode':
-                    await interaction.deferUpdate();
-                    // Simulate fetching and updating view mode
-                    // currentViewMode = (await db.getUserPreference(interaction.user.id, 'view_mode')) || 'pc'; // Example
+                    const userPrefs = await db.getUserPreferences(interaction.user.id);
+                    const currentViewMode = userPrefs?.view_mode ?? 'pc';
                     const newViewMode = currentViewMode === 'pc' ? 'phone' : 'pc';
-                    // await db.setUserPreference(interaction.user.id, 'view_mode', newViewMode); // Example
-                    logger.info(`User ${interaction.user.id} toggled view mode to ${newViewMode} (simulated)`);
                     
-                    const updatedReplyOptionsToggle = await getSettingsReplyOptions(interaction.user, newViewMode, currentTimezoneOffset);
-                    await interaction.editReply(updatedReplyOptionsToggle);
+                    const updateSuccess = await db.updateUserViewMode(interaction.user.id, newViewMode);
+                    if (updateSuccess) {
+                        logger.info(`User ${interaction.user.id} toggled view mode to ${newViewMode}`);
+                        const replyOptions = await getSettingsReplyOptions(interaction.user.id);
+                        await interaction.update(replyOptions);
+                    } else {
+                        logger.error(`Failed to update view mode for user ${interaction.user.id}`);
+                        // interaction.update() was already called via deferUpdate()
+                        // We can use followUp for ephemeral error messages if deferUpdate was used.
+                        await interaction.followUp({ content: 'Failed to update your view mode. Please try again.', flags: 1 << 6 });
+                    }
                     break;
 
                 case 'managereminders':
-                    await interaction.reply({ content: "Reminder management will be available in a future update!", ...replyOptsEphemeral });
+                    // Since we deferred, we use followUp for the ephemeral message
+                    await interaction.followUp({ content: "Reminder management will be available in a future update!", flags: 1 << 6 });
                     break;
                 
                 default:
                     logger.warn(`[settings.js] Unknown button action: ${action}`);
-                    await interaction.reply({ content: 'Unknown button action.', ...replyOptsEphemeral });
+                    // interaction.update() was already called via deferUpdate()
+                    await interaction.followUp({ content: 'Unknown button action.', flags: 1 << 6 });
             }
         } catch (error) {
             logger.error(`[settings.js] Error handling button ${action}:`, error);
-            if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({ content: 'An error occurred processing this action.', ...replyOptsEphemeral });
+            // If deferUpdate() was used, we must use followUp for errors.
+            if (interaction.deferred || interaction.replied) { // replied might be true if deferUpdate failed and a reply was sent
+                 await interaction.followUp({ content: 'An error occurred processing this action.', flags: 1 << 6 });
             } else {
-                await interaction.followUp({ content: 'An error occurred processing this action.', ...replyOptsEphemeral });
+                 await interaction.reply({ content: 'An error occurred processing this action.', flags: 1 << 6 });
             }
         }
     },
 
     async handleModal(interaction, params) {
-        const modalId = params[0]; // In this case, it's 'settimezone' from 'settings_modal_settimezone'
-        const replyOptsEphemeral = { flags: 1 << 6 };
-
-        // Simulate fetching current preferences (replace with db calls in Phase 2)
-        let currentViewMode = 'pc'; 
-        // currentViewMode = (await db.getUserPreference(interaction.user.id, 'view_mode')) || 'pc'; // Example
-
+        const modalId = params[0]; // 'settimezone'
+        
         try {
-            if (modalId === 'settimezone') { // Matches the 'action' part of 'settings_modal_settimezone'
-                await interaction.deferUpdate();
+            await interaction.deferUpdate(); // Defer update for all modal submissions that will refresh the message
+
+            if (modalId === 'settimezone') {
                 const selectedOffsetString = interaction.fields.getStringValue('timezone_offset_select');
                 const newOffset = parseFloat(selectedOffsetString);
 
                 if (isNaN(newOffset) || newOffset < -12.0 || newOffset > 14.0) {
-                    await interaction.followUp({ content: '❌ Invalid timezone offset selected. Please choose a valid offset.', ...replyOptsEphemeral });
+                    await interaction.followUp({ content: '❌ Invalid timezone offset selected. Please choose a valid offset.', flags: 1 << 6 });
                     return;
                 }
                 
-                // Simulate saving the new offset
-                // await db.setUserPreference(interaction.user.id, 'timezone_offset', newOffset); // Example
-                logger.info(`User ${interaction.user.id} set timezone offset to ${newOffset} (simulated)`);
-
-                const updatedReplyOptionsModal = await getSettingsReplyOptions(interaction.user, currentViewMode, newOffset);
-                await interaction.editReply(updatedReplyOptionsModal);
+                const updateSuccess = await db.updateUserTimezone(interaction.user.id, newOffset);
+                if (updateSuccess) {
+                    logger.info(`User ${interaction.user.id} set timezone offset to ${newOffset}`);
+                    const replyOptions = await getSettingsReplyOptions(interaction.user.id);
+                    await interaction.update(replyOptions);
+                } else {
+                    logger.error(`Failed to update timezone for user ${interaction.user.id}`);
+                    await interaction.followUp({ content: 'Failed to update your timezone. Please try again.', flags: 1 << 6 });
+                }
             } else {
                 logger.warn(`[settings.js] Unknown modal action part: ${modalId}`);
-                await interaction.reply({ content: 'Unknown modal submission.', ...replyOptsEphemeral });
+                await interaction.followUp({ content: 'Unknown modal submission.', flags: 1 << 6 });
             }
         } catch (error) {
             logger.error(`[settings.js] Error handling modal ${interaction.customId}:`, error);
-             if (!interaction.replied && !interaction.deferred) {
-                await interaction.reply({ content: 'An error occurred processing this form.', ...replyOptsEphemeral });
+            if (interaction.deferred || interaction.replied) {
+                 await interaction.followUp({ content: 'An error occurred processing this form.', flags: 1 << 6 });
             } else {
-                await interaction.followUp({ content: 'An error occurred processing this form.', ...replyOptsEphemeral });
+                 await interaction.reply({ content: 'An error occurred processing this form.', flags: 1 << 6 });
             }
         }
-    }
+    },
+    getSettingsReplyOptions // Export the helper function
 };

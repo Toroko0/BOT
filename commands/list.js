@@ -281,7 +281,8 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
         );
     }
     actionRow2Components.push(
-        new ButtonBuilder().setCustomId('list_button_search').setLabel('🔍 Search').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('list_button_search').setLabel('🔍 Search').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('list_button_opensettings').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary)
     );
     if (actionRow2Components.length > 0) { components.push(new ActionRowBuilder().addComponents(actionRow2Components)); logger.debug(`[list.js] Added actionRow2 with ${actionRow2Components.length} components.`); }
     
@@ -376,7 +377,12 @@ module.exports = {
             case 'info': await showInfoWorldModal(interaction); break;
             case 'share': await showShareWorldModal(interaction, true); break;
             case 'unshare': await showShareWorldModal(interaction, false); break;
-            case 'search': await showSearchModal(interaction); break; 
+            case 'search': await showSearchModal(interaction); break;
+            case 'opensettings':
+                const { getSettingsReplyOptions } = require('./settings.js');
+                const settingsReplyOptions = await getSettingsReplyOptions(interaction.user.id);
+                await interaction.followUp(settingsReplyOptions); // Send as new ephemeral follow-up
+                break;
             case 'page': 
                 logger.info(`[list.js] Page button clicked (display only). Params: ${params.join('_')}. Deferring update.`);
                 await interaction.deferUpdate(); 
