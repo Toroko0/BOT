@@ -5,6 +5,7 @@ const path = require('path');
 const db = require('./database.js'); // Knex instance from database.js
 const logger = require('./utils/logger.js');
 const { DateTime } = require('luxon');
+const reminderScheduler = require('./services/reminderScheduler.js'); // Adjust path if needed
 
 // --- Client Setup ---
 const client = new Client({
@@ -99,11 +100,17 @@ client.once(Events.ClientReady, async c => { // Make async for await
       logger.info('[Startup] Running database migrations...');
       await db.knex.migrate.latest(); // Run latest migrations
       logger.info('[Startup] Database migrations complete.');
-      // *** FIX: Setup tasks AFTER migrations complete ***
-      setupScheduledTasks();
+      
+      // Setup existing daily tasks
+      setupScheduledTasks(); 
+      
+      // Start the new reminder scheduler
+      logger.info('[Startup] Starting reminder scheduler...');
+      reminderScheduler.start(c); // Pass the client instance (c)
+      logger.info('[Startup] Reminder scheduler started.');
+
   } catch (err) {
-      // *** FIX: Removed the incorrect db.initializeDatabase() call ***
-      logger.error('[Startup] FATAL: Database migration failed:', err);
+      logger.error('[Startup] FATAL: Database migration or scheduler start-up failed:', err);
       process.exit(1);
   }
 });
