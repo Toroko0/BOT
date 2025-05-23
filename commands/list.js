@@ -379,6 +379,7 @@ module.exports = {
             case 'unshare': await showShareWorldModal(interaction, false); break;
             case 'search': await showSearchModal(interaction); break;
             case 'opensettings':
+                await interaction.deferUpdate();
                 const { getSettingsReplyOptions } = require('./settings.js');
                 const settingsReplyOptions = await getSettingsReplyOptions(interaction.user.id);
                 await interaction.followUp(settingsReplyOptions); // Send as new ephemeral follow-up
