@@ -211,6 +211,35 @@ async function getExpiringWorldCount(userId, days = 7) { try { const targetDate 
 
 async function getMostRecentWorld(userId) { try { const world = await knexInstance('worlds').where({ user_id: userId }).orderBy('added_date', 'desc').select('name', 'added_date').first(); return world || null; } catch (error) { logger.error(`[DB] Error getting most recent world for user ${userId}:`, error); return null; } }
 
+async function getMostRecentWorld(userId) { try { const world = await knexInstance('worlds').where({ user_id: userId }).orderBy('added_date', 'desc').select('name', 'added_date').first(); return world || null; } catch (error) { logger.error(`[DB] Error getting most recent world for user ${userId}:`, error); return null; } }
+
+// --- New function to get worlds expiring soon for a specific user ---
+async function getExpiringWorldsForUser(userId, daysUntilExpiry = 7) {
+    logger.debug(`[DB] Fetching worlds expiring in ${daysUntilExpiry} days for user ${userId}`);
+    try {
+        const now = new Date();
+        const targetDate = new Date();
+        targetDate.setUTCDate(now.getUTCDate() + daysUntilExpiry);
+        targetDate.setUTCHours(23, 59, 59, 999); // End of the target day
+
+        const nowISO = now.toISOString();
+        const targetDateISO = targetDate.toISOString();
+
+        const worlds = await knexInstance('worlds')
+            .where('user_id', userId)
+            .andWhere('expiry_date', '>=', nowISO)
+            .andWhere('expiry_date', '<=', targetDateISO)
+            .orderBy('expiry_date', 'asc')
+            .select('name', 'expiry_date', 'custom_id'); // Added custom_id
+
+        logger.debug(`[DB] Found ${worlds.length} worlds expiring for user ${userId} by ${targetDateISO}`);
+        return worlds;
+    } catch (error) {
+        logger.error(`[DB] Error getting expiring worlds for user ${userId}:`, error);
+        return []; // Return an empty array in case of an error
+    }
+}
+
 // --- User Preference Functions ---
 async function getUserPreferences(userId) {
     try {
@@ -325,6 +354,7 @@ module.exports = {
   getWorldLockStats,
   getExpiringWorldCount,
   getMostRecentWorld,
+  getExpiringWorldsForUser, // Added the new function to exports
   // User Preferences
   getUserPreferences,
   updateUserTimezone,
