@@ -41,10 +41,19 @@ async function addUser(userId, username) {
         await knexInstance('users').where({ id: userId }).update({ username: username });
         logger.debug(`[DB] Updated username for user ${userId} to ${username}`);
       }
+      // If user exists, we don't modify their preferences here.
+      // Specific functions will handle preference updates.
       return true;
     } else {
-      await knexInstance('users').insert({ id: userId, username: username });
-      logger.info(`[DB] Added new user ${userId} (${username})`);
+      await knexInstance('users').insert({
+        id: userId,
+        username: username,
+        timezone_offset: 0.0,      // Default GMT+0
+        view_mode: 'pc',           // Default 'pc'
+        reminder_enabled: false,   // Default false
+        reminder_time_utc: null    // Default null
+      });
+      logger.info(`[DB] Added new user ${userId} (${username}) with default preferences`);
       return true;
     }
   } catch (error) { logger.error(`[DB] Error adding/updating user ${userId}:`, error); return false; }
@@ -202,6 +211,93 @@ async function getExpiringWorldCount(userId, days = 7) { try { const targetDate 
 
 async function getMostRecentWorld(userId) { try { const world = await knexInstance('worlds').where({ user_id: userId }).orderBy('added_date', 'desc').select('name', 'added_date').first(); return world || null; } catch (error) { logger.error(`[DB] Error getting most recent world for user ${userId}:`, error); return null; } }
 
+// --- User Preference Functions ---
+async function getUserPreferences(userId) {
+    try {
+        const user = await knexInstance('users').where({ id: userId }).first();
+        if (user) {
+            return {
+                timezone_offset: user.timezone_offset,
+                view_mode: user.view_mode,
+                reminder_enabled: !!user.reminder_enabled, // Ensure boolean
+                reminder_time_utc: user.reminder_time_utc
+            };
+        }
+        // Return default preferences if user not found or preferences not set
+        // This ensures the bot always has some preference values to work with.
+        logger.warn(`[DB] User ${userId} not found or preferences missing, returning defaults.`);
+        return {
+            timezone_offset: 0.0,
+            view_mode: 'pc',
+            reminder_enabled: false,
+            reminder_time_utc: null
+        };
+    } catch (error) {
+        logger.error(`[DB] Error getting preferences for user ${userId}:`, error);
+        // Return default preferences on error as a fallback
+        return {
+            timezone_offset: 0.0,
+            view_mode: 'pc',
+            reminder_enabled: false,
+            reminder_time_utc: null
+        };
+    }
+}
+
+async function updateUserTimezone(userId, timezoneOffset) {
+    try {
+        const offset = parseFloat(timezoneOffset);
+        if (isNaN(offset) || offset < -12.0 || offset > 14.0) {
+            logger.warn(`[DB] Invalid timezone offset value for user ${userId}: ${timezoneOffset}`);
+            return false; // Indicate failure due to invalid value
+        }
+        await knexInstance('users').where({ id: userId }).update({ timezone_offset: offset });
+        logger.info(`[DB] Updated timezone for user ${userId} to ${offset}`);
+        return true;
+    } catch (error) {
+        logger.error(`[DB] Error updating timezone for user ${userId}:`, error);
+        return false;
+    }
+}
+
+async function updateUserViewMode(userId, viewMode) {
+    try {
+        if (viewMode !== 'pc' && viewMode !== 'phone') {
+            logger.warn(`[DB] Invalid view mode value for user ${userId}: ${viewMode}`);
+            return false; // Indicate failure due to invalid value
+        }
+        await knexInstance('users').where({ id: userId }).update({ view_mode: viewMode });
+        logger.info(`[DB] Updated view mode for user ${userId} to ${viewMode}`);
+        return true;
+    } catch (error) {
+        logger.error(`[DB] Error updating view mode for user ${userId}:`, error);
+        return false;
+    }
+}
+
+async function updateUserReminderSettings(userId, reminderEnabled, reminderTimeUtc) {
+    try {
+        // Basic validation for reminderTimeUtc if reminderEnabled is true
+        if (reminderEnabled && reminderTimeUtc) {
+            if (!/^\d{2}:\d{2}$/.test(reminderTimeUtc)) {
+                 logger.warn(`[DB] Invalid reminder_time_utc format for user ${userId}: ${reminderTimeUtc}`);
+                 return false; // Indicate failure
+            }
+        }
+        const effectiveReminderTimeUtc = reminderEnabled ? reminderTimeUtc : null;
+
+        await knexInstance('users').where({ id: userId }).update({
+            reminder_enabled: !!reminderEnabled, // Ensure boolean
+            reminder_time_utc: effectiveReminderTimeUtc 
+        });
+        logger.info(`[DB] Updated reminder settings for user ${userId} to enabled: ${!!reminderEnabled}, time: ${effectiveReminderTimeUtc}`);
+        return true;
+    } catch (error) {
+        logger.error(`[DB] Error updating reminder settings for user ${userId}:`, error);
+        return false;
+    }
+}
+
 
 // --- Module Exports ---
 // Assign all defined functions to the exports object
@@ -229,4 +325,9 @@ module.exports = {
   getWorldLockStats,
   getExpiringWorldCount,
   getMostRecentWorld,
+  // User Preferences
+  getUserPreferences,
+  updateUserTimezone,
+  updateUserViewMode,
+  updateUserReminderSettings,
 };

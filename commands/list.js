@@ -72,9 +72,17 @@ async function showAddWorldModal(interaction) {
 
 
 // --- Core List Display Function ---
-async function showWorldsList(interaction, type = 'private', page = 1, viewMode = 'pc') {
-  // *** ADDED LOGGING FOR USER ID ***
-  logger.debug(`[list.js] User ID received in showWorldsList: ${interaction.user.id}`);
+async function showWorldsList(interaction, type = 'private', page = 1) {
+  // Fetch User Preferences
+  let userPrefs = await db.getUserPreferences(interaction.user.id);
+  if (!userPrefs) { // Fallback to defaults if not found
+      userPrefs = { timezone_offset: 0.0, view_mode: 'pc', reminder_enabled: false, reminder_time_utc: null };
+      logger.warn(`[list.js] User ${interaction.user.id} preferences not found, using defaults.`);
+  }
+  const viewMode = userPrefs.view_mode || 'pc';
+  const timezoneOffset = userPrefs.timezone_offset || 0.0;
+
+  logger.debug(`[list.js] User ID ${interaction.user.id} - Fetched Prefs: viewMode=${viewMode}, timezoneOffset=${timezoneOffset}`);
   logger.info(`[list.js] showWorldsList called - Type: ${type}, Page: ${page}, Guild: ${interaction.guildId || 'DM'}, Component: ${interaction.isMessageComponent()}`);
   const isUpdate = interaction.isMessageComponent() || interaction.type === InteractionType.ModalSubmit;
   const replyOpts = { flags: 1 << 6, fetchReply: true };
@@ -114,12 +122,16 @@ async function showWorldsList(interaction, type = 'private', page = 1, viewMode 
     let emptyMsg = '';
     if (type === 'public') { emptyMsg = interaction.guildId ? `🌐 No public worlds found in this server.` : '🌐 Public worlds only viewable in a server.'; if (totalWorlds > 0) emptyMsg += ` (Page ${page}/${totalPages})`; }
     else { emptyMsg = '🔒 You haven\'t added any worlds yet.'; if (totalWorlds > 0) { emptyMsg = ` Gomen 🙏, no worlds on Page ${page}/${totalPages}.`; } else { emptyMsg += ' Use `/addworld` or the button below!'; } }
-    const components = [];
-    if (type === 'private') { components.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('addworld_button_show').setLabel('➕ Add World').setStyle(ButtonStyle.Success))); }
-    components.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('list_button_search').setLabel('🔍 Search').setStyle(ButtonStyle.Secondary)));
-    if (interaction.guildId) { const target = type === 'private' ? 'public' : 'private'; components.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`list_button_switch_${target}_1`).setLabel(`🔄 View ${target === 'public' ? 'Public' : 'Your'} Worlds`).setStyle(ButtonStyle.Secondary))); }
-    const opts = { content: emptyMsg, components: components, flags: 1 << 6 };
-    try { if (interaction.deferred || interaction.replied) { await interaction.editReply(opts); } else { logger.error(`[list.js] Interaction not deferred/replied in empty list handler: ${interaction.id}.`); } }
+    
+    const emptyListComponents = [];
+    if (type === 'private') { emptyListComponents.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('addworld_button_show').setLabel('➕ Add World').setStyle(ButtonStyle.Success))); }
+    emptyListComponents.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('list_button_search').setLabel('🔍 Search').setStyle(ButtonStyle.Secondary)));
+    if (interaction.guildId) { 
+        const target = type === 'private' ? 'public' : 'private'; 
+        emptyListComponents.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`list_button_switch_${target}_1`).setLabel(`🔄 View ${target === 'public' ? 'Public' : 'Your'} Worlds`).setStyle(ButtonStyle.Secondary))); 
+    }
+    const opts = { content: emptyMsg, components: emptyListComponents, flags: 1 << 6 };
+    try { if (interaction.deferred || interaction.replied) { await interaction.editReply(opts); } else { logger.error(`[list.js] Interaction not deferred/replied in empty list handler: ${interaction.id}.`); await interaction.reply(opts); } }
     catch (replyError) { logger.error(`[list.js] Failed editReply for empty list: ${replyError.message}`, { code: replyError.code }); }
     return;
   }
@@ -145,15 +157,24 @@ async function showWorldsList(interaction, type = 'private', page = 1, viewMode 
         if (!world || typeof world !== 'object' || !world.name || !world.expiry_date || !world.lock_type || !world.id) {
           logger.warn(`[list.js] PC Skipping invalid world object: ${JSON.stringify(world)}`); return;
         }
-        const expiryDate = new Date(world.expiry_date);
-        if (isNaN(expiryDate.getTime())) {
-          logger.warn(`[list.js] PC Skipping world with invalid expiry date: ${world.name} (${world.expiry_date})`); return;
+        
+        const expiryDateUTC = new Date(world.expiry_date);
+        if (isNaN(expiryDateUTC.getTime())) {
+          logger.warn(`[list.js] PC Skipping world with invalid expiry date (UTC): ${world.name} (${world.expiry_date})`); return;
         }
-        const today = new Date(); const todayMidnight = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()); const expiryMidnight = Date.UTC(expiryDate.getUTCFullYear(), expiryDate.getUTCMonth(), expiryDate.getUTCDate());
-        const daysLeft = Math.ceil((expiryMidnight - todayMidnight) / (1000 * 60 * 60 * 24)); const displayedDaysOwned = daysLeft <= 0 ? 180 : Math.max(0, 180 - daysLeft);
-        const dayOfWeek = expiryDate.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
-        const expiryStr = `${expiryDate.toLocaleDateString('en-US', { timeZone: 'UTC' })} (${dayOfWeek})`;
+
+        const nowUserLocal = new Date(Date.now() + timezoneOffset * 3600000);
+        const expiryUserLocal = new Date(expiryDateUTC.getTime() + timezoneOffset * 3600000);
+        
+        const expiryDatePart = new Date(Date.UTC(expiryUserLocal.getUTCFullYear(), expiryUserLocal.getUTCMonth(), expiryUserLocal.getUTCDate()));
+        const nowDatePart = new Date(Date.UTC(nowUserLocal.getUTCFullYear(), nowUserLocal.getUTCMonth(), nowUserLocal.getUTCDate()));
+        const daysLeft = Math.ceil((expiryDatePart.getTime() - nowDatePart.getTime()) / (1000 * 60 * 60 * 24));
+        
+        const displayedDaysOwned = daysLeft <= 0 ? 180 : Math.max(0, 180 - daysLeft);
+        const dayOfWeek = expiryUserLocal.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+        const expiryStr = `${expiryUserLocal.toLocaleDateString('en-US', { timeZone: 'UTC' })} (${dayOfWeek})`;
         const lockTypeShort = world.lock_type.substring(0, 4).toUpperCase();
+        
         const row = [world.name.toUpperCase(), displayedDaysOwned.toString(), daysLeft <= 0 ? 'EXP' : daysLeft.toString(), expiryStr, lockTypeShort];
         if (type === 'public') row.push(world.added_by_tag || world.added_by || 'Unknown');
         data.push(row);
@@ -185,12 +206,19 @@ async function showWorldsList(interaction, type = 'private', page = 1, viewMode 
         if (!world || typeof world !== 'object' || !world.name || !world.expiry_date || !world.lock_type || !world.id) {
           logger.warn(`[list.js] Phone Skipping invalid world object: ${JSON.stringify(world)}`); return;
         }
-        const expiryDate = new Date(world.expiry_date);
-         if (isNaN(expiryDate.getTime())) {
-          logger.warn(`[list.js] Phone Skipping world with invalid expiry date: ${world.name} (${world.expiry_date})`); return;
+        const expiryDateUTC = new Date(world.expiry_date);
+         if (isNaN(expiryDateUTC.getTime())) {
+          logger.warn(`[list.js] Phone Skipping world with invalid expiry date (UTC): ${world.name} (${world.expiry_date})`); return;
         }
-        const today = new Date(); const todayMidnight = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()); const expiryMidnight = Date.UTC(expiryDate.getUTCFullYear(), expiryDate.getUTCMonth(), expiryDate.getUTCDate());
-        const daysLeft = Math.ceil((expiryMidnight - todayMidnight) / (1000 * 60 * 60 * 24)); const displayedDaysOwned = daysLeft <= 0 ? 180 : Math.max(0, 180 - daysLeft);
+
+        const nowUserLocal = new Date(Date.now() + timezoneOffset * 3600000);
+        const expiryUserLocal = new Date(expiryDateUTC.getTime() + timezoneOffset * 3600000);
+
+        const expiryDatePart = new Date(Date.UTC(expiryUserLocal.getUTCFullYear(), expiryUserLocal.getUTCMonth(), expiryUserLocal.getUTCDate()));
+        const nowDatePart = new Date(Date.UTC(nowUserLocal.getUTCFullYear(), nowUserLocal.getUTCMonth(), nowUserLocal.getUTCDate()));
+        const daysLeft = Math.ceil((expiryDatePart.getTime() - nowDatePart.getTime()) / (1000 * 60 * 60 * 24));
+        
+        const displayedDaysOwned = daysLeft <= 0 ? 180 : Math.max(0, 180 - daysLeft);
         
         const worldDisplay = `(${world.lock_type.charAt(0).toUpperCase()}) ${world.name.toUpperCase()}`;
         const daysOwnedDisplay = displayedDaysOwned.toString();
@@ -220,50 +248,41 @@ async function showWorldsList(interaction, type = 'private', page = 1, viewMode 
     const components = [];
     logger.debug('[list.js] Building components...');
     const navRowComponents = [
-        new ButtonBuilder().setCustomId(`list_button_prev_${type}_${viewMode}_${page}`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Primary).setDisabled(page <= 1),
-        new ButtonBuilder().setCustomId(`list_button_page_${type}_${viewMode}_${page}`).setLabel(`Page ${page}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
-        new ButtonBuilder().setCustomId(`list_button_next_${type}_${viewMode}_${page}`).setLabel('Next ➡️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages),
-        new ButtonBuilder().setCustomId(`list_button_goto_${type}_${viewMode}`).setLabel('Go to').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(`list_button_prev_${type}_${page}`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Primary).setDisabled(page <= 1),
+        new ButtonBuilder().setCustomId(`list_button_page_${type}_${page}`).setLabel(`Page ${page}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
+        new ButtonBuilder().setCustomId(`list_button_next_${type}_${page}`).setLabel('Next ➡️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages),
+        new ButtonBuilder().setCustomId(`list_button_goto_${type}`).setLabel('Go to').setStyle(ButtonStyle.Secondary)
     ];
 
-    // Add Toggle View Button
-    if (viewMode === 'pc') {
-        navRowComponents.push(
-            new ButtonBuilder().setCustomId(`list_button_toggleview_${type}_phone_${page}`).setLabel('📱 Phone Mode').setStyle(ButtonStyle.Secondary)
-        );
-    } else { // viewMode === 'phone'
-        navRowComponents.push(
-            new ButtonBuilder().setCustomId(`list_button_toggleview_${type}_pc_${page}`).setLabel('💻 PC Mode').setStyle(ButtonStyle.Secondary)
-        );
-    }
+    // Toggle view button removed as per subtask
 
     if (navRowComponents.length > 0) { components.push(new ActionRowBuilder().addComponents(navRowComponents)); logger.debug(`[list.js] Added navRow with ${navRowComponents.length} components.`); } else { logger.warn(`[list.js] navRowComponents was unexpectedly empty.`); }
     
-    const actionRow1Components = []; 
-    if (type === 'private') { 
-        actionRow1Components.push( 
-            new ButtonBuilder().setCustomId('addworld_button_show').setLabel('➕ Add').setStyle(ButtonStyle.Success), 
-            new ButtonBuilder().setCustomId('list_button_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger), 
-            new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary) 
-        ); 
-    } else { 
-        actionRow1Components.push( 
-            new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary) 
-        ); 
-    } 
+    const actionRow1Components = [];
+    if (type === 'private') {
+        actionRow1Components.push(
+            new ButtonBuilder().setCustomId('addworld_button_show').setLabel('➕ Add').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('list_button_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary)
+        );
+    } else {
+        actionRow1Components.push(
+            new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary)
+        );
+    }
     if (actionRow1Components.length > 0) { components.push(new ActionRowBuilder().addComponents(actionRow1Components)); logger.debug(`[list.js] Added actionRow1 with ${actionRow1Components.length} components.`); }
     
-    const actionRow2Components = []; 
-    if (interaction.guildId) { 
-        const target = type === 'private' ? 'public' : 'private'; 
-        actionRow2Components.push( 
-            new ButtonBuilder().setCustomId(`list_button_${type === 'private' ? 'share' : 'unshare'}`).setLabel(type === 'private' ? '🔗 Share' : '🔓 Unshare').setStyle(ButtonStyle.Primary), 
-            new ButtonBuilder().setCustomId(`list_button_switch_${target}_${viewMode}_1`).setLabel(`🔄 View ${target === 'public' ? 'Public' : 'Your'}`).setStyle(ButtonStyle.Secondary) 
-        ); 
-    } 
-    actionRow2Components.push( 
-        new ButtonBuilder().setCustomId('list_button_search').setLabel('🔍 Search').setStyle(ButtonStyle.Secondary) 
-    ); 
+    const actionRow2Components = [];
+    if (interaction.guildId) {
+        const target = type === 'private' ? 'public' : 'private';
+        actionRow2Components.push(
+            new ButtonBuilder().setCustomId(`list_button_${type === 'private' ? 'share' : 'unshare'}`).setLabel(type === 'private' ? '🔗 Share' : '🔓 Unshare').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`list_button_switch_${target}_1`).setLabel(`🔄 View ${target === 'public' ? 'Public' : 'Your'}`).setStyle(ButtonStyle.Secondary)
+        );
+    }
+    actionRow2Components.push(
+        new ButtonBuilder().setCustomId('list_button_search').setLabel('🔍 Search').setStyle(ButtonStyle.Secondary)
+    );
     if (actionRow2Components.length > 0) { components.push(new ActionRowBuilder().addComponents(actionRow2Components)); logger.debug(`[list.js] Added actionRow2 with ${actionRow2Components.length} components.`); }
     
     if (viewMode === 'pc' && selectOptions.length > 0) { const selectMenu = new StringSelectMenuBuilder().setCustomId('list_select_info').setPlaceholder('📋 Select a world for details').addOptions(selectOptions).setMaxValues(1); components.push(new ActionRowBuilder().addComponents(selectMenu)); logger.debug(`[list.js] Added selectRow with 1 component.`); } else { logger.debug(`[list.js] selectRow: No options available or phone mode.`); }
@@ -313,7 +332,7 @@ module.exports = {
     if (cooldown.onCooldown) { try { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, flags: 1 << 6 }); } catch (e) { logger.error("[list.js] Error sending cooldown message", e)} return; }
     
     const action = params[0];
-    let type, viewMode, page, targetViewMode, targetType, targetPage, currentViewMode;
+    let type, page, targetType, targetPage; // viewMode is no longer in params for most buttons
 
     logger.info(`[list.js] Button Clicked: action=${action}, params=${params}, customId=${interaction.customId}`);
 
@@ -321,58 +340,51 @@ module.exports = {
         switch(action) {
             case 'prev':
                 type = params[1] || 'private';
-                viewMode = params[2] || 'pc';
-                page = parseInt(params[3]) || 1;
-                await showWorldsList(interaction, type, Math.max(1, page - 1), viewMode);
+                page = parseInt(params[2]) || 1; // Old: params[3]
+                await showWorldsList(interaction, type, Math.max(1, page - 1));
                 break;
             case 'next':
                 type = params[1] || 'private';
-                viewMode = params[2] || 'pc';
-                page = parseInt(params[3]) || 1;
-                await showWorldsList(interaction, type, page + 1, viewMode);
+                page = parseInt(params[2]) || 1; // Old: params[3]
+                await showWorldsList(interaction, type, page + 1);
                 break;
             case 'goto':
                 type = params[1] || 'private';
-                viewMode = params[2] || 'pc';
-                const modal = new ModalBuilder().setCustomId(`list_modal_goto_${type}_${viewMode}`).setTitle('Go to Page'); 
+                // viewMode = params[2] || 'pc'; // Removed from customId
+                const modal = new ModalBuilder().setCustomId(`list_modal_goto_${type}`).setTitle('Go to Page'); 
                 const pageInput = new TextInputBuilder().setCustomId('page_number').setLabel('Page Number').setPlaceholder('Enter page number').setStyle(TextInputStyle.Short).setRequired(true); 
                 modal.addComponents(new ActionRowBuilder().addComponents(pageInput)); 
                 await interaction.showModal(modal); 
                 break;
             case 'switch':
                 targetType = params[1]; // e.g. 'public' or 'private'
-                currentViewMode = params[2] || 'pc';
-                targetPage = parseInt(params[3]) || 1;
+                // currentViewMode = params[2] || 'pc'; // Removed
+                targetPage = parseInt(params[2]) || 1; // Old: params[3]
                 if (targetType === 'public' || targetType === 'private') { 
-                    await showWorldsList(interaction, targetType, targetPage, currentViewMode); 
+                    await showWorldsList(interaction, targetType, targetPage); 
                 } else { 
                     await interaction.reply({ content: 'Invalid switch target type.', flags: 1 << 6 }); 
                 } 
                 break;
-            case 'toggleview':
-                type = params[1] || 'private';
-                targetViewMode = params[2] || 'pc'; // 'phone' or 'pc'
-                page = parseInt(params[3]) || 1;
-                await showWorldsList(interaction, type, page, targetViewMode);
-                break;
+            // case 'toggleview': // Removed
+            //     type = params[1] || 'private';
+            //     targetViewMode = params[2] || 'pc'; 
+            //     page = parseInt(params[3]) || 1;
+            //     await showWorldsList(interaction, type, page, targetViewMode); // This would now fetch viewMode internally
+            //     break;
             case 'remove': await showRemoveWorldModal(interaction); break;
             case 'info': await showInfoWorldModal(interaction); break;
             case 'share': await showShareWorldModal(interaction, true); break;
             case 'unshare': await showShareWorldModal(interaction, false); break;
             case 'search': await showSearchModal(interaction); break; 
             case 'page': 
-                // type = params[1] || 'private';
-                // viewMode = params[2] || 'pc';
-                // page = parseInt(params[3]) || 1;
-                // This button is disabled, so just deferring is fine. Logging params for sanity.
-                logger.info(`[list.js] Page button clicked. Params: ${params.join('_')}. Deferring update.`);
+                logger.info(`[list.js] Page button clicked (display only). Params: ${params.join('_')}. Deferring update.`);
                 await interaction.deferUpdate(); 
                 break;
             case 'view': // This case might be from an old help button or similar
                 type = params[1] || 'private';
-                page = parseInt(params[2]) || 1; // Old format might not have viewMode
-                viewMode = params[3] || 'pc'; // Attempt to get viewMode, default to pc
-                await showWorldsList(interaction, type, page, viewMode); 
+                page = parseInt(params[2]) || 1; 
+                await showWorldsList(interaction, type, page); // viewMode is fetched internally
                 break;
             default: logger.warn(`[list.js] Unknown list button action: ${action}`); await interaction.reply({ content: 'Unknown button action.', flags: 1 << 6 });
         }
@@ -405,14 +417,14 @@ module.exports = {
 
   async handleModal(interaction, params) {
     const action = params[0];
-    // For goto: params[1] is type, params[2] is viewMode
-    // For others, params[1] might be different or not exist.
+    // For goto: params[1] is type. viewMode is no longer part of modal customId.
+    // For others, params structure remains the same as they don't involve viewMode in their customId.
     logger.info(`[list.js] Modal Submitted: action=${action}, params=${params}, customId=${interaction.customId}`);
     try {
       switch(action) {
         case 'goto': { 
-            const type = params[1] || 'private';
-            const viewMode = params[2] || 'pc';
+            const type = params[1] || 'private'; // Type is still part of modal customId
+            // const viewMode = params[2] || 'pc'; // viewMode removed from modal customId
             const pageInput = interaction.fields.getTextInputValue('page_number'); 
             const pageNumber = parseInt(pageInput); 
             if (isNaN(pageNumber) || pageNumber < 1) { 
@@ -420,7 +432,7 @@ module.exports = {
                 return; 
             } 
             await interaction.deferUpdate(); 
-            await showWorldsList(interaction, type, pageNumber, viewMode); 
+            await showWorldsList(interaction, type, pageNumber); // Call without viewMode
             break; 
         }
         case 'remove': {
