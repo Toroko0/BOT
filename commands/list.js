@@ -201,8 +201,8 @@ async function showWorldsList(interaction, type = 'private', page = 1, viewMode 
       
       config = {
         columns: [
-          { alignment: 'left', width: 25, wrapWord: true }, // For (L) WORLDNAME
-          { alignment: 'right', width: 5 }      // For Days Owned
+            { alignment: 'left', width: 18, wrapWord: true, paddingLeft: 0, paddingRight: 0 }, // For (L) WORLDNAME
+            { alignment: 'right', width: 5, paddingLeft: 0, paddingRight: 0 }      // For Days Owned
         ],
         border: getBorderCharacters('norc'),
         header: {
