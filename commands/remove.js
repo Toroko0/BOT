@@ -29,11 +29,11 @@ module.exports = {
 
     const confirmRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`remove_confirm_${world.id}`)
+        .setCustomId(`remove_button_confirm_${world.id}`)
         .setLabel('Confirm Remove')
         .setStyle(ButtonStyle.Danger),
       new ButtonBuilder()
-        .setCustomId('remove_cancel')
+        .setCustomId(`remove_button_cancel_${world.id}`)
         .setLabel('Cancel')
         .setStyle(ButtonStyle.Secondary)
     );
@@ -49,66 +49,79 @@ module.exports = {
   async handleButton(interaction, params) {
     const cooldown = utils.checkCooldown(interaction.user.id, 'remove');
     if (cooldown.onCooldown) {
-      await interaction.reply({ 
-        content: `Please wait ${cooldown.timeLeft} seconds before using this button again.`, 
+      await interaction.reply({
+        content: `Please wait ${cooldown.timeLeft} seconds before using this button again.`,
         flags: 1 << 6
       });
       return;
     }
 
-    // Get the world ID from the button parameters
-    const worldId = params[0];
-    if (!worldId) {
-      await interaction.reply({ 
-        content: 'World ID not provided.', 
-        flags: 1 << 6
-      });
-      return;
-    }
-    
-    // Get the world by ID
-    const world = await db.getWorldById(worldId);
-    
-    // Check if world exists and belongs to the user
-    if (!world || world.user_id !== interaction.user.id) {
-      await interaction.reply({ 
-        content: 'World not found or you do not have permission to remove it.', 
-        flags: 1 << 6
-      });
-      return;
-    }
-    
-    // Remove the world from the database
-    const success = await db.removeWorld(worldId, interaction.user.id);
-    
-    if (!success) {
-      await interaction.reply({ 
-        content: 'An error occurred while removing the world.', 
-        flags: 1 << 6
-      });
-      return;
-    }
+    const [action, worldIdString] = params;
+    const worldId = parseInt(worldIdString, 10);
 
-    // Log the remove action
-    await logHistory(worldId, interaction.user.id, 'remove', `Removed world ${world.name}`);
+    if (action === 'confirm') {
+      if (isNaN(worldId)) {
+        await interaction.reply({
+          content: 'Invalid World ID provided.',
+          flags: 1 << 6
+        });
+        return;
+      }
+      
+      const world = await db.getWorldById(worldId);
 
-    // Create response with buttons
-    const row = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId('list_private')
-          .setLabel('View My Worlds')
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId('addWorld_button')
-          .setLabel('Add New World')
-          .setStyle(ButtonStyle.Success)
-      );
-    
-    await interaction.reply({
-      content: `✅ World **${world.name}** has been removed from your tracking list.`,
-      components: [row],
-      flags: 1 << 6
-    });
+      if (!world || world.user_id !== interaction.user.id) {
+        await interaction.reply({
+          content: 'World not found or you do not have permission to remove it.',
+          flags: 1 << 6
+        });
+        return;
+      }
+
+      const success = await db.removeWorld(worldId, interaction.user.id);
+
+      if (!success) {
+        await interaction.reply({
+          content: 'An error occurred while removing the world.',
+          flags: 1 << 6
+        });
+        return;
+      }
+
+      await logHistory(worldId, interaction.user.id, 'remove', `Removed world ${world.name}`);
+      require('./search.js').invalidateSearchCache(); // Invalidate search cache
+
+      const row = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId('list_button_view_private_1')
+            .setLabel('View My Worlds')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId('addworld_button_show')
+            .setLabel('Add New World')
+            .setStyle(ButtonStyle.Success)
+        );
+
+      await interaction.update({ // Changed from interaction.reply to interaction.update
+        content: `✅ World **${world.name.toUpperCase()}** has been removed from your tracking list.`,
+        components: [row],
+        flags: 1 << 6
+      });
+
+    } else if (action === 'cancel') {
+      await interaction.update({
+        content: '✅ Removal cancelled.',
+        components: [], // Clear components
+        flags: 1 << 6
+      });
+    } else {
+      // Handle unknown action
+      console.error(`Unknown action in remove.js handleButton: ${action}`);
+      await interaction.reply({
+        content: 'An unknown error occurred. Please try again.',
+        flags: 1 << 6
+      });
+    }
   }
 };
