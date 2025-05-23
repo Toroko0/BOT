@@ -38,7 +38,7 @@ async function showAddWorldModal(interaction) {
 
   const customIdInput = new TextInputBuilder()
     .setCustomId('customId')
-    .setLabel("Custom ID (optional, unique per user)")
+    .setLabel("Custom ID (Optional)")
     .setStyle(TextInputStyle.Short)
     .setRequired(false)
     .setMaxLength(24); // Optional length constraint
@@ -191,7 +191,14 @@ module.exports = {
             await logHistory(addedWorld.id, interaction.user.id, 'add', `Added world ${addedWorld.name.toUpperCase()} via modal`);
           }
           invalidateSearchCache();
-          await interaction.reply({ ...replyOpts, content: `✅ ${result.message}` });
+          const row = new ActionRowBuilder()
+            .addComponents(
+              new ButtonBuilder()
+                .setCustomId('list_button_view_private_1')
+                .setLabel('View My Worlds')
+                .setStyle(ButtonStyle.Primary)
+            );
+          await interaction.reply({ ...replyOpts, content: `✅ ${result.message}`, components: [row] });
         } else {
           logger.error('[addworld.js] Add world via modal failed:', result.message);
           await interaction.reply({ ...replyOpts, content: `❌ ${result.message || 'Failed to add world.'}` });

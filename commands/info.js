@@ -39,7 +39,7 @@ async function showEditWorldModal(interaction, world) {
 
     const customIdInput = new TextInputBuilder()
         .setCustomId('editCustomId')
-        .setLabel("Custom ID (optional, unique per user)")
+        .setLabel("Custom ID (Optional)")
         .setStyle(TextInputStyle.Short)
         .setValue(currentCustomId)
         .setRequired(false)
@@ -131,11 +131,20 @@ async function showWorldInfo(interaction, world) {
   const components = [];
   const replyOpts = { flags: 1 << 6 }; // Ephemeral by default
 
+  const generalButtonsRow = new ActionRowBuilder();
+  generalButtonsRow.addComponents(
+    new ButtonBuilder()
+        .setCustomId('list_button_view_private_1')
+        .setLabel('⬅️ Back to List')
+        .setStyle(ButtonStyle.Secondary)
+  );
+  components.push(generalButtonsRow);
+
   // Show management buttons only if the user owns the world
   if (world.user_id === interaction.user.id) {
-    const mgmtButtons = new ActionRowBuilder();
+    const mgmtButtonsRow = new ActionRowBuilder();
     // Share button: Enabled only if private OR public in another server
-    mgmtButtons.addComponents(
+    mgmtButtonsRow.addComponents(
       new ButtonBuilder()
         .setCustomId(`info_button_share_${world.id}`) // Correct prefix
         .setLabel('🌍 Share Here')
@@ -143,7 +152,7 @@ async function showWorldInfo(interaction, world) {
         .setDisabled(world.is_public && world.guild_id === interaction.guildId) // Disabled if already public here
     );
      // Unshare button: Enabled only if public in THIS server
-     mgmtButtons.addComponents(
+     mgmtButtonsRow.addComponents(
        new ButtonBuilder()
         .setCustomId(`info_button_unshare_${world.id}`) // Correct prefix
         .setLabel('🔒 Make Private')
@@ -151,20 +160,22 @@ async function showWorldInfo(interaction, world) {
         .setDisabled(!world.is_public || world.guild_id !== interaction.guildId) // Disabled if private or public elsewhere
     );
     // Edit button
-    mgmtButtons.addComponents(
+    mgmtButtonsRow.addComponents(
        new ButtonBuilder()
         .setCustomId(`info_button_edit_${world.id}`) // Correct prefix
         .setLabel('✏️ Edit')
         .setStyle(ButtonStyle.Primary)
     );
-    // Remove button (calls list modal confirm)
-    mgmtButtons.addComponents(
+    // Remove button
+    mgmtButtonsRow.addComponents(
        new ButtonBuilder()
-        .setCustomId(`list_button_remove_${world.id}`) // Use list's prefix for remove confirm flow
+        .setCustomId(`info_button_remove_${world.id}`) // Changed prefix
         .setLabel('🗑️ Remove')
         .setStyle(ButtonStyle.Danger)
     );
-    components.push(mgmtButtons);
+    if (mgmtButtonsRow.components.length > 0) {
+        components.push(mgmtButtonsRow);
+    }
   }
 
   const replyOptions = { ...replyOpts, embeds: [embed], components: components };
@@ -257,8 +268,25 @@ module.exports = {
                 // Show the edit modal
                 await showEditWorldModal(interaction, world);
                 return; // Modal shown, no further feedback needed here
-            // Remove action is handled by list.js modal flow now
-            // case 'remove': ...
+            case 'remove':
+                // world and ownership already checked before switch
+                const confirmRow = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`remove_button_confirm_${world.id}`)
+                        .setLabel('Confirm Remove')
+                        .setStyle(ButtonStyle.Danger),
+                    new ButtonBuilder()
+                        .setCustomId(`remove_button_cancel_${world.id}`)
+                        .setLabel('Cancel')
+                        .setStyle(ButtonStyle.Secondary)
+                );
+                await interaction.update({ // Use update as we are responding to a button click
+                    content: `⚠️ Are you sure you want to remove **${world.name.toUpperCase()}**?`,
+                    components: [confirmRow],
+                    flags: 1 << 6, // Ephemeral
+                    embeds: [] // Clear existing embed
+                });
+                return; // Return here to prevent falling through to generic feedback
             default:
                 feedback = '❌ Unknown action.'; break;
         }
@@ -276,7 +304,7 @@ module.exports = {
                  // Failed to refetch, edit the original interaction with error
                  await interaction.editReply({ ...replyOpts, content: '❌ Error refreshing world info after update.', embeds: [], components: [] });
             }
-        } else {
+        } else if (feedback) { // Only send feedback if it's set (and not for 'remove' case)
             // If action failed or was unknown, send ephemeral reply/followup
             if (!interaction.replied && !interaction.deferred) await interaction.reply({ ...replyOpts, content: feedback });
             else await interaction.followUp({ ...replyOpts, content: feedback });

@@ -285,7 +285,7 @@ module.exports = {
             const worldIdentifier = interaction.fields.getTextInputValue('worldName').trim();
             const world = await db.findWorldByIdentifier(interaction.user.id, worldIdentifier, null);
             if (!world || world.user_id !== interaction.user.id) { await interaction.reply({ content: `❌ World "**${worldIdentifier}**" not found in your list.`, flags: 1 << 6 }); return; }
-            const confirmId = `remove_button_confirm_${world.id}`; const cancelId = `remove_button_cancel`;
+            const confirmId = `remove_button_confirm_${world.id}`; const cancelId = `remove_button_cancel_${world.id}`;
             const row = new ActionRowBuilder().addComponents( new ButtonBuilder().setCustomId(confirmId).setLabel('Confirm Remove').setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId(cancelId).setLabel('Cancel').setStyle(ButtonStyle.Secondary) );
             await interaction.reply({ content: `⚠️ Are you sure you want to remove **${world.name.toUpperCase()}**?`, components: [row], flags: 1 << 6 });
             break;
@@ -300,7 +300,18 @@ module.exports = {
             if (makePublic) { const existingPublic = await db.getPublicWorldByName(world.name, interaction.guildId); if (existingPublic && existingPublic.id !== world.id) { await interaction.reply({ content: `❌ Another public world named **${world.name.toUpperCase()}** already exists here.`, flags: 1 << 6 }); return; } }
             const guildToSet = makePublic ? interaction.guildId : null;
             const success = await db.updateWorldVisibility(world.id, interaction.user.id, makePublic, guildToSet);
-            if (success) { await require('./search.js').invalidateSearchCache(); await require('./utils/share_and_history.js').logHistory(world.id, interaction.user.id, action, `World ${world.name.toUpperCase()} ${action}d in guild ${interaction.guildId}`); await interaction.reply({ content: `✅ **${world.name.toUpperCase()}** is now ${makePublic ? 'public in this server' : 'private'}.`, flags: 1 << 6 }); }
+            if (success) { 
+              await require('./search.js').invalidateSearchCache(); 
+              await require('./utils/share_and_history.js').logHistory(world.id, interaction.user.id, action, `World ${world.name.toUpperCase()} ${action}d in guild ${interaction.guildId}`); 
+              const row = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('list_button_view_private_1')
+                        .setLabel('View My Worlds')
+                        .setStyle(ButtonStyle.Primary)
+                );
+              await interaction.reply({ content: `✅ **${world.name.toUpperCase()}** is now ${makePublic ? 'public in this server' : 'private'}.`, components: [row], flags: 1 << 6 }); 
+            }
             else { await interaction.reply({ content: `❌ Failed to ${action} **${world.name.toUpperCase()}**.`, flags: 1 << 6 }); }
             break;
         }
