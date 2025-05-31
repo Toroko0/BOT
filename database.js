@@ -123,24 +123,20 @@ async function getWorlds(userId, page = 1, pageSize = 10) {
     const worlds = await knexInstance('worlds as w')
       .leftJoin('users as u', 'w.user_id', 'u.id')
       .where('w.user_id', userId)
-      .orderBy('w.expiry_date', 'asc') // REVERTED to ASC for "days owned descending" (more days owned first)
+      .orderBy('w.expiry_date', 'asc') // Orders by expiry_date ascending (fewer days left first), which means days_owned descending (more days owned first)
       .limit(pageSize)
       .offset(offset)
       .select('w.*', 'u.username as added_by_tag');
 
     logger.debug(`[DB] getWorlds raw rows fetched for user ${userId}, page ${page}:`, worlds.map(w => ({ id: w.id, name: w.name })));
 
-    // --- CORRECTED COUNT QUERY ---
-    // Query for the total count WITHOUT using .first() directly on count
     const totalResult = await knexInstance('worlds')
         .where({ user_id: userId })
-        .count({ total: '*' }); // Get the count result array/object
+        .count({ total: '*' }); 
 
-    // Extract the count value correctly
     const totalCount = (totalResult && totalResult[0] && totalResult[0].total !== undefined)
                        ? Number(totalResult[0].total)
                        : 0;
-    // --- END CORRECTED COUNT QUERY ---
 
     logger.debug(`[DB] getWorlds count query for user ${userId} returned: ${totalCount}`);
 
@@ -177,7 +173,7 @@ async function getPublicWorldsByGuild(guildId, page = 1, pageSize = 10) {
             .leftJoin('users as u', 'w.user_id', 'u.id')
             .where('w.is_public', true)
             .andWhere('w.guild_id', guildId)
-            .orderBy('w.expiry_date', 'asc') // REVERTED to ASC for "days owned descending" (more days owned first)
+            .orderBy('w.expiry_date', 'asc') // Orders by expiry_date ascending (fewer days left first), which means days_owned descending (more days owned first)
             .limit(pageSize)
             .offset(offset)
             .select('w.*', 'u.username as added_by_tag'); 
