@@ -5,7 +5,7 @@ const logger = require('../utils/logger.js'); // Or path to your logger
 // --- Helper Function to Generate Settings Reply Components (Synchronous) ---
 function generateSettingsReplyComponents(userPrefs, interactionUserId) {
     // interactionUserId is available for future logging/use if needed
-    
+
     // Provide default values if userPrefs is null or some fields are missing
     const timezoneOffset = userPrefs?.timezone_offset ?? 0.0;
     const viewMode = userPrefs?.view_mode ?? 'pc';
@@ -75,7 +75,7 @@ function generateSettingsReplyComponents(userPrefs, interactionUserId) {
 // --- Helper Function to Generate Settings Reply (Asynchronous: Fetches Prefs) ---
 async function getSettingsReplyOptions(userId) {
     const userPrefs = await db.getUserPreferences(userId);
-    return generateSettingsReplyComponents(userPrefs, userId); 
+    return generateSettingsReplyComponents(userPrefs, userId);
 }
 
 // --- Helper Function to Generate Reminder Management View ---
@@ -100,10 +100,10 @@ async function getManageRemindersViewOptions(userId) {
         .setColor(0x0099FF)
         .setTitle('Manage Reminders')
         .setDescription('Configure your reminder settings.')
-        .addFields({ 
-            name: '⏰ Current Status', 
+        .addFields({
+            name: '⏰ Current Status',
             // Display the reminder time in UTC in the embed field for clarity, or use displayReminderTime if preferred
-            value: reminderEnabled ? `Enabled (UTC Time: ${userPrefs.reminder_time_utc || 'Not Set'})` : 'Disabled' 
+            value: reminderEnabled ? `Enabled (UTC Time: ${userPrefs.reminder_time_utc || 'Not Set'})` : 'Disabled'
         });
 
     const row1 = new ActionRowBuilder()
@@ -180,13 +180,13 @@ module.exports = {
                     const currentViewMode = initialUserPrefs?.view_mode ?? 'pc';
                     const newViewMode = currentViewMode === 'pc' ? 'phone' : 'pc';
                     const updateSuccess = await db.updateUserViewMode(interaction.user.id, newViewMode);
-                    
+
                     if (updateSuccess) {
                         logger.info(`User ${interaction.user.id} toggled view mode to ${newViewMode}`);
                         const updatedUserPrefs = await db.getUserPreferences(interaction.user.id); // Re-fetch fresh preferences
-                        
+
                         await interaction.deferUpdate(); // Defer update specifically for this case
-                        
+
                         const replyOptions = generateSettingsReplyComponents(updatedUserPrefs, interaction.user.id); // Synchronous call
                         try {
                             await interaction.editReply(replyOptions); // Use editReply
@@ -207,7 +207,7 @@ module.exports = {
                         // this logic might need adjustment, but per current instructions, defer is only on success.
                         // The original check (interaction.deferred || interaction.replied) is still largely relevant
                         // as interaction.replied will be true from the original command's reply.
-                        if (interaction.deferred || interaction.replied) { 
+                        if (interaction.deferred || interaction.replied) {
                              await interaction.followUp({ content: 'Failed to update your view mode. Please try again.', flags: 1 << 6 });
                         } else {
                              // This case should ideally not be reached for button interactions.
@@ -229,7 +229,7 @@ module.exports = {
                     const newReminderState = !currentUserPrefsToggle.reminder_enabled;
                     // Pass existing time; updateUserReminderSettings handles nulling it if newReminderState is false.
                     await db.updateUserReminderSettings(interaction.user.id, newReminderState, currentUserPrefsToggle.reminder_time_utc);
-                    
+
                     await interaction.deferUpdate();
                     await interaction.editReply(await getManageRemindersViewOptions(interaction.user.id));
                     break;
@@ -238,7 +238,7 @@ module.exports = {
                     const reminderTimeModal = new ModalBuilder()
                         .setCustomId('settings_modal_remindertime')
                         .setTitle('Set Reminder Time (Your Local)');
-                    
+
                     const timeInput = new TextInputBuilder()
                         .setCustomId('reminder_time_input')
                         .setLabel("Enter time (HH:MM, 24-hour format)")
@@ -273,7 +273,7 @@ module.exports = {
         } catch (error) {
             logger.error(`[settings.js] Error handling button ${action}:`, error);
             // Generic error handling. If deferred or replied, must use followUp.
-            if (interaction.deferred || interaction.replied) { 
+            if (interaction.deferred || interaction.replied) {
                  await interaction.followUp({ content: 'An error occurred processing this action.', flags: 1 << 6 });
             } else {
                  // This might occur if interaction.reply() itself failed in one of the new cases before defer/reply
@@ -325,7 +325,7 @@ module.exports = {
 
                 // Calculate total minutes from midnight for local time
                 const localTotalMinutes = localHour * 60 + localMinute;
-                
+
                 // Calculate total minutes from midnight in UTC
                 const timezoneOffsetMinutes = timezoneOffset * 60;
                 let utcTotalMinutes = localTotalMinutes - timezoneOffsetMinutes;
@@ -336,7 +336,7 @@ module.exports = {
                 // Calculate final UTC hour and minute
                 const finalUtcHour = Math.floor(utcTotalMinutes / 60);
                 const finalUtcMinute = utcTotalMinutes % 60;
-                
+
                 const reminderTimeUtc = `${String(finalUtcHour).padStart(2, '0')}:${String(finalUtcMinute).padStart(2, '0')}`;
 
                 const reminderUpdateSuccess = await db.updateUserReminderSettings(interaction.user.id, true, reminderTimeUtc);
@@ -356,7 +356,7 @@ module.exports = {
             logger.error(`[settings.js] Error handling modal ${interaction.customId}:`, error);
             // deferUpdate() was called, so we must use followUp for errors if not already handled.
             // The check for interaction.replied is a safeguard, but after deferUpdate, it should be deferred.
-            if (interaction.deferred || interaction.replied) { 
+            if (interaction.deferred || interaction.replied) {
                  await interaction.followUp({ content: 'An error occurred processing this form.', flags: 1 << 6 });
             } else {
                  // This path should ideally not be hit if deferUpdate() is successful at the start.
