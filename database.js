@@ -1,3 +1,5 @@
+// --- START OF FILE database.js ---
+
 const path = require('path');
 const fs = require('fs');
 const knexConfig = require('./knexfile.js');
@@ -123,7 +125,7 @@ async function getWorlds(userId, page = 1, pageSize = 10) {
     const worlds = await knexInstance('worlds as w')
       .leftJoin('users as u', 'w.user_id', 'u.id')
       .where('w.user_id', userId)
-      .orderBy('w.expiry_date', 'asc')
+      .orderBy('w.expiry_date', 'desc') // CHANGED: Order by expiry_date descending for "more days left first"
       .limit(pageSize)
       .offset(offset)
       .select('w.*', 'u.username as added_by_tag');
@@ -172,7 +174,21 @@ async function getWorldByCustomId(customId, userId) {
 
 async function getPublicWorldsByGuild(guildId, page = 1, pageSize = 10) {
     if (!guildId) return { worlds: [], total: 0 }; const offset = (page - 1) * pageSize;
-    try { const worlds = await knexInstance('worlds as w').leftJoin('users as u', 'w.user_id', 'u.id').where('w.is_public', true).andWhere('w.guild_id', guildId).orderBy('w.expiry_date', 'asc').limit(pageSize).offset(offset).select('w.*', 'u.username as added_by_tag'); const totalResult = await knexInstance('worlds').where({ is_public: true, guild_id: guildId }).count({ total: '*' }).first(); const totalCount = totalResult ? Number(totalResult.total) : 0; const formattedWorlds = worlds.map(row => ({ ...row, is_public: !!row.is_public })); return { worlds: formattedWorlds, total: totalCount }; }
+    try { 
+        const worlds = await knexInstance('worlds as w')
+            .leftJoin('users as u', 'w.user_id', 'u.id')
+            .where('w.is_public', true)
+            .andWhere('w.guild_id', guildId)
+            .orderBy('w.expiry_date', 'desc') // CHANGED: Order by expiry_date descending for "more days left first"
+            .limit(pageSize)
+            .offset(offset)
+            .select('w.*', 'u.username as added_by_tag'); 
+        
+        const totalResult = await knexInstance('worlds').where({ is_public: true, guild_id: guildId }).count({ total: '*' }).first(); 
+        const totalCount = totalResult ? Number(totalResult.total) : 0; 
+        const formattedWorlds = worlds.map(row => ({ ...row, is_public: !!row.is_public })); 
+        return { worlds: formattedWorlds, total: totalCount }; 
+    }
     catch (error) { logger.error(`[DB] Error getting public worlds for guild ${guildId}:`, error); return { worlds: [], total: 0 }; }
 }
 
@@ -211,6 +227,8 @@ async function getExpiringWorldCount(userId, days = 7) { try { const targetDate 
 
 async function getMostRecentWorld(userId) { try { const world = await knexInstance('worlds').where({ user_id: userId }).orderBy('added_date', 'desc').select('name', 'added_date').first(); return world || null; } catch (error) { logger.error(`[DB] Error getting most recent world for user ${userId}:`, error); return null; } }
 
+async function getMostRecentWorld(userId) { try { const world = await knexInstance('worlds').where({ user_id: userId }).orderBy('added_date', 'desc').select('name', 'added_date').first(); return world || null; } catch (error) { logger.error(`[DB] Error getting most recent world for user ${userId}:`, error); return null; } }
+
 // --- New function to get worlds expiring soon for a specific user ---
 async function getExpiringWorldsForUser(userId, daysUntilExpiry = 7) {
     logger.debug(`[DB] Fetching worlds expiring in ${daysUntilExpiry} days for user ${userId}`);
@@ -238,145 +256,6 @@ async function getExpiringWorldsForUser(userId, daysUntilExpiry = 7) {
     }
 }
 
-// --- New function to get all worlds from all users, paged ---
-async function getAllWorldsPaged({ page = 1, pageSize = 10 /* Fallback if CONSTANTS.PAGE_SIZE is not available */ }) {
-    logger.debug(`[DB] Fetching all worlds, page ${page}, pageSize ${pageSize}`);
-    try {
-        const offset = (page - 1) * pageSize;
-
-        const worlds = await knexInstance('worlds as w')
-            .join('users as u', 'w.user_id', 'u.id')
-            .select(
-                'w.id as world_id',
-                'w.name',
-                'w.custom_id',
-                'w.expiry_date',
-                'w.lock_type',
-                'w.is_public',
-                'w.guild_id',
-                'w.user_id',
-                'u.username as owner_username',
-                'w.days_owned' // Added days_owned
-            )
-            .orderBy('w.expiry_date', 'asc')
-            .limit(pageSize)
-            .offset(offset);
-
-        const totalResult = await knexInstance('worlds').count({ total: '*' }).first();
-        const totalCount = totalResult ? Number(totalResult.total) : 0;
-
-        // Ensure boolean for is_public
-        const formattedWorlds = worlds.map(row => ({ ...row, is_public: !!row.is_public }));
-
-        logger.debug(`[DB] Found ${formattedWorlds.length} worlds on page ${page}, total ${totalCount} worlds overall.`);
-        return { worlds: formattedWorlds, total: totalCount };
-
-    } catch (error) {
-        logger.error(`[DB] Error getting all worlds paged (page ${page}):`, error);
-        return { worlds: [], total: 0 }; // Return empty state on error
-    }
-}
-
-// --- New function to get mature worlds (180 days old) for a specific user ---
-async function getMatureWorldsForUser(userId) {
-    logger.debug(`[DB] Fetching mature (180 days old) worlds for user ${userId}`);
-    try {
-        const worlds = await knexInstance('worlds')
-            .where({ user_id: userId, days_owned: 180 })
-            .select('name', 'custom_id', 'days_owned');
-
-        logger.debug(`[DB] Found ${worlds.length} mature worlds for user ${userId}`);
-        return worlds;
-    } catch (error) {
-        logger.error(`[DB] Error getting mature worlds for user ${userId}:`, error);
-        return []; // Return an empty array in case of an error
-    }
-}
-
-// --- New function to get worlds at their lifecycle end (expiring today UTC) ---
-async function getWorldsAtLifecycleEnd(userId) {
-    logger.debug(`[DB] Fetching worlds at lifecycle end (expiring today UTC) for user ${userId}`);
-    try {
-        const worlds = await knexInstance('worlds')
-            .where('user_id', userId)
-            .andWhereRaw("date(expiry_date) = date('now', 'utc')") // SQLite specific
-            .select('name', 'custom_id', 'expiry_date', 'days_owned');
-
-        logger.debug(`[DB] Found ${worlds.length} worlds at lifecycle end for user ${userId}`);
-        return worlds;
-    } catch (error) {
-        logger.error(`[DB] Error getting worlds at lifecycle end for user ${userId}:`, error);
-        return []; // Return an empty array in case of an error
-    }
-}
-
-// --- New function to get overall world stats ---
-async function getOverallWorldStats() {
-    logger.debug('[DB] Fetching overall world stats...');
-    try {
-        const totalWorldsResult = await knexInstance('worlds').count({ count: '*' }).first();
-        const totalWorlds = totalWorldsResult ? Number(totalWorldsResult.count) : 0;
-
-        const mainlockResult = await knexInstance('worlds').where({ lock_type: 'mainlock' }).count({ count: '*' }).first();
-        const totalMainlocks = mainlockResult ? Number(mainlockResult.count) : 0;
-
-        const outlockResult = await knexInstance('worlds').where({ lock_type: 'outlock' }).count({ count: '*' }).first();
-        const totalOutlocks = outlockResult ? Number(outlockResult.count) : 0;
-
-        return {
-            total_worlds: totalWorlds,
-            total_mainlocks: totalMainlocks,
-            total_outlocks: totalOutlocks
-        };
-    } catch (error) {
-        logger.error('[DB] Error fetching overall world stats:', error);
-        return { total_worlds: 0, total_mainlocks: 0, total_outlocks: 0 };
-    }
-}
-
-// --- New function to get total users with worlds ---
-async function getTotalUsersWithWorlds() {
-    logger.debug('[DB] Fetching total users with worlds...');
-    try {
-        const result = await knexInstance('worlds').countDistinct({ count: 'user_id' }).first();
-        return result ? Number(result.count) : 0;
-    } catch (error) {
-        logger.error('[DB] Error fetching total users with worlds:', error);
-        return 0;
-    }
-}
-
-// --- New function to get worlds leaderboard ---
-async function getWorldsLeaderboard({ page = 1, pageSize = 5 }) {
-    logger.debug(`[DB] Fetching worlds leaderboard, page ${page}, pageSize ${pageSize}`);
-    try {
-        const offset = (page - 1) * pageSize;
-
-        // Fetch users and their world counts
-        const usersWithWorldCounts = await knexInstance('worlds as w')
-            .join('users as u', 'w.user_id', 'u.id')
-            .select('w.user_id', 'u.username')
-            .count('w.id as world_count')
-            .groupBy('w.user_id', 'u.username')
-            .orderBy('world_count', 'desc')
-            .limit(pageSize)
-            .offset(offset);
-
-        // This counts distinct users who have at least one world.
-        const totalUsersResult = await knexInstance('worlds')
-            .countDistinct({ total: 'user_id' })
-            .first();
-        const totalCount = totalUsersResult ? Number(totalUsersResult.total) : 0;
-
-        logger.debug(`[DB] Found ${usersWithWorldCounts.length} leaderboard entries on page ${page}, total distinct users with worlds: ${totalCount}.`);
-        return { leaderboardEntries: usersWithWorldCounts, total: totalCount };
-
-    } catch (error) {
-        logger.error(`[DB] Error fetching worlds leaderboard (page ${page}):`, error);
-        return { leaderboardEntries: [], total: 0 }; // Return empty state on error
-    }
-}
-
 // --- User Preference Functions ---
 async function getUserPreferences(userId) {
     try {
@@ -393,7 +272,7 @@ async function getUserPreferences(userId) {
         // This ensures the bot always has some preference values to work with.
         logger.warn(`[DB] User ${userId} not found or preferences missing, returning defaults.`);
         return {
-            timezone_offset: 0.0,
+            timezone: 0.0,
             view_mode: 'pc',
             reminder_enabled: false,
             reminder_time_utc: null
@@ -467,21 +346,21 @@ async function updateUserReminderSettings(userId, reminderEnabled, reminderTimeU
 // Add this function definition within database.js
 async function getWorldsByDaysLeft(userId, daysLeft, guildId = null, page = 1, pageSize = 10 /* Default, calling code should pass CONSTANTS.PAGE_SIZE */) {
     logger.debug(`[DB] getWorldsByDaysLeft called - User: ${userId}, DaysLeft: ${daysLeft}, Guild: ${guildId}, Page: ${page}, PageSize: ${pageSize}`);
-
+    
     if (typeof daysLeft !== 'number' || daysLeft < 0) {
         logger.warn(`[DB] getWorldsByDaysLeft: Invalid daysLeft parameter: ${daysLeft}`);
         return { worlds: [], total: 0 };
     }
 
     const todayUTC = new Date();
-    todayUTC.setUTCHours(0, 0, 0, 0);
+    todayUTC.setUTCHours(0, 0, 0, 0); 
 
     const startDate = new Date(todayUTC);
-    startDate.setUTCDate(todayUTC.getUTCDate() + daysLeft);
+    startDate.setUTCDate(todayUTC.getUTCDate() + daysLeft); 
     const startDateISO = startDate.toISOString();
 
     const endDate = new Date(startDate);
-    endDate.setUTCDate(startDate.getUTCDate() + 1);
+    endDate.setUTCDate(startDate.getUTCDate() + 1); 
     const endDateISO = endDate.toISOString();
 
     logger.debug(`[DB] getWorldsByDaysLeft: Target expiry date range: >= ${startDateISO} AND < ${endDateISO}`);
@@ -497,10 +376,10 @@ async function getWorldsByDaysLeft(userId, daysLeft, guildId = null, page = 1, p
             .where('expiry_date', '>=', startDateISO)
             .andWhere('expiry_date', '<', endDateISO);
 
-        if (guildId) {
+        if (guildId) { 
             queryBase = queryBase.andWhere('w.is_public', true).andWhere('w.guild_id', guildId);
             countBase = countBase.andWhere('is_public', true).andWhere('guild_id', guildId);
-        } else if (userId) {
+        } else if (userId) { 
             queryBase = queryBase.andWhere('w.user_id', userId);
             countBase = countBase.andWhere('user_id', userId);
         } else {
@@ -509,17 +388,17 @@ async function getWorldsByDaysLeft(userId, daysLeft, guildId = null, page = 1, p
         }
 
         const worlds = await queryBase
-            .leftJoin('users as u', 'w.user_id', 'u.id')
-            .orderBy('w.name', 'asc')
+            .leftJoin('users as u', 'w.user_id', 'u.id') 
+            .orderBy('w.name', 'asc') 
             .limit(pageSize)
             .offset(offset)
             .select('w.*', 'u.username as added_by_tag');
-
+        
         logger.debug(`[DB] getWorldsByDaysLeft: Worlds query returned ${worlds.length} rows.`);
 
         const totalResult = await countBase.count({ total: '*' }).first();
         const totalCount = totalResult ? Number(totalResult.total) : 0;
-
+        
         logger.debug(`[DB] getWorldsByDaysLeft: Total count for criteria: ${totalCount}`);
 
         const formattedWorlds = worlds.map(row => ({ ...row, is_public: !!row.is_public }));
@@ -557,13 +436,7 @@ module.exports = {
   getWorldLockStats,
   getExpiringWorldCount,
   getMostRecentWorld,
-  getExpiringWorldsForUser,
-  getAllWorldsPaged,
-  getMatureWorldsForUser,
-  getWorldsAtLifecycleEnd,
-  getOverallWorldStats,
-  getTotalUsersWithWorlds,
-  getWorldsLeaderboard,    // Added new function
+  getExpiringWorldsForUser, // Added the new function to exports
   // User Preferences
   getUserPreferences,
   updateUserTimezone,
