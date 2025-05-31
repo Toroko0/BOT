@@ -130,18 +130,28 @@ async function show179WorldsList(interaction, page = 1) {
         return;
     }
 
-    try { tableOutput = '```\n' + table(data, config) + '\n```'; }
+    try {
+        tableOutput = `\`\`\`
+\${table(data, config)}
+\`\`\``;
+        if (tableOutput.length > 1990) {
+            let cutOff = tableOutput.lastIndexOf('\n', 1950);
+            if (cutOff === -1) cutOff = 1950;
+            tableOutput = tableOutput.substring(0, cutOff) + '\n... (Table truncated) ...```';
+        }
+    }
     catch (tableError) { logger.error('[179.js] Table generation failed:', tableError); tableOutput = 'Error generating table.'; }
 
     const components = [];
     const navRowComponents = [
-        new ButtonBuilder().setCustomId(\`179_button_prev_${page}\`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Primary).setDisabled(page <= 1),
-        new ButtonBuilder().setCustomId(\`179_button_page_${page}\`).setLabel(\`Page ${page}/${totalPages}\`).setStyle(ButtonStyle.Secondary).setDisabled(true),
-        new ButtonBuilder().setCustomId(\`179_button_next_${page}\`).setLabel('Next ➡️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages),
+        new ButtonBuilder().setCustomId(`179_button_prev_${page}`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Primary).setDisabled(page <= 1),
+        new ButtonBuilder().setCustomId(`179_button_page_${page}`).setLabel(`Page ${page}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
+        new ButtonBuilder().setCustomId(`179_button_next_${page}`).setLabel('Next ➡️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages),
     ];
     if (navRowComponents.length > 0) components.push(new ActionRowBuilder().addComponents(navRowComponents));
 
-    const finalContent = \`\${tableOutput}\n📊 Total 179-day worlds: \${totalWorlds}\`;
+    const finalContent = `${tableOutput}
+📊 Total 179-day worlds: ${totalWorlds}`;
     const finalOpts = { content: finalContent, components: components, embeds: [] };
 
     if (interaction.deferred || interaction.replied) {
@@ -173,7 +183,7 @@ module.exports = {
         const action = params[0];
         const currentPage = parseInt(params[1]) || 1;
 
-        logger.info(\`[179.js] Button Clicked: action=\${action}, page=\${currentPage}, customId=\${interaction.customId}\`);
+        logger.info(`[179.js] Button Clicked: action=${action}, page=${currentPage}, customId=${interaction.customId}`);
 
         try {
             // Ensure interaction is acknowledged before proceeding
@@ -183,13 +193,13 @@ module.exports = {
                 await interaction.deferUpdate();
             }
         } catch (deferError) {
-            logger.error(\`[179.js] Failed to defer update in handleButton for action \${action}:\`, deferError);
+            logger.error(`[179.js] Failed to defer update in handleButton for action ${action}:`, deferError);
             // If deferUpdate fails, try to send a follow-up message.
             // This might happen if the original message was deleted or the interaction expired.
             try {
                 await interaction.followUp({ content: "Error processing action. Please try again.", flags: 1 << 6 });
             } catch (followUpError) {
-                logger.error(\`[179.js] Failed to send followUp after deferUpdate error:\`, followUpError);
+                logger.error(`[179.js] Failed to send followUp after deferUpdate error:`, followUpError);
             }
             return; // Stop further processing if deferUpdate failed
         }
@@ -210,7 +220,7 @@ module.exports = {
                 // await interaction.editReply({ content: `Still on page ${currentPage}.`, components: interaction.message.components });
                 break;
             default:
-                logger.warn(\`[179.js] Unknown 179 button action: \${action}\`);
+                logger.warn(`[179.js] Unknown 179 button action: ${action}`);
                 await interaction.editReply({ content: 'Unknown button action.', components: [] });
         }
     },
