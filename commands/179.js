@@ -41,8 +41,7 @@ async function show179WorldsList(interaction, page = 1) {
     const totalPages = totalWorlds > 0 ? Math.ceil(totalWorlds / CONSTANTS.PAGE_SIZE) : 1;
     page = Math.max(1, Math.min(page, totalPages));
 
-    // Sorting: All worlds retrieved by `getWorldsByDaysLeft(..., 1, ...)` already have 1 day left.
-    // So, we only need to apply the secondary (name length) and tertiary (alphabetical) sorts.
+    // Client-side sort for display consistency
     worlds.sort((a, b) => {
         const lengthDiff = a.name.length - b.name.length;
         if (lengthDiff !== 0) return lengthDiff; // Shorter names first
@@ -133,7 +132,6 @@ async function show179WorldsList(interaction, page = 1) {
     }
     
     try { 
-        // CORRECTED LINE: Removed backslash before the dollar sign
         tableOutput = `\`\`\`
 ${table(data, config)}
 \`\`\``;
@@ -152,6 +150,17 @@ ${table(data, config)}
         new ButtonBuilder().setCustomId(`179_button_next_${page}`).setLabel('Next ➡️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages),
     ];
     if (navRowComponents.length > 0) components.push(new ActionRowBuilder().addComponents(navRowComponents));
+
+    // NEW: Add Names export button
+    const exportRow = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('179_button_names_export')
+                .setLabel('📄 Names Export')
+                .setStyle(ButtonStyle.Secondary)
+        );
+    components.push(exportRow);
+
 
     const finalContent = `${tableOutput}
 📊 Total 179-day worlds: ${totalWorlds}`;
@@ -216,6 +225,58 @@ module.exports = {
                 break;
             case 'page':
                 logger.debug('[179.js] Page button clicked, interaction already deferred/acknowledged.');
+                break;
+            case 'names_export':
+                logger.info(`[179.js] Names Export button clicked by ${interaction.user.tag}`);
+                // DeferReply as this will be a new ephemeral message
+                // If it's already deferred (from the initial button click), then just editReply later.
+                if (!interaction.deferred && !interaction.replied) {
+                    await interaction.deferReply({ ephemeral: true });
+                }
+
+                const userId = interaction.user.id;
+                const guildId = interaction.guildId; // Can be null in DMs
+
+                let allWorlds;
+                try {
+                    // Fetch all 179-day worlds for the user/guild
+                    allWorlds = await db.getAllWorldsByDaysLeft(userId, 1, guildId);
+                    logger.debug(`[179.js] Fetched ${allWorlds.length} worlds for names export.`);
+                } catch (error) {
+                    logger.error(`[179.js] Error fetching all 179-day worlds for export:`, error?.stack || error);
+                    await interaction.editReply({ content: '❌ Sorry, I could not fetch the world names for export.', ephemeral: true });
+                    return;
+                }
+
+                if (allWorlds.length === 0) {
+                    const noWorldsMessage = guildId ? '🌐 No public 179-day worlds found in this server to export names.' : '🔒 You have no 179-day worlds to export names.';
+                    await interaction.editReply({ content: noWorldsMessage, ephemeral: true });
+                    return;
+                }
+
+                // Apply the sorting logic (name length then alphabetical)
+                allWorlds.sort((a, b) => {
+                    const lengthDiff = a.name.length - b.name.length;
+                    if (lengthDiff !== 0) return lengthDiff; // Shorter names first
+                    return a.name.toLowerCase().localeCompare(b.name.toLowerCase()); // Alphabetical (case-insensitive)
+                });
+
+                let exportText = "```\n";
+                allWorlds.forEach(world => {
+                    const lockChar = world.lock_type.charAt(0).toUpperCase();
+                    const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
+                    exportText += `(${lockChar}) ${world.name.toUpperCase()}${customIdPart}\n`;
+                });
+                exportText += "```";
+
+                // Check Discord's character limit for messages (2000 characters)
+                if (exportText.length > 2000) {
+                    // Truncate if too long, or send as a file (more complex)
+                    const truncationMessage = `\n... (Output truncated due to Discord's character limit. Total worlds: ${allWorlds.length})`;
+                    exportText = exportText.substring(0, 2000 - (truncationMessage.length + 3)) + truncationMessage + "```";
+                }
+
+                await interaction.editReply({ content: exportText, ephemeral: true });
                 break;
             default:
                 logger.warn(`[179.js] Unknown 179 button action: ${action}`);
