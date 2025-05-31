@@ -209,7 +209,7 @@ async function findWorldByIdentifier(userId, identifier, guildId) {
 }
 
 async function getFilteredWorlds(userId, filters = {}) {
-    try { let query = knexInstance('worlds as w').leftJoin('users as u', 'w.user_id', 'u.id').select('w.*', 'u.username as added_by_tag'); if (filters.showPublic && filters.guildId) { query = query.where(builder => { builder.where('w.user_id', userId).orWhere(subBuilder => { subBuilder.where('w.is_public', true).andWhere('w.guild_id', filters.guildId); }); }); } else { query = query.where('w.user_id', userId); } if (filters.prefix) query = query.andWhereRaw('lower(w.name) LIKE lower(?)', [`${filters.prefix}%`]); if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') query = query.andWhere('w.lock_type', filters.lockType); if (filters.expiryDay) { const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 }; const dayNum = dayMap[filters.expiryDay.toLowerCase()]; if (dayNum !== undefined) query = query.andWhereRaw("strftime('%w', date(w.expiry_date)) = ?", [dayNum.toString()]); } if (filters.expiringDays !== undefined && filters.expiringDays !== null) { const days = parseInt(filters.expiringDays, 10); if (!isNaN(days) && days >= 0) { const targetDate = new Date(); targetDate.setUTCDate(targetDate.getUTCDate() + days); targetDate.setUTCHours(23, 59, 59, 999); const targetDateISO = targetDate.toISOString(); query = query.andWhere('w.expiry_date', '<=', targetDateISO); } } query = query.orderBy('w.expiry_date', 'asc'); const worlds = await query; return worlds.map(w => ({ ...w, is_public: !!w.is_public })); } // FIXED: Added missing ')' here.
+    try { let query = knexInstance('worlds as w').leftJoin('users as u', 'w.user_id', 'u.id').select('w.*', 'u.username as added_by_tag'); if (filters.showPublic && filters.guildId) { query = query.where(builder => { builder.where('w.user_id', userId).orWhere(subBuilder => { subBuilder.where('w.is_public', true).andWhere('w.guild_id', filters.guildId); }); }); } else { query = query.where('w.user_id', userId); } if (filters.prefix) query = query.andWhereRaw('lower(w.name) LIKE lower(?)', [`${filters.prefix}%`]); if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') query = query.andWhere('w.lock_type', filters.lockType); if (filters.expiryDay) { const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 }; const dayNum = dayMap[filters.expiryDay.toLowerCase()]; if (dayNum !== undefined) query = query.andWhereRaw("strftime('%w', date(w.expiry_date)) = ?", [dayNum.toString()]); } if (filters.expiringDays !== undefined && filters.expiringDays !== null) { const days = parseInt(filters.expiringDays, 10); if (!isNaN(days) && days >= 0) { const targetDate = new Date(); targetDate.setUTCDate(targetDate.getUTCDate() + days); targetDate.setUTCHours(23, 59, 59, 999); const targetDateISO = targetDate.toISOString(); query = query.andWhere('w.expiry_date', '<=', targetDateISO); } } query = query.orderBy('w.expiry_date', 'asc'); const worlds = await query; return worlds.map(w => ({ ...w, is_public: !!w.is_public })); }
     catch (error) { logger.error(`[DB] Error searching/filtering worlds for user ${userId} with filters ${JSON.stringify(filters)}:`, error); return []; }
 }
 
@@ -341,6 +341,58 @@ async function updateUserReminderSettings(userId, reminderEnabled, reminderTimeU
     }
 }
 
+// Function to get worlds by days left, without pagination (for export)
+async function getAllWorldsByDaysLeft(userId, daysLeft, guildId = null) {
+    logger.debug(`[DB] getAllWorldsByDaysLeft called - User: ${userId}, DaysLeft: ${daysLeft}, Guild: ${guildId}`);
+    
+    if (typeof daysLeft !== 'number' || daysLeft < 0) {
+        logger.warn(`[DB] getAllWorldsByDaysLeft: Invalid daysLeft parameter: ${daysLeft}`);
+        return [];
+    }
+
+    const todayUTC = new Date();
+    todayUTC.setUTCHours(0, 0, 0, 0); 
+
+    const startDate = new Date(todayUTC);
+    startDate.setUTCDate(todayUTC.getUTCDate() + daysLeft); 
+    const startDateISO = startDate.toISOString();
+
+    const endDate = new Date(startDate);
+    endDate.setUTCDate(startDate.getUTCDate() + 1); 
+    const endDateISO = endDate.toISOString();
+
+    logger.debug(`[DB] getAllWorldsByDaysLeft: Target expiry date range: >= ${startDateISO} AND < ${endDateISO}`);
+
+    try {
+        let queryBase = knexInstance('worlds as w')
+            .where('w.expiry_date', '>=', startDateISO)
+            .andWhere('w.expiry_date', '<', endDateISO);
+
+        if (guildId) { 
+            queryBase = queryBase.andWhere('w.is_public', true).andWhere('w.guild_id', guildId);
+        } else if (userId) { 
+            queryBase = queryBase.andWhere('w.user_id', userId);
+        } else {
+            logger.warn('[DB] getAllWorldsByDaysLeft: Called without userId (for private) or guildId (for public context). Returning empty.');
+            return [];
+        }
+
+        const worlds = await queryBase
+            .leftJoin('users as u', 'w.user_id', 'u.id') 
+            .orderBy('w.name', 'asc') // This ordering is primarily for DB consistency, JS sort will refine
+            .select('w.*', 'u.username as added_by_tag');
+        
+        logger.debug(`[DB] getAllWorldsByDaysLeft: Worlds query returned ${worlds.length} rows.`);
+
+        const formattedWorlds = worlds.map(row => ({ ...row, is_public: !!row.is_public }));
+        return formattedWorlds;
+
+    } catch (error) {
+        logger.error(`[DB] Error in getAllWorldsByDaysLeft (User: ${userId}, Guild: ${guildId}, DaysLeft: ${daysLeft}):`, error);
+        return [];
+    }
+}
+
 // Add this function definition within database.js
 async function getWorldsByDaysLeft(userId, daysLeft, guildId = null, page = 1, pageSize = 10 /* Default, calling code should pass CONSTANTS.PAGE_SIZE */) {
     logger.debug(`[DB] getWorldsByDaysLeft called - User: ${userId}, DaysLeft: ${daysLeft}, Guild: ${guildId}, Page: ${page}, PageSize: ${pageSize}`);
@@ -441,4 +493,5 @@ module.exports = {
   updateUserViewMode,
   updateUserReminderSettings,
   getWorldsByDaysLeft, // Add the new function here
+  getAllWorldsByDaysLeft // NEW: Added function to export
 };
