@@ -1,5 +1,3 @@
-// --- START OF FILE database.js ---
-
 const path = require('path');
 const fs = require('fs');
 const knexConfig = require('./knexfile.js');
@@ -125,7 +123,7 @@ async function getWorlds(userId, page = 1, pageSize = 10) {
     const worlds = await knexInstance('worlds as w')
       .leftJoin('users as u', 'w.user_id', 'u.id')
       .where('w.user_id', userId)
-      .orderBy('w.expiry_date', 'desc') // CHANGED: Order by expiry_date descending for "more days left first"
+      .orderBy('w.expiry_date', 'asc') // REVERTED to ASC for "days owned descending" (more days owned first)
       .limit(pageSize)
       .offset(offset)
       .select('w.*', 'u.username as added_by_tag');
@@ -179,7 +177,7 @@ async function getPublicWorldsByGuild(guildId, page = 1, pageSize = 10) {
             .leftJoin('users as u', 'w.user_id', 'u.id')
             .where('w.is_public', true)
             .andWhere('w.guild_id', guildId)
-            .orderBy('w.expiry_date', 'desc') // CHANGED: Order by expiry_date descending for "more days left first"
+            .orderBy('w.expiry_date', 'asc') // REVERTED to ASC for "days owned descending" (more days owned first)
             .limit(pageSize)
             .offset(offset)
             .select('w.*', 'u.username as added_by_tag'); 
@@ -272,7 +270,7 @@ async function getUserPreferences(userId) {
         // This ensures the bot always has some preference values to work with.
         logger.warn(`[DB] User ${userId} not found or preferences missing, returning defaults.`);
         return {
-            timezone: 0.0,
+            timezone_offset: 0.0,
             view_mode: 'pc',
             reminder_enabled: false,
             reminder_time_utc: null
