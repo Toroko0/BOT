@@ -92,9 +92,6 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
   // Actions that show modals or reply directly will handle their own deferral.
   if (isUpdate && interaction.isMessageComponent() && !interaction.deferred && !interaction.replied) {
     try { 
-        // For components that will *edit the original message*, deferUpdate is appropriate.
-        // For components that will send a *new ephemeral message*, deferReply is needed.
-        // showWorldsList typically edits the message, so deferUpdate is correct here.
         await interaction.deferUpdate(replyOpts); 
     }
     catch (deferError) { 
@@ -141,20 +138,40 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
   // Add the new sorting block:
   if (worlds && worlds.length > 0) {
     logger.debug(`[list.js] Sorting worlds for display. Initial count: ${worlds.length}`);
-    worlds.sort((a, b) => {
-        // Primary sort (days owned descending) is now handled by DB query (expiry_date ASC).
-        // This JS sort refines the order for items on the current page for secondary and tertiary criteria.
+    
+    // Calculate current user's local day boundary once for all comparisons
+    const nowUserLocal = new Date(Date.now() + timezoneOffset * 3600000);
+    const nowDatePart = new Date(Date.UTC(nowUserLocal.getUTCFullYear(), nowUserLocal.getUTCMonth(), nowUserLocal.getUTCDate()));
 
-        // Secondary sort: Number of letters in name (ascending)
+    worlds.sort((a, b) => {
+        // Calculate daysOwned for both worlds for the primary sort
+        const expiryDateA_UTC = new Date(a.expiry_date);
+        const expiryDateB_UTC = new Date(b.expiry_date);
+
+        const expiryDatePartA = new Date(Date.UTC(expiryDateA_UTC.getUTCFullYear(), expiryDateA_UTC.getUTCMonth(), expiryDateA_UTC.getUTCDate()));
+        const expiryDatePartB = new Date(Date.UTC(expiryDateB_UTC.getUTCFullYear(), expiryDateB_UTC.getUTCMonth(), expiryDateB_UTC.getUTCDate()));
+
+        const daysLeftA = Math.ceil((expiryDatePartA.getTime() - nowDatePart.getTime()) / (1000 * 60 * 60 * 24));
+        const daysLeftB = Math.ceil((expiryDatePartB.getTime() - nowDatePart.getTime()) / (1000 * 60 * 60 * 24));
+        
+        const daysOwnedA = daysLeftA <= 0 ? 180 : Math.max(0, 180 - daysLeftA);
+        const daysOwnedB = daysLeftB <= 0 ? 180 : Math.max(0, 180 - daysLeftB);
+
+        // 1. Primary sort: Days Owned (Descending)
+        if (daysOwnedA !== daysOwnedB) {
+            return daysOwnedB - daysOwnedA; // Higher days_owned first
+        }
+
+        // 2. Secondary sort: Name Length (Ascending)
         const nameLengthDiff = a.name.length - b.name.length;
         if (nameLengthDiff !== 0) {
             return nameLengthDiff;
         }
 
-        // Tertiary sort: Alphabetical order of name (ascending, case-insensitive)
+        // 3. Tertiary sort: Alphabetical Order (Ascending, Case-Insensitive)
         return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
     });
-    logger.debug('[list.js] Worlds sorted by name length then alphabetically.');
+    logger.debug('[list.js] Worlds sorted by days owned (desc), name length (asc), then alphabetically (asc).');
   }
 
   // === Handle Empty List ===
@@ -423,19 +440,29 @@ module.exports = {
                 await showAddWorldModal(interaction);
                 break;
             case 'opensettings':
-                // FIX: Add deferReply here for opensettings button.
-                // This action needs to send a *new* ephemeral message, so deferReply is appropriate.
-                if (!interaction.deferred && !interaction.replied) {
-                    await interaction.deferReply({ flags: 1 << 6 }); // Ephemeral defer
+                try {
+                    // This action sends a *new* ephemeral message, so deferReply is appropriate.
+                    if (!interaction.deferred && !interaction.replied) {
+                        await interaction.deferReply({ ephemeral: true }); 
+                    }
+
+                    const { getSettingsReplyOptions } = require('./settings.js');
+                    const settingsReplyOptions = await getSettingsReplyOptions(interaction.user.id);
+                    // Since we deferred with deferReply, we now use editReply to send the actual content.
+                    await interaction.editReply(settingsReplyOptions);
+                } catch (err) {
+                    logger.error(`[list.js] Error handling opensettings button for user ${interaction.user.id}:`, err);
+                    // If editReply fails after deferReply, try a followUp.
+                    if (!interaction.replied && !interaction.deferred) {
+                        await interaction.reply({ content: '❌ Could not open settings. Please try again.', flags: 1 << 6 });
+                    } else {
+                        await interaction.followUp({ content: '❌ Could not open settings. An unexpected error occurred.', flags: 1 << 6 });
+                    }
                 }
-                const { getSettingsReplyOptions } = require('./settings.js');
-                const settingsReplyOptions = await getSettingsReplyOptions(interaction.user.id);
-                await interaction.editReply(settingsReplyOptions); // Use editReply after deferReply
                 break;
             case 'page': 
                 logger.info(`[list.js] Page button clicked (display only). Params: ${params.join('_')}. Acknowledging update.`);
                 // This is a disabled button. It's safe to just deferUpdate to acknowledge.
-                // If it's part of a message that was already deferred, deferUpdate is correct.
                 if (!interaction.deferred && !interaction.replied) {
                     await interaction.deferUpdate(); 
                 }
@@ -458,7 +485,6 @@ module.exports = {
         const errorReply = { content: 'An error occurred processing this action.', flags: 1 << 6 };
         try { 
             // Generic error fallback: if not deferred/replied, try to defer then edit. Otherwise, just edit.
-            // This assumes an original reply for the button message exists.
             if (!interaction.deferred && !interaction.replied) {
                 await interaction.deferUpdate(); // Acknowledge first
             }
