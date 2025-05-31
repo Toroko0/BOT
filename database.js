@@ -464,6 +464,72 @@ async function updateUserReminderSettings(userId, reminderEnabled, reminderTimeU
     }
 }
 
+// Add this function definition within database.js
+async function getWorldsByDaysLeft(userId, daysLeft, guildId = null, page = 1, pageSize = 10 /* Default, calling code should pass CONSTANTS.PAGE_SIZE */) {
+    logger.debug(`[DB] getWorldsByDaysLeft called - User: ${userId}, DaysLeft: ${daysLeft}, Guild: ${guildId}, Page: ${page}, PageSize: ${pageSize}`);
+
+    if (typeof daysLeft !== 'number' || daysLeft < 0) {
+        logger.warn(`[DB] getWorldsByDaysLeft: Invalid daysLeft parameter: ${daysLeft}`);
+        return { worlds: [], total: 0 };
+    }
+
+    const todayUTC = new Date();
+    todayUTC.setUTCHours(0, 0, 0, 0);
+
+    const startDate = new Date(todayUTC);
+    startDate.setUTCDate(todayUTC.getUTCDate() + daysLeft);
+    const startDateISO = startDate.toISOString();
+
+    const endDate = new Date(startDate);
+    endDate.setUTCDate(startDate.getUTCDate() + 1);
+    const endDateISO = endDate.toISOString();
+
+    logger.debug(`[DB] getWorldsByDaysLeft: Target expiry date range: >= ${startDateISO} AND < ${endDateISO}`);
+
+    const offset = (page - 1) * pageSize;
+
+    try {
+        let queryBase = knexInstance('worlds as w')
+            .where('w.expiry_date', '>=', startDateISO)
+            .andWhere('w.expiry_date', '<', endDateISO);
+
+        let countBase = knexInstance('worlds')
+            .where('expiry_date', '>=', startDateISO)
+            .andWhere('expiry_date', '<', endDateISO);
+
+        if (guildId) {
+            queryBase = queryBase.andWhere('w.is_public', true).andWhere('w.guild_id', guildId);
+            countBase = countBase.andWhere('is_public', true).andWhere('guild_id', guildId);
+        } else if (userId) {
+            queryBase = queryBase.andWhere('w.user_id', userId);
+            countBase = countBase.andWhere('user_id', userId);
+        } else {
+            logger.warn('[DB] getWorldsByDaysLeft: Called without userId (for private) or guildId (for public context). Returning empty.');
+            return { worlds: [], total: 0 };
+        }
+
+        const worlds = await queryBase
+            .leftJoin('users as u', 'w.user_id', 'u.id')
+            .orderBy('w.name', 'asc')
+            .limit(pageSize)
+            .offset(offset)
+            .select('w.*', 'u.username as added_by_tag');
+
+        logger.debug(`[DB] getWorldsByDaysLeft: Worlds query returned ${worlds.length} rows.`);
+
+        const totalResult = await countBase.count({ total: '*' }).first();
+        const totalCount = totalResult ? Number(totalResult.total) : 0;
+
+        logger.debug(`[DB] getWorldsByDaysLeft: Total count for criteria: ${totalCount}`);
+
+        const formattedWorlds = worlds.map(row => ({ ...row, is_public: !!row.is_public }));
+        return { worlds: formattedWorlds, total: totalCount };
+
+    } catch (error) {
+        logger.error(`[DB] Error in getWorldsByDaysLeft (User: ${userId}, Guild: ${guildId}, DaysLeft: ${daysLeft}):`, error);
+        return { worlds: [], total: 0 };
+    }
+}
 
 // --- Module Exports ---
 // Assign all defined functions to the exports object
@@ -503,4 +569,5 @@ module.exports = {
   updateUserTimezone,
   updateUserViewMode,
   updateUserReminderSettings,
+  getWorldsByDaysLeft, // Add the new function here
 };
