@@ -15,10 +15,6 @@ async function show179WorldsList(interaction, page = 1) {
     let dbResult = { worlds: [], total: 0 };
     try {
         // Call the actual database function to get worlds with 1 day left until expiry
-        // userId is for private worlds (if guildId is null)
-        // guildId is for public worlds in a server
-        // page is the current page number
-        // CONSTANTS.PAGE_SIZE is the number of items per page
         logger.info(`[179.js] Calling db.getWorldsByDaysLeft with userId: ${userId}, daysLeft: 1, guildId: ${guildId}, page: ${page}, pageSize: ${CONSTANTS.PAGE_SIZE}`);
         dbResult = await db.getWorldsByDaysLeft(userId, 1, guildId, page, CONSTANTS.PAGE_SIZE);
         logger.debug(`[179.js] db.getWorldsByDaysLeft returned ${dbResult.worlds.length} worlds and total ${dbResult.total}.`);
@@ -26,14 +22,12 @@ async function show179WorldsList(interaction, page = 1) {
     } catch (error) {
         logger.error(`[179.js] Error calling db.getWorldsByDaysLeft:`, error?.stack || error);
         const errorContent = '❌ Sorry, I encountered an error fetching the 179-day worlds list from the database.';
-        // Ensure interaction has been deferred before trying to editReply
         if (interaction.deferred || interaction.replied) {
             await interaction.editReply({ content: errorContent, components: [], embeds: [] });
         } else {
-            // This case should ideally not be hit if called from execute/handleButton which defer
             await interaction.reply({ content: errorContent, components: [], embeds: [], flags: 1 << 6 });
         }
-        return; // Stop execution if database call fails
+        return;
     }
     
     let worlds = dbResult.worlds || [];
@@ -155,7 +149,7 @@ ${table(data, config)}
     const exportRow = new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
-                .setCustomId('179_button_names_export')
+                .setCustomId('179_button_names_export') // Custom ID for the new button
                 .setLabel('📄 Names Export')
                 .setStyle(ButtonStyle.Secondary)
         );
@@ -192,31 +186,46 @@ module.exports = {
     },
 
     async handleButton(interaction, params) {
-        const action = params[0];
-        const currentPage = parseInt(params[1]) || 1;
+        // Parse the full customId to reliably determine the action
+        const customIdParts = interaction.customId.split('_');
+        const commandPrefix = customIdParts[0]; // '179'
+        const buttonCategory = customIdParts[1]; // 'button'
+        const mainAction = customIdParts[2]; // 'prev', 'next', 'names'
+        const subAction = customIdParts[3]; // page number or 'export'
 
-        logger.info(`[179.js] Button Clicked: action=${action}, page=${currentPage}, customId=${interaction.customId}`);
+        let effectiveAction;
+        if (mainAction === 'names' && subAction === 'export') {
+            effectiveAction = 'names_export';
+        } else {
+            // For 'prev', 'next', 'page' buttons
+            effectiveAction = mainAction;
+        }
+
+        const currentPage = parseInt(subAction) || 1; // Used for pagination buttons
+
+        logger.info(`[179.js] Button Clicked: effectiveAction=${effectiveAction}, page=${currentPage}, customId=${interaction.customId}`);
 
         try {
-            // Ensure interaction is acknowledged before proceeding
-            if (!interaction.deferred && !interaction.replied) {
-                 // Using deferUpdate as this is a component interaction.
-                 // The initial command uses deferReply.
-                await interaction.deferUpdate();
+            // Acknowledge the interaction based on the action
+            // Pagination buttons (prev, next, page) will edit the original message, so deferUpdate.
+            // Names export button will send a new ephemeral message, so deferReply.
+            if (effectiveAction !== 'names_export' && !interaction.deferred && !interaction.replied) {
+                 await interaction.deferUpdate();
+            } else if (effectiveAction === 'names_export' && !interaction.deferred && !interaction.replied) {
+                 await interaction.deferReply({ ephemeral: true });
             }
         } catch (deferError) {
-            logger.error(`[179.js] Failed to defer update in handleButton for action ${action}:`, deferError);
-            // If deferUpdate fails, try to send a follow-up message.
-            // This might happen if the original message was deleted or the interaction expired.
+            logger.error(`[179.js] Failed to acknowledge interaction for action ${effectiveAction}:`, deferError);
             try {
+                // Try to send a follow-up if deferral failed
                 await interaction.followUp({ content: "Error processing action. Please try again.", flags: 1 << 6 });
             } catch (followUpError) {
-                logger.error(`[179.js] Failed to send followUp after deferUpdate error:`, followUpError);
+                logger.error(`[179.js] Failed to send followUp after deferral error:`, followUpError);
             }
-            return; // Stop further processing if deferUpdate failed
+            return; 
         }
         
-        switch(action) {
+        switch(effectiveAction) {
             case 'prev':
                 await show179WorldsList(interaction, Math.max(1, currentPage - 1));
                 break;
@@ -224,22 +233,18 @@ module.exports = {
                 await show179WorldsList(interaction, currentPage + 1);
                 break;
             case 'page':
-                logger.debug('[179.js] Page button clicked, interaction already deferred/acknowledged.');
+                logger.debug('[179.js] Page button clicked, interaction already acknowledged.');
+                // No further action needed as deferUpdate already happened
                 break;
             case 'names_export':
                 logger.info(`[179.js] Names Export button clicked by ${interaction.user.tag}`);
-                // DeferReply as this will be a new ephemeral message
-                // If it's already deferred (from the initial button click), then just editReply later.
-                if (!interaction.deferred && !interaction.replied) {
-                    await interaction.deferReply({ ephemeral: true });
-                }
-
+                
                 const userId = interaction.user.id;
                 const guildId = interaction.guildId; // Can be null in DMs
 
                 let allWorlds;
                 try {
-                    // Fetch all 179-day worlds for the user/guild
+                    // Fetch ALL 179-day worlds for the user/guild using the new function
                     allWorlds = await db.getAllWorldsByDaysLeft(userId, 1, guildId);
                     logger.debug(`[179.js] Fetched ${allWorlds.length} worlds for names export.`);
                 } catch (error) {
@@ -271,15 +276,16 @@ module.exports = {
 
                 // Check Discord's character limit for messages (2000 characters)
                 if (exportText.length > 2000) {
-                    // Truncate if too long, or send as a file (more complex)
                     const truncationMessage = `\n... (Output truncated due to Discord's character limit. Total worlds: ${allWorlds.length})`;
                     exportText = exportText.substring(0, 2000 - (truncationMessage.length + 3)) + truncationMessage + "```";
                 }
 
+                // Edit the deferred reply (which was deferred as ephemeral)
                 await interaction.editReply({ content: exportText, ephemeral: true });
                 break;
             default:
-                logger.warn(`[179.js] Unknown 179 button action: ${action}`);
+                logger.warn(`[179.js] Unknown 179 button action: ${effectiveAction}`);
+                // If deferUpdate was successful, just editReply
                 await interaction.editReply({ content: 'Unknown button action.', components: [] });
         }
     },
