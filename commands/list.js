@@ -11,6 +11,7 @@ const { table, getBorderCharacters } = require('table');
 const { showWorldInfo, showEditWorldModal } = require('./info.js'); // Assuming info.js exports these
 const CONSTANTS = require('../utils/constants.js');
 const { showSearchModal } = require('./search.js');
+const { show179WorldsList } = require('./179.js');
 
 // --- Modal Definitions ---
 async function showRemoveWorldModal(interaction) {
@@ -116,6 +117,25 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
   const totalWorlds = dbResult.total || 0;
   const totalPages = totalWorlds > 0 ? Math.ceil(totalWorlds / CONSTANTS.PAGE_SIZE) : 1;
   page = Math.max(1, Math.min(page, totalPages));
+
+  // Add the new sorting block:
+  if (worlds && worlds.length > 0) {
+    logger.debug(`[list.js] Sorting worlds for display. Initial count: ${worlds.length}`);
+    worlds.sort((a, b) => {
+        // The primary sort by expiry_date (days_owned) is already done by the database query.
+        // This JS sort refines the order for items on the current page.
+
+        // Secondary sort: Number of letters in name (ascending)
+        const nameLengthDiff = a.name.length - b.name.length;
+        if (nameLengthDiff !== 0) {
+            return nameLengthDiff;
+        }
+
+        // Tertiary sort: Alphabetical order of name (ascending, case-insensitive)
+        return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+    });
+    logger.debug('[list.js] Worlds sorted by name length then alphabetically.');
+  }
 
   // === Handle Empty List ===
   if (worlds.length === 0) {
@@ -284,6 +304,13 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
         new ButtonBuilder().setCustomId('list_button_search').setLabel('🔍 Search').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('list_button_opensettings').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary)
     );
+    // Add the new "179 Days" button
+    actionRow2Components.push(
+        new ButtonBuilder()
+            .setCustomId('list_button_179days')
+            .setLabel('179 Days')
+            .setStyle(ButtonStyle.Secondary)
+    );
     if (actionRow2Components.length > 0) { components.push(new ActionRowBuilder().addComponents(actionRow2Components)); logger.debug(`[list.js] Added actionRow2 with ${actionRow2Components.length} components.`); }
     
     if (viewMode === 'pc' && selectOptions.length > 0) { const selectMenu = new StringSelectMenuBuilder().setCustomId('list_select_info').setPlaceholder('📋 Select a world for details').addOptions(selectOptions).setMaxValues(1); components.push(new ActionRowBuilder().addComponents(selectMenu)); logger.debug(`[list.js] Added selectRow with 1 component.`); } else { logger.debug(`[list.js] selectRow: No options available or phone mode.`); }
@@ -391,6 +418,27 @@ module.exports = {
                 type = params[1] || 'private';
                 page = parseInt(params[2]) || 1; 
                 await showWorldsList(interaction, type, page); // viewMode is fetched internally
+                break;
+            case '179days': // Matches the customId 'list_button_179days' (action is '179days')
+                logger.info(`[list.js] Button Clicked: action=179days, customId=${interaction.customId}`);
+                try {
+                    // Defer update as show179WorldsList will edit the reply
+                    if (!interaction.deferred && !interaction.replied) {
+                        await interaction.deferUpdate(); // Ephemeral by default from interaction handler if not specified
+                    }
+                } catch (deferError) {
+                    logger.error(`[list.js] Failed to defer update for 179days button: ${deferError.message}`);
+                    // Attempt to send a followup message if deferral fails
+                    try {
+                        await interaction.followUp({ content: "Error processing your request. Please try again.", flags: 1 << 6 });
+                    } catch (followUpError) {
+                        logger.error('[list.js] Failed to send followup after 179days defer error:', followUpError);
+                    }
+                    return; // Stop if deferral failed
+                }
+                // Call the imported function to display the 179-day list
+                // Pass the current interaction and default to page 1
+                await show179WorldsList(interaction, 1);
                 break;
             default: logger.warn(`[list.js] Unknown list button action: ${action}`); await interaction.reply({ content: 'Unknown button action.', flags: 1 << 6 });
         }
