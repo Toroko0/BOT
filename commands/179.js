@@ -22,7 +22,7 @@ async function show179WorldsList(interaction, page = 1) {
         logger.info(`[179.js] Calling db.getWorldsByDaysLeft with userId: ${userId}, daysLeft: 1, guildId: ${guildId}, page: ${page}, pageSize: ${CONSTANTS.PAGE_SIZE}`);
         dbResult = await db.getWorldsByDaysLeft(userId, 1, guildId, page, CONSTANTS.PAGE_SIZE);
         logger.debug(`[179.js] db.getWorldsByDaysLeft returned ${dbResult.worlds.length} worlds and total ${dbResult.total}.`);
-
+        
     } catch (error) {
         logger.error(`[179.js] Error calling db.getWorldsByDaysLeft:`, error?.stack || error);
         const errorContent = '❌ Sorry, I encountered an error fetching the 179-day worlds list from the database.';
@@ -35,22 +35,24 @@ async function show179WorldsList(interaction, page = 1) {
         }
         return; // Stop execution if database call fails
     }
-
+    
     let worlds = dbResult.worlds || [];
     const totalWorlds = dbResult.total || 0;
     const totalPages = totalWorlds > 0 ? Math.ceil(totalWorlds / CONSTANTS.PAGE_SIZE) : 1;
     page = Math.max(1, Math.min(page, totalPages));
 
+    // Sorting: All worlds retrieved by `getWorldsByDaysLeft(..., 1, ...)` already have 1 day left.
+    // So, we only need to apply the secondary (name length) and tertiary (alphabetical) sorts.
     worlds.sort((a, b) => {
         const lengthDiff = a.name.length - b.name.length;
-        if (lengthDiff !== 0) return lengthDiff;
-        return a.name.localeCompare(b.name);
+        if (lengthDiff !== 0) return lengthDiff; // Shorter names first
+        return a.name.toLowerCase().localeCompare(b.name.toLowerCase()); // Alphabetical (case-insensitive)
     });
 
     if (worlds.length === 0) {
         let emptyMsg = guildId ? '🌐 No public worlds found that are 179 days old in this server.' : '🔒 You have no worlds that are 179 days old.';
         if (totalWorlds > 0 && page > 1) emptyMsg = `Gomen 🙏, no 179-day worlds on Page ${page}/${totalPages}.`;
-
+        
         if (interaction.deferred || interaction.replied) {
             await interaction.editReply({ content: emptyMsg, components: [] });
         } else {
@@ -90,7 +92,7 @@ async function show179WorldsList(interaction, page = 1) {
             if (guildId) row.push(world.added_by_tag || 'Unknown');
             data.push(row);
         });
-
+        
         config = {
             columns: [{ alignment: 'left', width: 15, wrapWord: true }, { alignment: 'right', width: 5 }, { alignment: 'right', width: 5 }, { alignment: 'left', width: 18 }, { alignment: 'center', width: 5 }],
             border: getBorderCharacters('norc'),
@@ -129,15 +131,16 @@ async function show179WorldsList(interaction, page = 1) {
         }
         return;
     }
-
-    try {
+    
+    try { 
+        // CORRECTED LINE: Removed backslash before the dollar sign
         tableOutput = `\`\`\`
-\${table(data, config)}
+${table(data, config)}
 \`\`\``;
-        if (tableOutput.length > 1990) {
-            let cutOff = tableOutput.lastIndexOf('\n', 1950);
-            if (cutOff === -1) cutOff = 1950;
-            tableOutput = tableOutput.substring(0, cutOff) + '\n... (Table truncated) ...```';
+        if (tableOutput.length > 1990) { 
+            let cutOff = tableOutput.lastIndexOf('\n', 1950); 
+            if (cutOff === -1) cutOff = 1950; 
+            tableOutput = tableOutput.substring(0, cutOff) + '\n... (Table truncated) ...```'; 
         }
     }
     catch (tableError) { logger.error('[179.js] Table generation failed:', tableError); tableOutput = 'Error generating table.'; }
@@ -203,7 +206,7 @@ module.exports = {
             }
             return; // Stop further processing if deferUpdate failed
         }
-
+        
         switch(action) {
             case 'prev':
                 await show179WorldsList(interaction, Math.max(1, currentPage - 1));
@@ -213,11 +216,6 @@ module.exports = {
                 break;
             case 'page':
                 logger.debug('[179.js] Page button clicked, interaction already deferred/acknowledged.');
-                // No specific action needed as deferUpdate() handles the acknowledgement.
-                // The button is disabled, so it's for display.
-                // If an editReply was needed here, it would go here.
-                // For example, to update the message if the button wasn't disabled:
-                // await interaction.editReply({ content: `Still on page ${currentPage}.`, components: interaction.message.components });
                 break;
             default:
                 logger.warn(`[179.js] Unknown 179 button action: ${action}`);
