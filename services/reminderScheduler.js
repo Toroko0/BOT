@@ -42,7 +42,7 @@ async function checkReminders() {
             // Let's use a 5-minute window for now. Cron runs every 5 mins.
             // A reminder is due if its time is in the interval [current_time - 4min, current_time]
             // This handles reminders like HH:01, HH:02, HH:03, HH:04, HH:05 when cron runs at HH:05.
-            
+
             // Calculate difference in minutes from current UTC time.
             const reminderTotalMinutes = reminderHour * 60 + reminderMinute;
             const currentTotalMinutes = currentUtcHour * 60 + currentUtcMinute;
@@ -53,19 +53,17 @@ async function checkReminders() {
             if (diff < 0) {
                 diff += 1440; // Add a day in minutes if reminder time is "earlier" (e.g. reminder 23:58, current 00:01)
             }
-            
+
             if (diff >= 0 && diff < 5) { // Cron interval is 5 minutes
                 logger.info(`[Scheduler] User ${user.username} (ID: ${user.id}) is due for a reminder at ${user.reminder_time_utc} UTC.`);
-                
-                // Fetch expiring worlds for the user
-                logger.info(`[Scheduler] Fetching expiring worlds for user ${user.username} (ID: ${user.id}) for the next 1 day.`);
-                const expiringWorlds = await db.getExpiringWorldsForUser(user.id, 1); // Check for next 1 day
 
-                if (expiringWorlds && expiringWorlds.length > 0) {
-                    let messageContent = "Hello! You have the following worlds expiring in the next 24 hours:\n";
-                    for (const world of expiringWorlds) {
-                        // const expiry = new Date(world.expiry_date); // No longer needed for the message
-                        // const formattedExpiry = expiry.toLocaleDateString('en-US', { day: '2-digit', month: 'short', timeZone: 'UTC' }); // No longer needed
+                // Fetch worlds at their lifecycle end (expiring today UTC)
+                logger.info(`[Scheduler] Fetching worlds at lifecycle end (expiry today UTC) for user ${user.username} (ID: ${user.id}).`);
+                const lifecycleEndWorlds = await db.getWorldsAtLifecycleEnd(user.id);
+
+                if (lifecycleEndWorlds && lifecycleEndWorlds.length > 0) {
+                    let messageContent = "Hello! The following worlds have reached 180 days owned:\n"; // Message remains the same
+                    for (const world of lifecycleEndWorlds) {
                         messageContent += `- ${world.name}${world.custom_id ? ' (' + world.custom_id + ')' : ''}\n`;
                     }
                     messageContent += "\nPlease check your list for more details.";
@@ -76,7 +74,7 @@ async function checkReminders() {
                             continue; // Skip if client is not set
                         }
                         await clientInstance.users.send(user.id, messageContent);
-                        logger.info(`[Scheduler] Successfully sent reminder DM to ${user.username} (ID: ${user.id}) for ${expiringWorlds.length} world(s).`);
+                        logger.info(`[Scheduler] Successfully sent lifecycle end reminder DM to ${user.username} (ID: ${user.id}) for ${lifecycleEndWorlds.length} world(s).`);
                     } catch (dmError) {
                         logger.error(`[Scheduler] Failed to send reminder DM to ${user.username} (ID: ${user.id}). Error: ${dmError.message}`);
                         if (dmError.code === 50007) { // Discord error code for "Cannot send messages to this user"
@@ -84,7 +82,7 @@ async function checkReminders() {
                         }
                     }
                 } else {
-                    logger.info(`[Scheduler] User ${user.username} (ID: ${user.id}) is due for a reminder, but no expiring worlds found in the next 1 day.`);
+                    logger.info(`[Scheduler] User ${user.username} (ID: ${user.id}) is due for a reminder, but no worlds found expiring today UTC.`);
                 }
             }
         }

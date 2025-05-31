@@ -98,7 +98,6 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
 
   let dbResult = { worlds: [], total: 0 };
   try {
-    // Simplified fetch logic: only handles list view, not search results
     if (type === 'public') {
       if (interaction.guildId) { dbResult = await db.getPublicWorldsByGuild(interaction.guildId, page, CONSTANTS.PAGE_SIZE); }
     } else { // private
@@ -118,26 +117,18 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
   const totalPages = totalWorlds > 0 ? Math.ceil(totalWorlds / CONSTANTS.PAGE_SIZE) : 1;
   page = Math.max(1, Math.min(page, totalPages));
 
-  // Add the new sorting block:
   if (worlds && worlds.length > 0) {
     logger.debug(`[list.js] Sorting worlds for display. Initial count: ${worlds.length}`);
     worlds.sort((a, b) => {
-        // The primary sort by expiry_date (days_owned) is already done by the database query.
-        // This JS sort refines the order for items on the current page.
-
-        // Secondary sort: Number of letters in name (ascending)
         const nameLengthDiff = a.name.length - b.name.length;
         if (nameLengthDiff !== 0) {
             return nameLengthDiff;
         }
-
-        // Tertiary sort: Alphabetical order of name (ascending, case-insensitive)
         return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
     });
     logger.debug('[list.js] Worlds sorted by name length then alphabetically.');
   }
 
-  // === Handle Empty List ===
   if (worlds.length === 0) {
     let emptyMsg = '';
     if (type === 'public') { emptyMsg = interaction.guildId ? `🌐 No public worlds found in this server.` : '🌐 Public worlds only viewable in a server.'; if (totalWorlds > 0) emptyMsg += ` (Page ${page}/${totalPages})`; }
@@ -155,7 +146,6 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
     catch (replyError) { logger.error(`[list.js] Failed editReply for empty list: ${replyError.message}`, { code: replyError.code }); }
     return;
   }
-  // === End Empty Check ===
 
   logger.info(`[list.js] Displaying worlds (Page ${page}/${totalPages}, Count on page: ${worlds.length}, Total: ${totalWorlds})`);
   let headers;
@@ -177,28 +167,22 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
         if (!world || typeof world !== 'object' || !world.name || !world.expiry_date || !world.lock_type || !world.id) {
           logger.warn(`[list.js] PC Skipping invalid world object: ${JSON.stringify(world)}`); return;
         }
-        
         const expiryDateUTC = new Date(world.expiry_date);
         if (isNaN(expiryDateUTC.getTime())) {
           logger.warn(`[list.js] PC Skipping world with invalid expiry date (UTC): ${world.name} (${world.expiry_date})`); return;
         }
-
         const nowUserLocal = new Date(Date.now() + timezoneOffset * 3600000);
         const expiryUserLocal = new Date(expiryDateUTC.getTime() + timezoneOffset * 3600000);
-        
         const expiryDatePart = new Date(Date.UTC(expiryUserLocal.getUTCFullYear(), expiryUserLocal.getUTCMonth(), expiryUserLocal.getUTCDate()));
         const nowDatePart = new Date(Date.UTC(nowUserLocal.getUTCFullYear(), nowUserLocal.getUTCMonth(), nowUserLocal.getUTCDate()));
         const daysLeft = Math.ceil((expiryDatePart.getTime() - nowDatePart.getTime()) / (1000 * 60 * 60 * 24));
-        
         const displayedDaysOwned = daysLeft <= 0 ? 180 : Math.max(0, 180 - daysLeft);
         const dayOfWeek = expiryUserLocal.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
         const expiryStr = `${expiryUserLocal.toLocaleDateString('en-US', { timeZone: 'UTC' })} (${dayOfWeek})`;
         const lockTypeShort = world.lock_type.substring(0, 4).toUpperCase();
-        
         const row = [world.name.toUpperCase(), displayedDaysOwned.toString(), daysLeft <= 0 ? 'EXP' : daysLeft.toString(), expiryStr, lockTypeShort];
         if (type === 'public') row.push(world.added_by_tag || world.added_by || 'Unknown');
         data.push(row);
-
         if (selectOptions.length < CONSTANTS.MAX_SELECT_OPTIONS) {
           selectOptions.push({
             label: world.name.toUpperCase().substring(0, 100),
@@ -207,20 +191,16 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
           });
         }
       });
-
       if (data.length <= 1) { logger.warn("[list.js] PC No valid world data."); const opts = { content: ` Gomen 🙏, no valid worlds on Page ${page}/${totalPages} (PC).`, components: [], flags: 1 << 6 }; if (interaction.deferred || interaction.replied) await interaction.editReply(opts); else await interaction.reply(opts); return; }
-
       config = {
         columns: [{ alignment: 'left', width: 15, wrapWord: true }, { alignment: 'right', width: 5 }, { alignment: 'right', width: 5 }, { alignment: 'left', width: 18 }, { alignment: 'center', width: 5 }],
         border: getBorderCharacters('norc'),
         header: { alignment: 'center', content: (type === 'public' ? '🌐 PUBLIC WORLDS' : '🔒 YOUR WORLDS') }
       };
       if (type === 'public') config.columns.push({ alignment: 'left', width: 15, wrapWord: true });
-
     } else if (viewMode === 'phone') {
       headers = ['WORLD', 'OWNED'];
       data = [headers];
-
       worlds.forEach((world, index) => {
         logger.debug(`[list.js] Phone Processing world #${index + 1} (ID: ${world?.id}, Name: ${world?.name})`);
         if (!world || typeof world !== 'object' || !world.name || !world.expiry_date || !world.lock_type || !world.id) {
@@ -230,41 +210,30 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
          if (isNaN(expiryDateUTC.getTime())) {
           logger.warn(`[list.js] Phone Skipping world with invalid expiry date (UTC): ${world.name} (${world.expiry_date})`); return;
         }
-
         const nowUserLocal = new Date(Date.now() + timezoneOffset * 3600000);
         const expiryUserLocal = new Date(expiryDateUTC.getTime() + timezoneOffset * 3600000);
-
         const expiryDatePart = new Date(Date.UTC(expiryUserLocal.getUTCFullYear(), expiryUserLocal.getUTCMonth(), expiryUserLocal.getUTCDate()));
         const nowDatePart = new Date(Date.UTC(nowUserLocal.getUTCFullYear(), nowUserLocal.getUTCMonth(), nowUserLocal.getUTCDate()));
         const daysLeft = Math.ceil((expiryDatePart.getTime() - nowDatePart.getTime()) / (1000 * 60 * 60 * 24));
-        
         const displayedDaysOwned = daysLeft <= 0 ? 180 : Math.max(0, 180 - daysLeft);
-        
         const worldDisplay = `(${world.lock_type.charAt(0).toUpperCase()}) ${world.name.toUpperCase()}`;
         const daysOwnedDisplay = displayedDaysOwned.toString();
         data.push([worldDisplay, daysOwnedDisplay]);
       });
-
       if (data.length <= 1) { logger.warn("[list.js] Phone No valid world data."); const opts = { content: ` Gomen 🙏, no valid worlds on Page ${page}/${totalPages} (Phone).`, components: [], flags: 1 << 6 }; if (interaction.deferred || interaction.replied) await interaction.editReply(opts); else await interaction.reply(opts); return; }
-      
       config = {
-        columns: [
-            { alignment: 'left', width: 18, wrapWord: true, paddingLeft: 0, paddingRight: 0 }, // For (L) WORLDNAME
-            { alignment: 'right', width: 5, paddingLeft: 0, paddingRight: 0 }      // For Days Owned
-        ],
+        columns: [ { alignment: 'left', width: 18, wrapWord: true, paddingLeft: 0, paddingRight: 0 }, { alignment: 'right', width: 5, paddingLeft: 0, paddingRight: 0 } ],
         border: getBorderCharacters('norc'),
-        header: {
-          alignment: 'center',
-          content: (type === 'public' ? '🌐 PUBLIC (Phone)' : '🔒 YOURS (Phone)')
-        }
+        header: { alignment: 'center', content: (type === 'public' ? '🌐 PUBLIC (Phone)' : '🔒 YOURS (Phone)') }
       };
     }
 
     logger.debug('[list.js] Generating table string...');
-    try { tableOutput = '```\n' + table(data, config) + '\n```'; if (tableOutput.length > 1990) { let cutOff = tableOutput.lastIndexOf('\n', 1950); if (cutOff === -1) cutOff = 1950; tableOutput = tableOutput.substring(0, cutOff) + '\n... (Table truncated) ...```'; } }
+    try { tableOutput = `\`\`\`
+${table(data, config)}
+\`\`\``; if (tableOutput.length > 1990) { let cutOff = tableOutput.lastIndexOf('\n', 1950); if (cutOff === -1) cutOff = 1950; tableOutput = tableOutput.substring(0, cutOff) + '\n... (Table truncated) ...```'; } }
     catch (tableError) { logger.error('[list.js] Table generation failed:', tableError); tableOutput = 'Error generating table.'; throw tableError; }
 
-    // --- Build Components (Revised Instantiation) ---
     const components = [];
     logger.debug('[list.js] Building components...');
     const navRowComponents = [
@@ -273,10 +242,7 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
         new ButtonBuilder().setCustomId(`list_button_next_${type}_${page}`).setLabel('Next ➡️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages),
         new ButtonBuilder().setCustomId(`list_button_goto_${type}`).setLabel('Go to').setStyle(ButtonStyle.Secondary)
     ];
-
-    // Toggle view button removed as per subtask
-
-    if (navRowComponents.length > 0) { components.push(new ActionRowBuilder().addComponents(navRowComponents)); logger.debug(`[list.js] Added navRow with ${navRowComponents.length} components.`); } else { logger.warn(`[list.js] navRowComponents was unexpectedly empty.`); }
+    if (navRowComponents.length > 0) { components.push(new ActionRowBuilder().addComponents(navRowComponents)); }
     
     const actionRow1Components = [];
     if (type === 'private') {
@@ -285,12 +251,21 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
             new ButtonBuilder().setCustomId('list_button_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary)
         );
-    } else {
+        const botOwnerId = process.env.BOT_OWNER_ID;
+        if (interaction.user.id === botOwnerId) { 
+            actionRow1Components.push(
+                new ButtonBuilder()
+                    .setCustomId('list_button_adminviewall_1') 
+                    .setLabel('🌐 View All (Admin)') 
+                    .setStyle(ButtonStyle.Secondary)
+            );
+        }
+    } else { 
         actionRow1Components.push(
             new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary)
         );
     }
-    if (actionRow1Components.length > 0) { components.push(new ActionRowBuilder().addComponents(actionRow1Components)); logger.debug(`[list.js] Added actionRow1 with ${actionRow1Components.length} components.`); }
+    if (actionRow1Components.length > 0) { components.push(new ActionRowBuilder().addComponents(actionRow1Components)); }
     
     const actionRow2Components = [];
     if (interaction.guildId) {
@@ -304,23 +279,22 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
         new ButtonBuilder().setCustomId('list_button_search').setLabel('🔍 Search').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('list_button_opensettings').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary)
     );
-    // Add the new "179 Days" button
     actionRow2Components.push(
         new ButtonBuilder()
             .setCustomId('list_button_179days')
             .setLabel('179 Days')
             .setStyle(ButtonStyle.Secondary)
     );
-    if (actionRow2Components.length > 0) { components.push(new ActionRowBuilder().addComponents(actionRow2Components)); logger.debug(`[list.js] Added actionRow2 with ${actionRow2Components.length} components.`); }
+    if (actionRow2Components.length > 0) { components.push(new ActionRowBuilder().addComponents(actionRow2Components)); }
     
-    if (viewMode === 'pc' && selectOptions.length > 0) { const selectMenu = new StringSelectMenuBuilder().setCustomId('list_select_info').setPlaceholder('📋 Select a world for details').addOptions(selectOptions).setMaxValues(1); components.push(new ActionRowBuilder().addComponents(selectMenu)); logger.debug(`[list.js] Added selectRow with 1 component.`); } else { logger.debug(`[list.js] selectRow: No options available or phone mode.`); }
-    // --- End Build Components ---
+    if (viewMode === 'pc' && selectOptions.length > 0) { const selectMenu = new StringSelectMenuBuilder().setCustomId('list_select_info').setPlaceholder('📋 Select a world for details').addOptions(selectOptions).setMaxValues(1); components.push(new ActionRowBuilder().addComponents(selectMenu)); }
 
     logger.info(`[list.js] Final assembled components array length: ${components.length}`);
     if (components.some(row => !row.components || row.components.length === 0 || row.components.length > 5)) { logger.error("[list.js] FATAL: Detected an invalid ActionRow before sending!", components.map(r => r.components?.length)); throw new Error("Invalid component structure detected before sending."); }
     try { logger.debug(`[list.js] Components structure: ${JSON.stringify(components.map(row => row.toJSON()), null, 2)}`); } catch (e) { logger.error("[list.js] Failed to stringify components:", e); }
 
-    const finalContent = `${tableOutput}\n📊 Total ${type} worlds: ${totalWorlds}`;
+    const finalContent = `${tableOutput}
+📊 Total ${type} worlds: ${totalWorlds}`;
     const finalOpts = { content: finalContent, components: components, embeds: [], fetchReply: true };
 
     logger.debug('[list.js] Sending final reply/edit...');
@@ -337,7 +311,6 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
   }
 }
 
-// --- Command Definition and Execution ---
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('list')
@@ -354,13 +327,12 @@ module.exports = {
     await showWorldsList(interaction, initialType, 1);
   },
 
-  // --- Component Handlers ---
   async handleButton(interaction, params) {
     const cooldown = utils.checkCooldown(interaction.user.id, 'list_button');
     if (cooldown.onCooldown) { try { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, flags: 1 << 6 }); } catch (e) { logger.error("[list.js] Error sending cooldown message", e)} return; }
     
     const action = params[0];
-    let type, page, targetType, targetPage; // viewMode is no longer in params for most buttons
+    let type, page, targetType, targetPage; 
 
     logger.info(`[list.js] Button Clicked: action=${action}, params=${params}, customId=${interaction.customId}`);
 
@@ -368,79 +340,106 @@ module.exports = {
         switch(action) {
             case 'prev':
                 type = params[1] || 'private';
-                page = parseInt(params[2]) || 1; // Old: params[3]
+                page = parseInt(params[2]) || 1; 
                 await showWorldsList(interaction, type, Math.max(1, page - 1));
                 break;
             case 'next':
                 type = params[1] || 'private';
-                page = parseInt(params[2]) || 1; // Old: params[3]
+                page = parseInt(params[2]) || 1; 
                 await showWorldsList(interaction, type, page + 1);
                 break;
             case 'goto':
                 type = params[1] || 'private';
-                // viewMode = params[2] || 'pc'; // Removed from customId
                 const modal = new ModalBuilder().setCustomId(`list_modal_goto_${type}`).setTitle('Go to Page'); 
                 const pageInput = new TextInputBuilder().setCustomId('page_number').setLabel('Page Number').setPlaceholder('Enter page number').setStyle(TextInputStyle.Short).setRequired(true); 
                 modal.addComponents(new ActionRowBuilder().addComponents(pageInput)); 
                 await interaction.showModal(modal); 
                 break;
             case 'switch':
-                targetType = params[1]; // e.g. 'public' or 'private'
-                // currentViewMode = params[2] || 'pc'; // Removed
-                targetPage = parseInt(params[2]) || 1; // Old: params[3]
+                targetType = params[1]; 
+                targetPage = parseInt(params[2]) || 1; 
                 if (targetType === 'public' || targetType === 'private') { 
                     await showWorldsList(interaction, targetType, targetPage); 
                 } else { 
                     await interaction.reply({ content: 'Invalid switch target type.', flags: 1 << 6 }); 
                 } 
                 break;
-            // case 'toggleview': // Removed
-            //     type = params[1] || 'private';
-            //     targetViewMode = params[2] || 'pc'; 
-            //     page = parseInt(params[3]) || 1;
-            //     await showWorldsList(interaction, type, page, targetViewMode); // This would now fetch viewMode internally
-            //     break;
             case 'remove': await showRemoveWorldModal(interaction); break;
             case 'info': await showInfoWorldModal(interaction); break;
             case 'share': await showShareWorldModal(interaction, true); break;
             case 'unshare': await showShareWorldModal(interaction, false); break;
             case 'search': await showSearchModal(interaction); break;
             case 'opensettings':
-                const { getSettingsReplyOptions } = require('./settings.js');
-                const settingsReplyOptions = await getSettingsReplyOptions(interaction.user.id);
-                await interaction.followUp(settingsReplyOptions); // Send as new ephemeral follow-up
+                try {
+                    if (!interaction.deferred && !interaction.replied) {
+                         await interaction.deferUpdate();
+                    } else if (interaction.replied && !interaction.deferred) {
+                         logger.warn("[list.js] opensettings: Interaction replied but not deferred.");
+                    }
+                    const { getSettingsReplyOptions } = require('./settings.js'); 
+                    const settingsReplyOptions = await getSettingsReplyOptions(interaction.user.id);
+                    await interaction.followUp(settingsReplyOptions); 
+                } catch (error) {
+                    logger.error(`[list.js] Error in opensettings button:`, error);
+                    if (!interaction.replied || interaction.deferred) {
+                         await interaction.editReply({ content: 'Error opening settings.', components: [], embeds: [], flags: 1 << 6 }).catch(async () => {
+                              await interaction.followUp({ content: 'Error opening settings.', flags: 1 << 6 });
+                         });
+                    } else {
+                         await interaction.followUp({ content: 'Error opening settings.', flags: 1 << 6 });
+                    }
+                }
                 break;
             case 'page': 
                 logger.info(`[list.js] Page button clicked (display only). Params: ${params.join('_')}. Deferring update.`);
                 await interaction.deferUpdate(); 
                 break;
-            case 'view': // This case might be from an old help button or similar
+            case 'view': 
                 type = params[1] || 'private';
                 page = parseInt(params[2]) || 1; 
-                await showWorldsList(interaction, type, page); // viewMode is fetched internally
+                await showWorldsList(interaction, type, page); 
                 break;
-            case '179days': // Matches the customId 'list_button_179days' (action is '179days')
+            case '179days': 
                 logger.info(`[list.js] Button Clicked: action=179days, customId=${interaction.customId}`);
                 try {
-                    // Defer update as show179WorldsList will edit the reply
                     if (!interaction.deferred && !interaction.replied) {
-                        await interaction.deferUpdate(); // Ephemeral by default from interaction handler if not specified
+                        await interaction.deferUpdate(); 
                     }
                 } catch (deferError) {
                     logger.error(`[list.js] Failed to defer update for 179days button: ${deferError.message}`);
-                    // Attempt to send a followup message if deferral fails
                     try {
                         await interaction.followUp({ content: "Error processing your request. Please try again.", flags: 1 << 6 });
                     } catch (followUpError) {
                         logger.error('[list.js] Failed to send followup after 179days defer error:', followUpError);
                     }
-                    return; // Stop if deferral failed
+                    return; 
                 }
-                // Call the imported function to display the 179-day list
-                // Pass the current interaction and default to page 1
                 await show179WorldsList(interaction, 1);
                 break;
-            default: logger.warn(`[list.js] Unknown list button action: ${action}`); await interaction.reply({ content: 'Unknown button action.', flags: 1 << 6 });
+            case 'adminviewall':
+                const botOwnerIdCheck = process.env.BOT_OWNER_ID; 
+                if (interaction.user.id !== botOwnerIdCheck) {
+                    await interaction.reply({ content: 'This admin function is not available to you.', flags: 1 << 6 });
+                    return;
+                }
+                try {
+                    const adminCommand = require('./admin.js'); 
+                    if (adminCommand && typeof adminCommand.displayAdminAllWorldsView === 'function') {
+                        await adminCommand.displayAdminAllWorldsView(interaction, 1); 
+                    } else {
+                        logger.error('[list.js] admin.js or displayAdminAllWorldsView function not found/exported correctly.');
+                        await interaction.reply({ content: 'Error: Could not load the admin view functionality.', flags: 1 << 6 });
+                    }
+                } catch (error) {
+                    logger.error(`[list.js] Failed to invoke or execute displayAdminAllWorldsView for adminviewall button:`, error);
+                    if (!interaction.replied && !interaction.deferred) {
+                        await interaction.reply({ content: 'An error occurred trying to switch to admin view.', flags: 1 << 6 }).catch(e => {});
+                    }
+                }
+                break;
+            default: 
+                logger.warn(`[list.js] Unknown list button action: ${action}`); 
+                await interaction.reply({ content: 'Unknown button action.', flags: 1 << 6 });
         }
     } catch (error) {
         logger.error(`[list.js] Error executing list button handler for action ${action}:`, error?.stack || error);
@@ -460,7 +459,7 @@ module.exports = {
       try {
         let world = await db.getWorldById(worldId); if (!world) { await interaction.reply({ content: `❌ World with ID ${worldId} not found.`, flags: 1 << 6 }); return; }
         if (world.user_id !== interaction.user.id && !world.is_public) { await interaction.reply({ content: '🔒 You do not have permission to view details for this world.', flags: 1 << 6 }); return; }
-        await showWorldInfo(interaction, world); // showWorldInfo handles reply/update
+        await showWorldInfo(interaction, world); 
       } catch (error) {
         logger.error(`[list.js] Error fetching/showing world info from select menu (ID: ${worldId}):`, error?.stack || error);
         const errorReply = { content: 'An error occurred while fetching world details.', flags: 1 << 6 };
@@ -471,14 +470,11 @@ module.exports = {
 
   async handleModal(interaction, params) {
     const action = params[0];
-    // For goto: params[1] is type. viewMode is no longer part of modal customId.
-    // For others, params structure remains the same as they don't involve viewMode in their customId.
     logger.info(`[list.js] Modal Submitted: action=${action}, params=${params}, customId=${interaction.customId}`);
     try {
       switch(action) {
         case 'goto': { 
-            const type = params[1] || 'private'; // Type is still part of modal customId
-            // const viewMode = params[2] || 'pc'; // viewMode removed from modal customId
+            const type = params[1] || 'private'; 
             const pageInput = interaction.fields.getTextInputValue('page_number'); 
             const pageNumber = parseInt(pageInput); 
             if (isNaN(pageNumber) || pageNumber < 1) { 
@@ -486,20 +482,16 @@ module.exports = {
                 return; 
             } 
             await interaction.deferUpdate(); 
-            await showWorldsList(interaction, type, pageNumber); // Call without viewMode
+            await showWorldsList(interaction, type, pageNumber); 
             break; 
         }
         case 'remove': {
-            // This modal's customId is 'list_modal_remove', so params[1] etc. are not set here.
             const worldIdentifier = interaction.fields.getTextInputValue('worldName').trim();
             const world = await db.findWorldByIdentifier(interaction.user.id, worldIdentifier, null);
             if (!world || world.user_id !== interaction.user.id) { 
                 await interaction.reply({ content: `❌ World "**${worldIdentifier}**" not found in your list.`, flags: 1 << 6 }); 
                 return; 
             }
-            // Note: The remove confirmation buttons (remove_button_confirm_worldId, remove_button_cancel_worldId)
-            // are handled by the remove.js command's handleButton, not here.
-            // This modal (list_modal_remove) only initiates the confirmation step.
             const confirmId = `remove_button_confirm_${world.id}`; 
             const cancelId = `remove_button_cancel_${world.id}`;
             const row = new ActionRowBuilder().addComponents( 
@@ -511,7 +503,6 @@ module.exports = {
         }
         case 'share': 
         case 'unshare': {
-            // These modals customId are 'list_modal_share' or 'list_modal_unshare'
             if (!interaction.guildId) { 
                 await interaction.reply({ content: "Sharing/unsharing only possible in a server.", flags: 1 << 6 }); 
                 return; 
@@ -522,7 +513,7 @@ module.exports = {
                 await interaction.reply({ content: `❌ World "**${worldIdentifier}**" not found in your list.`, flags: 1 << 6 }); 
                 return; 
             }
-            const makePublic = (action === 'share'); // 'share' or 'unshare'
+            const makePublic = (action === 'share'); 
             if (makePublic && world.is_public && world.guild_id === interaction.guildId) { 
                 await interaction.reply({ content: `🌐 **${world.name.toUpperCase()}** is already public here.`, flags: 1 << 6 }); 
                 return; 
@@ -538,33 +529,32 @@ module.exports = {
                     return; 
                 } 
             }
-            const guildToSet = makePublic ? interaction.guildId : null; // Unsharing makes it fully private (guildId=null)
+            const guildToSet = makePublic ? interaction.guildId : null; 
             const success = await db.updateWorldVisibility(world.id, interaction.user.id, makePublic, guildToSet);
             if (success) { 
                 await require('./search.js').invalidateSearchCache(); 
-                await require('./utils/share_and_history.js').logHistory(world.id, interaction.user.id, action, `World ${world.name.toUpperCase()} ${action}d in guild ${interaction.guildId}`); 
+                await require('../utils/share_and_history.js').logHistory(world.id, interaction.user.id, action, `World ${world.name.toUpperCase()} ${action}d in guild ${interaction.guildId}`);
                 const row = new ActionRowBuilder()
                     .addComponents(
                         new ButtonBuilder()
-                            .setCustomId('list_button_view_private_1') // No viewMode needed here, it defaults to pc
+                            .setCustomId('list_button_view_private_1') 
                             .setLabel('View My Worlds')
                             .setStyle(ButtonStyle.Primary)
                     );
                 await interaction.reply({ content: `✅ **${world.name.toUpperCase()}** is now ${makePublic ? 'public in this server' : 'private'}.`, components: [row], flags: 1 << 6 }); 
             } else { 
-                await interaction.reply({ content: `❌ Failed to ${action} **${world.name.toUpperCase()}**.`, flags: 1 << 6 }); 
+                await interaction.reply({ content: `❌ Failed to ${action} **${world.name.toUpperCase()}**.` , flags: 1 << 6 }); 
             }
             break;
         }
         case 'info': { 
-            // This modal's customId is 'list_modal_info'
             const worldIdentifier = interaction.fields.getTextInputValue('worldName').trim(); 
             let world = await db.findWorldByIdentifier(interaction.user.id, worldIdentifier, interaction.guildId); 
             if (!world) { 
                 await interaction.reply({ content: `❌ World "**${worldIdentifier}**" not found or not accessible.`, flags: 1 << 6 }); 
                 return; 
             } 
-            await showWorldInfo(interaction, world); // showWorldInfo defaults its own viewMode if needed
+            await showWorldInfo(interaction, world); 
             break; 
         }
         default: logger.warn(`[list.js] Unhandled list modal action: ${action} from customId: ${interaction.customId}`); await interaction.reply({ content: "This form submission is not recognized.", flags: 1 << 6 });
