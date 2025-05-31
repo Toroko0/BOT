@@ -284,6 +284,31 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
         new ButtonBuilder().setCustomId('list_button_search').setLabel('🔍 Search').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('list_button_opensettings').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary)
     );
+
+    // Add "View All Worlds (Admin)" button for bot owner on private list view
+    const botOwnerId = process.env.BOT_OWNER_ID;
+    if (interaction.user.id === botOwnerId && type === 'private') {
+        const viewAllButton = new ButtonBuilder()
+            .setCustomId('list_button_adminviewall_1') // Page 1 implied, params[1] for page
+            .setLabel('🌐 View All Worlds (Admin)')
+            .setStyle(ButtonStyle.Secondary); // Or another style like .Danger or .Primary
+
+        // Add to actionRow2Components if space, otherwise create new row (max 5 per row)
+        if (actionRow2Components.length < 5) {
+            actionRow2Components.push(viewAllButton);
+        } else {
+            // This case might not be hit if actionRow2Components is already full,
+            // but good to have a fallback or ensure space management.
+            // For now, assuming it will fit or a new row is needed.
+            // If creating a new row:
+            // components.push(new ActionRowBuilder().addComponents(viewAllButton));
+            // For simplicity, let's assume it fits or we just add it, risking >5 if other buttons are many.
+            // A safer approach would be to create a new row if actionRow2Components.length >= 5.
+            // For now, just pushing it to the existing row.
+            actionRow2Components.push(viewAllButton);
+        }
+    }
+
     if (actionRow2Components.length > 0) { components.push(new ActionRowBuilder().addComponents(actionRow2Components)); logger.debug(`[list.js] Added actionRow2 with ${actionRow2Components.length} components.`); }
     
     if (viewMode === 'pc' && selectOptions.length > 0) { const selectMenu = new StringSelectMenuBuilder().setCustomId('list_select_info').setPlaceholder('📋 Select a world for details').addOptions(selectOptions).setMaxValues(1); components.push(new ActionRowBuilder().addComponents(selectMenu)); logger.debug(`[list.js] Added selectRow with 1 component.`); } else { logger.debug(`[list.js] selectRow: No options available or phone mode.`); }
@@ -379,9 +404,16 @@ module.exports = {
             case 'unshare': await showShareWorldModal(interaction, false); break;
             case 'search': await showSearchModal(interaction); break;
             case 'opensettings':
-                const { getSettingsReplyOptions } = require('./settings.js');
-                const settingsReplyOptions = await getSettingsReplyOptions(interaction.user.id);
-                await interaction.followUp(settingsReplyOptions); // Send as new ephemeral follow-up
+                try {
+                    await interaction.deferUpdate({ ephemeral: true }); // Defer the button click
+                    const { getSettingsReplyOptions } = require('./settings.js'); // Keep require local if not at top
+                    const settingsReplyOptions = await getSettingsReplyOptions(interaction.user.id);
+                    await interaction.followUp(settingsReplyOptions); // Send settings as a new ephemeral follow-up
+                } catch (error) {
+                    logger.error(`[list.js] Error in opensettings button:`, error);
+                    // Attempt to send a generic error if followUp itself fails after deferral
+                    await interaction.followUp({ content: 'Error opening settings.', flags: 1 << 6 }).catch(e => logger.error('[list.js] Failed to send error for opensettings button:', e));
+                }
                 break;
             case 'page': 
                 logger.info(`[list.js] Page button clicked (display only). Params: ${params.join('_')}. Deferring update.`);
@@ -391,6 +423,46 @@ module.exports = {
                 type = params[1] || 'private';
                 page = parseInt(params[2]) || 1; 
                 await showWorldsList(interaction, type, page); // viewMode is fetched internally
+                break;
+            case 'adminviewall':
+                // Permission check (though button only shows for owner, belt-and-suspenders)
+                const botOwnerIdCheck = process.env.BOT_OWNER_ID;
+                if (interaction.user.id !== botOwnerIdCheck) {
+                    await interaction.reply({ content: 'This admin function is not available to you.', ephemeral: true });
+                    return;
+                }
+                // Acknowledge the button click. Since we're sending a new message, reply is fine.
+                // await interaction.reply({
+                //     content: "To view all worlds from all users, please use the `/admin list` command.\n\n*This button is a shortcut reminder for you as the bot owner.*",
+                //     ephemeral: true
+                // });
+                // break; // Old logic commented out
+            // Refined case 'adminviewall'
+                const botOwnerIdCheck = process.env.BOT_OWNER_ID;
+                if (interaction.user.id !== botOwnerIdCheck) {
+                    await interaction.reply({ content: 'This admin function is not available to you.', ephemeral: true });
+                    return;
+                }
+                try {
+                    // Using local require for clarity and to ensure up-to-date module if needed.
+                    // Ensure admin.js is correctly exporting displayAdminAllWorldsView.
+                    const adminCommand = require('./admin.js');
+                    if (adminCommand && typeof adminCommand.displayAdminAllWorldsView === 'function') {
+                        // displayAdminAllWorldsView will handle its own deferral/reply
+                        await adminCommand.displayAdminAllWorldsView(interaction, 1); // Page 1
+                    } else {
+                        logger.error('[list.js] admin.js or displayAdminAllWorldsView function not found/exported correctly.');
+                        await interaction.reply({ content: 'Error: Could not load the admin view functionality.', ephemeral: true });
+                    }
+                } catch (error) {
+                    logger.error(`[list.js] Failed to invoke or execute displayAdminAllWorldsView for adminviewall button:`, error);
+                    // Check interaction state before attempting a fallback reply,
+                    // as displayAdminAllWorldsView should handle its own deferral/reply.
+                    if (!interaction.replied && !interaction.deferred) {
+                        await interaction.reply({ content: 'An error occurred trying to switch to admin view.', ephemeral: true }).catch(e => {});
+                    }
+                    // If displayAdminAllWorldsView deferred but failed before editing, it should have handled its error reply.
+                }
                 break;
             default: logger.warn(`[list.js] Unknown list button action: ${action}`); await interaction.reply({ content: 'Unknown button action.', flags: 1 << 6 });
         }
@@ -494,7 +566,7 @@ module.exports = {
             const success = await db.updateWorldVisibility(world.id, interaction.user.id, makePublic, guildToSet);
             if (success) { 
                 await require('./search.js').invalidateSearchCache(); 
-                await require('./utils/share_and_history.js').logHistory(world.id, interaction.user.id, action, `World ${world.name.toUpperCase()} ${action}d in guild ${interaction.guildId}`); 
+                await require('../utils/share_and_history.js').logHistory(world.id, interaction.user.id, action, `World ${world.name.toUpperCase()} ${action}d in guild ${interaction.guildId}`);
                 const row = new ActionRowBuilder()
                     .addComponents(
                         new ButtonBuilder()

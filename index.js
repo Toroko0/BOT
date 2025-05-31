@@ -1,11 +1,13 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, Collection, Events, Partials } = require('discord.js'); // Added Partials
+// const { spawnSync } = require('child_process'); // Removed spawnSync
 const fs = require('fs');
 const path = require('path');
 const db = require('./database.js'); // Knex instance from database.js
 const logger = require('./utils/logger.js');
 const { DateTime } = require('luxon');
-const reminderScheduler = require('./services/reminderScheduler.js'); // Adjust path if needed
+const reminderScheduler = require('./services/reminderScheduler.js');
+const { deployGlobalCommands } = require('./deploy-commands.js'); // Added for in-process deployment
 
 // --- Client Setup ---
 const client = new Client({
@@ -94,25 +96,27 @@ async function runDailyTasks() {
 // --- Event Handlers ---
 
 // Client Ready Event
-client.once(Events.ClientReady, async c => { // Make async for await
-  logger.info(`Logged in as ${c.user.tag}!`);
-  try {
-      logger.info('[Startup] Running database migrations...');
-      await db.knex.migrate.latest(); // Run latest migrations
-      logger.info('[Startup] Database migrations complete.');
-      
-      // Setup existing daily tasks
-      setupScheduledTasks(); 
-      
-      // Start the new reminder scheduler
-      logger.info('[Startup] Starting reminder scheduler...');
-      reminderScheduler.start(c); // Pass the client instance (c)
-      logger.info('[Startup] Reminder scheduler started.');
+client.once(Events.ClientReady, async c => {
+    logger.info(`Logged in as ${c.user.tag}!`); // Keep this first log
+    try {
+        logger.info('[Startup] Running database migrations...');
+        await db.knex.migrate.latest();
+        logger.info('[Startup] Database migrations complete.');
 
-  } catch (err) {
-      logger.error('[Startup] FATAL: Database migration or scheduler start-up failed:', err);
-      process.exit(1);
-  }
+        logger.info('[Startup] Deploying slash commands in-process...');
+        await deployGlobalCommands(logger);
+        logger.info('[Startup] In-process slash command deployment complete.');
+
+        setupScheduledTasks();
+
+        logger.info('[Startup] Starting reminder scheduler...');
+        reminderScheduler.start(c);
+        logger.info('[Startup] Reminder scheduler started.');
+
+    } catch (err) {
+        logger.error('[Startup] FATAL: Error during startup process (migrations, command deployment, or schedulers):', err);
+        process.exit(1);
+    }
 });
 
 // Interaction Handler Setup
@@ -145,8 +149,11 @@ process.on('SIGINT', () => { logger.info("Received SIGINT. Shutting down..."); c
 process.on('SIGTERM', () => { logger.info("Received SIGTERM. Shutting down..."); client.destroy(); process.exit(0); });
 
 // --- Login ---
+logger.info('[Startup] Checking DISCORD_TOKEN presence...');
 if (!process.env.DISCORD_TOKEN) {
-    logger.error('[Startup] FATAL: DISCORD_TOKEN environment variable is missing!');
+    logger.error('[Startup] FATAL: DISCORD_TOKEN is missing! Cannot login.');
     process.exit(1);
 }
+logger.info('[Startup] DISCORD_TOKEN found. Attempting to login...');
 client.login(process.env.DISCORD_TOKEN);
+logger.info('[Startup] client.login() call has been executed. Waiting for ClientReady event...');
