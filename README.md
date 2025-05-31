@@ -25,8 +25,8 @@ A Discord bot to privately track Growtopia worlds, expiration dates, sharing, an
 1. Clone the repo:
 
 ```bash
-git clone https://github.com/yourname/growtopia-tracker-bot.git
-cd growtopia-tracker-bot
+git clone https://github.com/Torok0/BOT.git
+cd BOT
 ```
 
 2. Install dependencies:
