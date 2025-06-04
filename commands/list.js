@@ -12,6 +12,7 @@ const { showWorldInfo, showEditWorldModal } = require('./info.js'); // Assuming 
 const CONSTANTS = require('../utils/constants.js');
 const { showSearchModal } = require('./search.js');
 const { show179WorldsList } = require('./179.js');
+const { showLockedWorldsList } = require('./lock.js'); // Import from lock.js
 
 // --- Modal Definitions ---
 async function showRemoveWorldModal(interaction) {
@@ -326,7 +327,8 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
         actionRow1Components.push(
             new ButtonBuilder().setCustomId('addworld_button_show').setLabel('➕ Add').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId('list_button_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('list_btn_lockworld').setLabel('🔒 Lock').setStyle(ButtonStyle.Secondary) // Added Lock button
         );
     } else {
         actionRow1Components.push(
@@ -345,7 +347,8 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
     }
     actionRow2Components.push(
         new ButtonBuilder().setCustomId('list_button_search').setLabel('🔍 Search').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('list_button_opensettings').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('list_button_opensettings').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('list_btn_viewlocks').setLabel('🔒 View Locks').setStyle(ButtonStyle.Primary) // Added View Locks button
     );
     // Add the new "179 Days" button
     actionRow2Components.push(
@@ -471,13 +474,30 @@ module.exports = {
                 // This action triggers show179WorldsList, which handles its own deferUpdate and editReply
                 await show179WorldsList(interaction, 1);
                 break;
+            case 'viewlocks': // New case for "🔒 View Locks" button
+                // showLockedWorldsList is async and handles its own deferral/reply
+                await showLockedWorldsList(interaction, 1, {});
+                break;
+            case 'lockworld': // New case for the "🔒 Lock" button
+                const lockModal = new ModalBuilder()
+                    .setCustomId('list_modal_lock_getname')
+                    .setTitle('Lock World: Enter Name');
+                const worldNameInput = new TextInputBuilder()
+                    .setCustomId('worldname_to_lock')
+                    .setLabel('World Name from Active List')
+                    .setPlaceholder('Enter exact world name to lock')
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true);
+                lockModal.addComponents(new ActionRowBuilder().addComponents(worldNameInput));
+                await interaction.showModal(lockModal);
+                break;
             default: 
                 logger.warn(`[list.js] Unknown list button action: ${action}`); 
                 // Fallback: Acknowledge the interaction, then send an error message
                 if (!interaction.deferred && !interaction.replied) {
                     await interaction.deferUpdate(); 
                 }
-                await interaction.editReply({ content: 'Unknown button action.', flags: 1 << 6 });
+                await interaction.editReply({ content: 'Unknown button action.', flags: 1 << 6 }); // Changed to editReply as deferUpdate was called
                 break;
         }
     } catch (error) {
@@ -535,8 +555,88 @@ module.exports = {
             await showWorldsList(interaction, type, pageNumber); // Call without viewMode
             break; 
         }
+        case 'lock_getname': { // Submission of Modal 1 (Get World Name to Lock)
+            const worldNameInput = interaction.fields.getTextInputValue('worldname_to_lock').trim();
+            const worldNameUpper = worldNameInput.toUpperCase();
+
+            if (!worldNameUpper || worldNameUpper.includes(' ')) {
+                await interaction.reply({ content: '❌ Invalid world name format. Name cannot be empty or contain spaces.', ephemeral: true });
+                return;
+            }
+
+            const activeWorld = await db.getWorldByName(worldNameUpper, interaction.user.id);
+            if (!activeWorld) {
+                await interaction.reply({ content: `❌ World "**${worldNameInput}**" not found in your active tracking list.`, ephemeral: true });
+                return;
+            }
+
+            // activeWorld.name should be uppercase from DB as per addWorld logic
+            const alreadyLocked = await db.findLockedWorldByName(interaction.user.id, activeWorld.name);
+            if (alreadyLocked) {
+                await interaction.reply({ content: `❌ World **${activeWorld.name}** is already in your Locks list.`, ephemeral: true });
+                return;
+            }
+
+            const modalConfirm = new ModalBuilder()
+                .setCustomId(`list_modal_lock_confirm_${activeWorld.id}`) // Use world ID in customId
+                .setTitle(`Lock: ${activeWorld.name}`);
+
+            const worldNameDisplay = new TextInputBuilder()
+                .setCustomId('worldname_display_readonly') // Changed ID slightly to ensure it's unique
+                .setLabel('World Name (Cannot Change)')
+                .setValue(activeWorld.name)
+                .setStyle(TextInputStyle.Short)
+                .setRequired(false); // Effectively read-only as we won't process its value
+
+            const lockTypeInput = new TextInputBuilder()
+                .setCustomId('lock_type_for_move') // Changed ID
+                .setLabel('Lock Type (main/out)')
+                .setValue(activeWorld.lock_type || 'main') // Pre-fill with current lock_type or default to 'main'
+                .setPlaceholder('main or out')
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true);
+
+            const noteInput = new TextInputBuilder()
+                .setCustomId('note_for_move') // Changed ID
+                .setLabel('Optional Note')
+                .setStyle(TextInputStyle.Paragraph)
+                .setRequired(false);
+
+            modalConfirm.addComponents(
+                new ActionRowBuilder().addComponents(worldNameDisplay),
+                new ActionRowBuilder().addComponents(lockTypeInput),
+                new ActionRowBuilder().addComponents(noteInput)
+            );
+            await interaction.showModal(modalConfirm);
+            break;
+        }
+        case 'lock_confirm': { // Submission of Modal 2 (Confirm Lock Details)
+            // Custom ID: list_modal_lock_confirm_ID
+            const activeWorldIdStr = params[1]; // ID is the part after 'lock_confirm_'
+            const activeWorldId = parseInt(activeWorldIdStr);
+
+            if (isNaN(activeWorldId)) {
+                await interaction.reply({ content: '❌ Error processing request: Invalid world ID for confirmation.', ephemeral: true });
+                return;
+            }
+
+            let targetLockType = interaction.fields.getTextInputValue('lock_type_for_move').trim().toLowerCase() || 'main';
+            if (targetLockType !== 'main' && targetLockType !== 'out') {
+                targetLockType = 'main'; // Normalize
+            }
+            const targetNote = interaction.fields.getTextInputValue('note_for_move').trim() || null;
+
+            const result = await db.moveWorldToLocks(interaction.user.id, activeWorldId, targetLockType, targetNote);
+
+            if (result.success) {
+                await interaction.reply({ content: `✅ ${result.message}`, ephemeral: true }); // Message from moveWorldToLocks should be user-friendly
+            } else {
+                await interaction.reply({ content: `❌ ${result.message}`, ephemeral: true });
+            }
+            break;
+        }
         case 'remove': {
-            // This modal's customId is 'list_modal_remove', so params[1] etc. are not set here.
+            // This modal's customId is 'list_modal_remove', so params[0] is 'remove', no other params from customId
             const worldIdentifier = interaction.fields.getTextInputValue('worldName').trim();
             const world = await db.findWorldByIdentifier(interaction.user.id, worldIdentifier, null);
             if (!world || world.user_id !== interaction.user.id) { 

@@ -489,5 +489,209 @@ module.exports = {
   updateUserViewMode,
   updateUserReminderSettings,
   getWorldsByDaysLeft, // Add the new function here
-  getAllWorldsByDaysLeft // NEW: Added function to export
+  getAllWorldsByDaysLeft, // NEW: Added function to export
+
+  // --- Locked Worlds Functions ---
+  addLockedWorld,
+  getLockedWorlds,
+  removeLockedWorld,
+  findLockedWorldByName,
+  moveWorldToLocks
 };
+
+// --- Locked Worlds Functions Implementation ---
+
+async function addLockedWorld(userId, worldName, lockType = 'main', note = null) {
+  const worldNameUpper = worldName.toUpperCase();
+  // Normalize lockType: 'main' or 'out'. Default to 'main' if invalid.
+  const normalizedLockType = ['main', 'out'].includes(String(lockType).toLowerCase()) ? String(lockType).toLowerCase() : 'main';
+
+  try {
+    await knexInstance('locked_worlds').insert({
+      user_id: userId,
+      world_name: worldNameUpper,
+      lock_type: normalizedLockType,
+      note: note
+    });
+    logger.info(`[DB] Added world ${worldNameUpper} to locked_worlds for user ${userId} with lock_type ${normalizedLockType}`);
+    return { success: true, message: 'World added to locks.' };
+  } catch (error) {
+    logger.error(`[DB] Error adding world ${worldNameUpper} to locked_worlds for user ${userId}:`, error);
+    if (error.code === 'SQLITE_CONSTRAINT' && error.message.includes('UNIQUE constraint failed: locked_worlds.user_id, locked_worlds.world_name')) {
+      return { success: false, message: `World ${worldNameUpper} is already in your locked list.` };
+    }
+    // Check for foreign key constraint if users table is involved, though users table FK was on user_id
+    if (error.code === 'SQLITE_CONSTRAINT' && error.message.includes('FOREIGN KEY constraint failed')) {
+        logger.error(`[DB] Foreign key constraint failed for user ${userId} when adding ${worldNameUpper} to locks. User might not exist.`);
+        return { success: false, message: 'Failed to add world to locks due to a user reference error.' };
+    }
+    return { success: false, message: 'Failed to add world to locks due to a database error.' };
+  }
+}
+
+async function getLockedWorlds(userId, page = 1, pageSize = 10, filters = {}) {
+  logger.debug(`[DB] Getting locked worlds for user ${userId}, page ${page}, pageSize ${pageSize}, filters: ${JSON.stringify(filters)}`);
+  try {
+    const query = knexInstance('locked_worlds').where({ user_id: userId });
+    const countQuery = knexInstance('locked_worlds').where({ user_id: userId });
+
+    // Apply filters
+    if (filters.nameLength) {
+      if (filters.nameLength.min) {
+        query.andWhereRaw('LENGTH(world_name) >= ?', [filters.nameLength.min]);
+        countQuery.andWhereRaw('LENGTH(world_name) >= ?', [filters.nameLength.min]);
+      }
+      if (filters.nameLength.max) {
+        query.andWhereRaw('LENGTH(world_name) <= ?', [filters.nameLength.max]);
+        countQuery.andWhereRaw('LENGTH(world_name) <= ?', [filters.nameLength.max]);
+      }
+    }
+    if (filters.prefix) {
+      query.andWhereRaw('UPPER(world_name) LIKE ?', [filters.prefix.toUpperCase() + '%']);
+      countQuery.andWhereRaw('UPPER(world_name) LIKE ?', [filters.prefix.toUpperCase() + '%']);
+    }
+    if (filters.lockType && ['main', 'out'].includes(filters.lockType.toLowerCase())) {
+      query.where('lock_type', filters.lockType.toLowerCase());
+      countQuery.where('lock_type', filters.lockType.toLowerCase());
+    }
+    if (filters.note) {
+      query.andWhereRaw('UPPER(note) LIKE ?', ['%' + filters.note.toUpperCase() + '%']);
+      countQuery.andWhereRaw('UPPER(note) LIKE ?', ['%' + filters.note.toUpperCase() + '%']);
+    }
+
+    // Get total count
+    const totalResult = await countQuery.count({ total: '*' }).first();
+    const totalCount = totalResult ? Number(totalResult.total) : 0;
+
+    // Get paginated results
+    query.limit(pageSize).offset((page - 1) * pageSize)
+         .orderByRaw('LENGTH(world_name) ASC')
+         .orderBy('world_name', 'ASC');
+
+    const worlds = await query;
+
+    logger.info(`[DB] Fetched ${worlds.length} locked worlds for user ${userId} (total: ${totalCount})`);
+    return { worlds, total: totalCount };
+
+  } catch (error) {
+    logger.error(`[DB] Error getting locked worlds for user ${userId}:`, error);
+    return { worlds: [], total: 0 };
+  }
+}
+
+async function removeLockedWorld(userId, worldName) {
+  const worldNameUpper = worldName.toUpperCase();
+  logger.debug(`[DB] Attempting to remove locked world ${worldNameUpper} for user ${userId}`);
+  try {
+    const deletedCount = await knexInstance('locked_worlds')
+      .where({ user_id: userId })
+      .andWhereRaw('world_name = ?', [worldNameUpper]) // Ensure case-sensitive match after uppercasing input
+      .del();
+
+    if (deletedCount > 0) {
+      logger.info(`[DB] Removed locked world ${worldNameUpper} for user ${userId}`);
+      return true;
+    } else {
+      logger.warn(`[DB] Locked world ${worldNameUpper} not found for user ${userId} or already removed.`);
+      return false;
+    }
+  } catch (error) {
+    logger.error(`[DB] Error removing locked world ${worldNameUpper} for user ${userId}:`, error);
+    return false;
+  }
+}
+
+async function findLockedWorldByName(userId, worldName) {
+  const worldNameUpper = worldName.toUpperCase();
+  logger.debug(`[DB] Searching for locked world ${worldNameUpper} for user ${userId}`);
+  try {
+    const world = await knexInstance('locked_worlds')
+      .where({ user_id: userId })
+      .andWhereRaw('world_name = ?', [worldNameUpper]) // Ensure case-sensitive match
+      .first();
+
+    if (world) {
+      logger.info(`[DB] Found locked world ${worldNameUpper} for user ${userId}`);
+    } else {
+      logger.debug(`[DB] Locked world ${worldNameUpper} not found for user ${userId}`);
+    }
+    return world || null;
+  } catch (error) {
+    logger.error(`[DB] Error finding locked world ${worldNameUpper} for user ${userId}:`, error);
+    return null;
+  }
+}
+
+async function moveWorldToLocks(userId, worldIdToRemove, targetLockType, targetNote) {
+  logger.info(`[DB] Attempting to move world ID ${worldIdToRemove} to locks for user ${userId} with type ${targetLockType}`);
+
+  // Normalize lockType: 'main' or 'out'. Default to 'main' if invalid.
+  const normalizedTargetLockType = ['main', 'out'].includes(String(targetLockType).toLowerCase())
+                                   ? String(targetLockType).toLowerCase()
+                                   : 'main';
+  try {
+    return await knexInstance.transaction(async (trx) => {
+      // 1. Fetch the world from `worlds` table
+      const worldToMove = await trx('worlds')
+        .where({ id: worldIdToRemove, user_id: userId })
+        .first();
+
+      if (!worldToMove) {
+        logger.warn(`[DB] World ID ${worldIdToRemove} not found in active worlds for user ${userId} during move operation.`);
+        // Throw an error to rollback and be caught by the outer catch block
+        throw new Error('ACTIVE_WORLD_NOT_FOUND');
+      }
+
+      const worldNameUpper = worldToMove.name.toUpperCase(); // Name is already uppercase in `worlds` table based on `addWorld`
+
+      // 2. Check if the world (by name) already exists in `locked_worlds` for that user
+      const existingLockedWorld = await trx('locked_worlds')
+        .where({ user_id: userId, world_name: worldNameUpper })
+        .first();
+
+      if (existingLockedWorld) {
+        logger.warn(`[DB] World ${worldNameUpper} (from active world ID ${worldIdToRemove}) already exists in locked_worlds for user ${userId}.`);
+        throw new Error('ALREADY_IN_LOCKED_LIST');
+      }
+
+      // 3. Delete the world from `worlds` table
+      const deletedFromActive = await trx('worlds')
+        .where({ id: worldIdToRemove, user_id: userId })
+        .del();
+
+      if (deletedFromActive === 0) {
+        // This should theoretically be caught by the first check, but as a safeguard:
+        logger.error(`[DB] Failed to delete world ID ${worldIdToRemove} from active worlds for user ${userId} during move. It might have been deleted concurrently.`);
+        throw new Error('ACTIVE_WORLD_DELETE_FAILED');
+      }
+      logger.info(`[DB] Deleted world ${worldNameUpper} (ID: ${worldIdToRemove}) from active list for user ${userId}`);
+
+      // 4. Insert the world into `locked_worlds`
+      await trx('locked_worlds').insert({
+        user_id: userId,
+        world_name: worldNameUpper,
+        lock_type: normalizedTargetLockType,
+        note: targetNote,
+        // locked_on_date will default to knex.fn.now() via table schema
+      });
+      logger.info(`[DB] Inserted ${worldNameUpper} into locked_worlds for user ${userId} with type ${normalizedTargetLockType}`);
+
+      return { success: true, message: `World **${worldNameUpper}** moved to your locked list.` };
+    });
+  } catch (error) {
+    logger.error(`[DB] Error moving world ID ${worldIdToRemove} to locks for user ${userId}:`, error);
+    if (error.message === 'ACTIVE_WORLD_NOT_FOUND') {
+      return { success: false, message: 'The world to move was not found in your active list.' };
+    } else if (error.message === 'ALREADY_IN_LOCKED_LIST') {
+      return { success: false, message: 'This world is already in your locked list.' };
+    } else if (error.message === 'ACTIVE_WORLD_DELETE_FAILED') {
+        return { success: false, message: 'Failed to remove the world from your active list during the move. Please try again.' };
+    }
+    // Check for unique constraint on locked_worlds again, in case of race conditions if transaction isolation is not perfect
+    // or if the ALREADY_IN_LOCKED_LIST check above was bypassed due to complex scenarios.
+    if (error.code === 'SQLITE_CONSTRAINT' && error.message.includes('UNIQUE constraint failed: locked_worlds.user_id, locked_worlds.world_name')) {
+        return { success: false, message: 'This world is already in your locked list (detected during final insert).' };
+    }
+    return { success: false, message: 'Failed to move world to locks due to a database error.' };
+  }
+}
