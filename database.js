@@ -59,39 +59,39 @@ async function addUser(userId, username) {
   } catch (error) { logger.error(`[DB] Error adding/updating user ${userId}:`, error); return false; }
 }
 
-async function addWorld(userId, worldName, daysOwned, lockType = 'mainlock', customId = null, username = null, guildId = null) {
+async function addWorld(userId, worldName, daysOwned, lockType = 'mainlock', note = null, username = null, guildId = null) {
     const worldNameUpper = worldName.toUpperCase();
     const normalizedLockType = String(lockType).toLowerCase() === 'o' || String(lockType).toLowerCase() === 'outlock' ? 'outlock' : 'mainlock';
-    let normalizedCustomId = customId ? String(customId).trim().toUpperCase() : null;
+    let normalizedNote = note ? String(note).trim().toUpperCase() : null;
     const publicStatus = false;
     const daysOwnedNum = Math.max(1, Math.min(parseInt(daysOwned, 10) || 1, 180));
     if (worldNameUpper.includes(' ')) { return { success: false, message: 'World names cannot contain spaces.' }; }
-    if (normalizedCustomId === '') { normalizedCustomId = null; }
+    if (normalizedNote === '') { normalizedNote = null; }
     const now = new Date(); const daysLeft = 180 - daysOwnedNum; const expiryDate = new Date(now.getTime() + daysLeft * 24 * 60 * 60 * 1000); const expiryDateISO = expiryDate.toISOString();
     try {
-        await knexInstance('worlds').insert({ name: worldNameUpper, days_owned: daysOwnedNum, expiry_date: expiryDateISO, lock_type: normalizedLockType, is_public: publicStatus, user_id: userId, custom_id: normalizedCustomId, added_by: username, guild_id: guildId });
+        await knexInstance('worlds').insert({ name: worldNameUpper, days_owned: daysOwnedNum, expiry_date: expiryDateISO, lock_type: normalizedLockType, is_public: publicStatus, user_id: userId, note: normalizedNote, added_by: username, guild_id: guildId });
         logger.info(`[DB] Added world ${worldNameUpper} for user ${userId}`);
         return { success: true, message: `**${worldNameUpper}** added.` };
     } catch (error) {
         logger.error(`[DB] Error adding world ${worldNameUpper} for user ${userId}:`, error);
-        if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) { if (error.message.includes('worlds.uq_worlds_name_user')) { return { success: false, message: `You are already tracking **${worldNameUpper}**.` }; } else if (error.message.includes('worlds.uq_worlds_customid_user') && normalizedCustomId) { return { success: false, message: `Custom ID **${normalizedCustomId}** already in use by you.` }; } }
+        if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) { if (error.message.includes('worlds.uq_worlds_name_user')) { return { success: false, message: `You are already tracking **${worldNameUpper}**.` }; } else if (error.message.includes('worlds.uq_worlds_customid_user') && normalizedNote) { return { success: false, message: `Note **${normalizedNote}** already in use by you.` }; } }
         return { success: false, message: 'Failed to add world due to a database error.' };
     }
 }
 
 async function updateWorld(worldId, userId, updatedData) {
-    const { daysOwned, lockType, customId } = updatedData;
+    const { daysOwned, lockType, note } = updatedData;
     const daysOwnedNum = Math.max(1, Math.min(parseInt(daysOwned, 10) || 1, 180));
     const normalizedLockType = String(lockType).toLowerCase() === 'o' ? 'outlock' : 'mainlock';
-    let normalizedCustomId = customId ? String(customId).trim().toUpperCase() : null; if (normalizedCustomId === '') normalizedCustomId = null;
+    let normalizedNote = note ? String(note).trim().toUpperCase() : null; if (normalizedNote === '') normalizedNote = null;
     const now = new Date(); const daysLeft = 180 - daysOwnedNum; const newExpiryDate = new Date(now.getTime() + daysLeft * 24 * 60 * 60 * 1000); const expiryDateISO = newExpiryDate.toISOString();
     try {
-        const updateCount = await knexInstance('worlds').where({ id: worldId, user_id: userId }).update({ days_owned: daysOwnedNum, expiry_date: expiryDateISO, lock_type: normalizedLockType, custom_id: normalizedCustomId });
+        const updateCount = await knexInstance('worlds').where({ id: worldId, user_id: userId }).update({ days_owned: daysOwnedNum, expiry_date: expiryDateISO, lock_type: normalizedLockType, note: normalizedNote });
         if (updateCount === 0) throw new Error('World not found or no permission to update.');
         logger.info(`[DB] Updated core details for world ${worldId} by user ${userId}`); return true;
     } catch (error) {
         logger.error(`[DB] Error updating world ${worldId} for user ${userId}:`, error);
-        if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) { if (error.message.includes('worlds.uq_worlds_customid_user') && normalizedCustomId) { throw new Error(`Custom ID **${normalizedCustomId}** already used by you.`); } }
+        if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) { if (error.message.includes('worlds.uq_worlds_customid_user') && normalizedNote) { throw new Error(`Note **${normalizedNote}** already used by you.`); } }
         throw error;
     }
 }
@@ -160,10 +160,10 @@ async function getWorldByName(worldName, userId) {
     catch (error) { logger.error(`[DB] Error getting world by name "${worldName}" for user ${userId}:`, error); return null; }
 }
 
-async function getWorldByCustomId(customId, userId) {
-    if (!customId) return null;
-    try { const world = await knexInstance('worlds as w').leftJoin('users as u', 'w.user_id', 'u.id').where('w.user_id', userId).andWhereRaw('lower(w.custom_id) = lower(?)', [customId]).select('w.*', 'u.username as added_by_tag').first(); if (world) world.is_public = !!world.is_public; return world || null; }
-    catch (error) { logger.error(`[DB] Error getting world by custom ID "${customId}" for user ${userId}:`, error); return null; }
+async function getWorldByNote(note, userId) {
+    if (!note) return null;
+    try { const world = await knexInstance('worlds as w').leftJoin('users as u', 'w.user_id', 'u.id').where('w.user_id', userId).andWhereRaw('lower(w.note) = lower(?)', [note]).select('w.*', 'u.username as added_by_tag').first(); if (world) world.is_public = !!world.is_public; return world || null; }
+    catch (error) { logger.error(`[DB] Error getting world by note "${note}" for user ${userId}:`, error); return null; }
 }
 
 async function getPublicWorldsByGuild(guildId, page = 1, pageSize = 10) {
@@ -192,15 +192,15 @@ async function getPublicWorldByName(worldName, guildId) {
     catch (error) { logger.error(`[DB] Error getting public world by name "${worldName}" in guild ${guildId}:`, error); return null; }
 }
 
-async function getPublicWorldByCustomId(customId, guildId) {
-    if (!customId || !guildId) return null;
-    try { const world = await knexInstance('worlds as w').leftJoin('users as u', 'w.user_id', 'u.id').where({ 'w.is_public': true, 'w.guild_id': guildId }).andWhereRaw('lower(w.custom_id) = lower(?)', [customId]).select('w.*', 'u.username as added_by_tag').first(); if (world) world.is_public = !!world.is_public; return world || null; }
-    catch (error) { logger.error(`[DB] Error getting public world by custom ID "${customId}" in guild ${guildId}:`, error); return null; }
+async function getPublicWorldByNote(note, guildId) {
+    if (!note || !guildId) return null;
+    try { const world = await knexInstance('worlds as w').leftJoin('users as u', 'w.user_id', 'u.id').where({ 'w.is_public': true, 'w.guild_id': guildId }).andWhereRaw('lower(w.note) = lower(?)', [note]).select('w.*', 'u.username as added_by_tag').first(); if (world) world.is_public = !!world.is_public; return world || null; }
+    catch (error) { logger.error(`[DB] Error getting public world by note "${note}" in guild ${guildId}:`, error); return null; }
 }
 
 async function findWorldByIdentifier(userId, identifier, guildId) {
     if (!identifier) return null; const identifierUpper = identifier.toUpperCase();
-    try { let world = await getWorldByName(identifierUpper, userId); if (world) return world; world = await getWorldByCustomId(identifierUpper, userId); if (world) return world; if (guildId) { world = await getPublicWorldByName(identifierUpper, guildId); if (world) return world; world = await getPublicWorldByCustomId(identifierUpper, guildId); if (world) return world; } return null; }
+    try { let world = await getWorldByName(identifierUpper, userId); if (world) return world; world = await getWorldByNote(identifierUpper, userId); if (world) return world; if (guildId) { world = await getPublicWorldByName(identifierUpper, guildId); if (world) return world; world = await getPublicWorldByNote(identifierUpper, guildId); if (world) return world; } return null; }
     catch (error) { logger.error(`[DB] Error in findWorldByIdentifier for "${identifier}" (User: ${userId}, Guild: ${guildId}):`, error); return null; }
 }
 
@@ -240,7 +240,7 @@ async function getExpiringWorldsForUser(userId, daysUntilExpiry = 7) {
             .andWhere('expiry_date', '>=', nowISO)
             .andWhere('expiry_date', '<=', targetDateISO)
             .orderBy('expiry_date', 'asc')
-            .select('name', 'expiry_date', 'custom_id'); // Added custom_id
+            .select('name', 'expiry_date', 'note'); // Added note
 
         logger.debug(`[DB] Found ${worlds.length} worlds expiring for user ${userId} by ${targetDateISO}`);
         return worlds;
@@ -469,10 +469,10 @@ module.exports = {
   getWorlds,
   getWorldById,
   getWorldByName,
-  getWorldByCustomId,
+  getWorldByNote,
   getPublicWorldsByGuild,
   getPublicWorldByName,
-  getPublicWorldByCustomId,
+  getPublicWorldByNote,
   findWorldByIdentifier,
   getFilteredWorlds,
   searchWorlds: getFilteredWorlds, // Alias
