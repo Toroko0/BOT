@@ -59,3 +59,34 @@ async function deployGlobalCommands(logger) { // Added logger as a parameter
 }
 
 module.exports = { deployGlobalCommands };
+
+// --- Direct execution block ---
+if (require.main === module) {
+    // Simple console logger for direct execution
+    const consoleLogger = {
+        info: (message, ...args) => console.log(`[INFO] ${message}`, ...args),
+        warn: (message, ...args) => console.warn(`[WARN] ${message}`, ...args),
+        error: (message, ...args) => console.error(`[ERROR] ${message}`, ...args),
+        debug: (message, ...args) => console.log(`[DEBUG] ${message}`, ...args), // Or console.debug
+    };
+
+    (async () => {
+        try {
+            // Check for --guild flag for development guild deployment
+            // The deployGlobalCommands function itself doesn't use process.argv directly for guildId,
+            // but it mentions it. For this direct run, we'll respect the DEV_GUILD_ID if --guild is present.
+            // The actual logic within deployGlobalCommands will still deploy globally based on its current design.
+            // This part is more for aligning with the script's comments.
+            const guildIdToUse = process.argv.includes('--guild') ? process.env.DEV_GUILD_ID : null;
+             if (guildIdToUse) {
+                consoleLogger.info(`[DeployRunner] --guild flag detected, will use DEV_GUILD_ID if set: ${guildIdToUse}. However, deployGlobalCommands currently always deploys globally.`);
+            }
+
+            await deployGlobalCommands(consoleLogger);
+            consoleLogger.info('[DeployRunner] Command deployment process finished.');
+        } catch (e) {
+            consoleLogger.error('[DeployRunner] Command deployment process failed:', e);
+            process.exitCode = 1; // Indicate failure
+        }
+    })();
+}
