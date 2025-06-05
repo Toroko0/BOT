@@ -11,7 +11,7 @@ const { table, getBorderCharacters } = require('table');
 const { showWorldInfo, showEditWorldModal } = require('./info.js');
 const CONSTANTS = require('../utils/constants.js');
 // const { showSearchModal } = require('./search.js'); // Keep if still used elsewhere, or remove if fully replaced
-const { show179WorldsList } = require('./179.js');
+// const { show179WorldsList } = require('./179.js'); // Removed as 179.js is deleted
 const { showLockedWorldsList } = require('./lock.js');
 
 // --- Modal Definitions ---
@@ -404,7 +404,7 @@ module.exports = {
             case 'page': 
                 if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
                 break;
-            case '179days': await show179WorldsList(interaction, 1); break;
+            // case '179days': await show179WorldsList(interaction, 1); break; // Removed as 179.js is deleted
             case 'viewlocks': await showLockedWorldsList(interaction, 1, {}); break;
             case 'lockworld':
                 const lockModal = new ModalBuilder().setCustomId('list_modal_lock_getname').setTitle('Lock World: Enter Name');
