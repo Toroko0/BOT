@@ -18,7 +18,7 @@ exports.up = async function(knex) {
     table.boolean('is_public').defaultTo(false).comment('Is world visible publicly?');
     table.string('user_id').notNullable().references('id').inTable('users').onDelete('CASCADE'); // Added onDelete CASCADE
     table.timestamp('added_date').defaultTo(knex.fn.now());
-    table.string('custom_id').comment('Optional User-defined ID (UPPERCASE)');
+    table.string('custom_id').comment('Optional Note (UPPERCASE)');
     table.string('added_by').comment('Discord username of adder (for info)');
     // Indices
     table.index(['name', 'user_id'], 'idx_worlds_name_user'); // Specific name for index

@@ -916,6 +916,100 @@ async function removeWorldFromTeam(teamId, worldName, removerUserId) {
     }
 }
 
+async function getAllFilteredWorlds(userId, filters = {}) {
+    logger.debug(`[DB] getAllFilteredWorlds called - User: ${userId}, Filters: ${JSON.stringify(filters)}`);
+    try {
+        let query = knexInstance('worlds as w')
+            .leftJoin('users as u', 'w.user_id', 'u.id')
+            .select('w.*', 'u.username as added_by_tag');
+
+        // Handle Private vs. Public Context
+        if (filters.guildId) {
+            // Public worlds for a specific guild
+            query.where('w.is_public', true).andWhere('w.guild_id', filters.guildId);
+        } else if (userId) {
+            // Private worlds for a specific user
+            query.where('w.user_id', userId)
+                 .andWhere(function() {
+                     this.where('w.is_public', false).orWhereNull('w.is_public');
+                 });
+        } else {
+            logger.warn('[DB] getAllFilteredWorlds called without userId (for private) or guildId (for public). Returning empty array.');
+            return [];
+        }
+
+        // Prefix filter
+        if (filters.prefix) {
+            const prefixLower = filters.prefix.toLowerCase();
+            query.andWhereRaw('lower(w.name) LIKE ?', [`${prefixLower}%`]);
+        }
+
+        // LockType filter
+        if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') {
+            query.andWhere('w.lock_type', filters.lockType);
+        }
+        
+        // ExpiryDay filter (day of week)
+        if (filters.expiryDay) {
+            const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
+            const dayNum = dayMap[filters.expiryDay.toLowerCase()];
+            if (dayNum !== undefined) {
+                query.andWhereRaw("strftime('%w', date(w.expiry_date)) = ?", [dayNum.toString()]);
+            }
+        }
+
+        // Days Owned filter
+        if (filters.daysOwned !== undefined && filters.daysOwned !== null) {
+            const daysOwnedInput = parseInt(filters.daysOwned);
+            if (!isNaN(daysOwnedInput)) {
+                if (daysOwnedInput === 180) { 
+                    const todayEnd = new Date(); 
+                    todayEnd.setUTCHours(23, 59, 59, 999);
+                    query.andWhere('w.expiry_date', '<=', todayEnd.toISOString());
+                } else if (daysOwnedInput >= 0 && daysOwnedInput < 180) {
+                    const targetDaysLeft = 180 - daysOwnedInput;
+                    const targetDate = new Date(); 
+                    targetDate.setUTCHours(0,0,0,0); 
+                    targetDate.setUTCDate(targetDate.getUTCDate() + targetDaysLeft); 
+                    const targetStartDateISO = targetDate.toISOString();
+                    const targetEndDate = new Date(targetDate);
+                    targetEndDate.setUTCDate(targetDate.getUTCDate() + 1); 
+                    const targetEndDateISO = targetEndDate.toISOString();
+                    query.andWhere('w.expiry_date', '>=', targetStartDateISO)
+                         .andWhere('w.expiry_date', '<', targetEndDateISO);
+                }
+            }
+        }
+        
+        // Name Length Filters
+        if (filters.nameLengthMin !== undefined && filters.nameLengthMin !== null) {
+            const minLength = parseInt(filters.nameLengthMin);
+            if (!isNaN(minLength) && minLength > 0) {
+                query.andWhereRaw('LENGTH(w.name) >= ?', [minLength]);
+            }
+        }
+        if (filters.nameLengthMax !== undefined && filters.nameLengthMax !== null) {
+            const maxLength = parseInt(filters.nameLengthMax);
+            if (!isNaN(maxLength) && maxLength > 0) {
+                query.andWhereRaw('LENGTH(w.name) <= ?', [maxLength]);
+            }
+        }
+
+        // Ordering
+        query.orderBy('w.expiry_date', 'asc');
+        
+        const worlds = await query;
+        const formattedWorlds = worlds.map(w => ({ ...w, is_public: !!w.is_public })); 
+
+        logger.debug(`[DB] getAllFilteredWorlds returning ${formattedWorlds.length} worlds`);
+        return formattedWorlds;
+
+    } catch (error) {
+        logger.error(`[DB] Error in getAllFilteredWorlds (User: ${userId}, Filters: ${JSON.stringify(filters)}):`, error);
+        return []; // Return empty array on error
+    }
+}
+
 async function getTeamDetails(teamId) {
     logger.debug(`[DB] Fetching details for team ID ${teamId}`);
     try {
@@ -1315,9 +1409,110 @@ async function findWorldByIdentifier(userId, identifier, guildId) {
     catch (error) { logger.error(`[DB] Error in findWorldByIdentifier for "${identifier}" (User: ${userId}, Guild: ${guildId}):`, error); return null; }
 }
 
-async function getFilteredWorlds(userId, filters = {}) {
-    try { let query = knexInstance('worlds as w').leftJoin('users as u', 'w.user_id', 'u.id').select('w.*', 'u.username as added_by_tag'); if (filters.showPublic && filters.guildId) { query = query.where(builder => { builder.where('w.user_id', userId).orWhere(subBuilder => { subBuilder.where('w.is_public', true).andWhere('w.guild_id', filters.guildId); }); }); } else { query = query.where('w.user_id', userId); } if (filters.prefix) query = query.andWhereRaw('lower(w.name) LIKE lower(?)', [`${filters.prefix}%`]); if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') query = query.andWhere('w.lock_type', filters.lockType); if (filters.expiryDay) { const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 }; const dayNum = dayMap[filters.expiryDay.toLowerCase()]; if (dayNum !== undefined) query = query.andWhereRaw("strftime('%w', date(w.expiry_date)) = ?", [dayNum.toString()]); } if (filters.expiringDays !== undefined && filters.expiringDays !== null) { const days = parseInt(filters.expiringDays, 10); if (!isNaN(days) && days >= 0) { const targetDate = new Date(); targetDate.setUTCDate(targetDate.getUTCDate() + days); targetDate.setUTCHours(23, 59, 59, 999); const targetDateISO = targetDate.toISOString(); query = query.andWhere('w.expiry_date', '<=', targetDateISO); } } query = query.orderBy('w.expiry_date', 'asc'); const worlds = await query; return worlds.map(w => ({ ...w, is_public: !!w.is_public })); }
-    catch (error) { logger.error(`[DB] Error searching/filtering worlds for user ${userId} with filters ${JSON.stringify(filters)}:`, error); return []; }
+async function getFilteredWorlds(userId, filters = {}, page = 1, pageSize = 10) {
+    logger.debug(`[DB] getFilteredWorlds called - User: ${userId}, Filters: ${JSON.stringify(filters)}, Page: ${page}, PageSize: ${pageSize}`);
+    try {
+        let query = knexInstance('worlds as w')
+            .leftJoin('users as u', 'w.user_id', 'u.id')
+            .select('w.*', 'u.username as added_by_tag');
+
+        let countQueryBase = knexInstance('worlds as w');
+
+        // Handle Private vs. Public Context
+        if (filters.guildId) {
+            // Public worlds for a specific guild
+            query.where('w.is_public', true).andWhere('w.guild_id', filters.guildId);
+            countQueryBase.where('w.is_public', true).andWhere('w.guild_id', filters.guildId);
+        } else if (userId) {
+            // Private worlds for a specific user
+            query.where('w.user_id', userId)
+                 .andWhere(function() {
+                     this.where('w.is_public', false).orWhereNull('w.is_public');
+                 });
+            countQueryBase.where('w.user_id', userId)
+                          .andWhere(function() {
+                              this.where('w.is_public', false).orWhereNull('w.is_public');
+                          });
+        } else {
+            // No userId and no guildId signifies an invalid request context.
+            logger.warn('[DB] getFilteredWorlds called without userId (for private) or guildId (for public). Returning empty.');
+            return { worlds: [], total: 0 };
+        }
+
+        // Prefix filter
+        if (filters.prefix) {
+            const prefixLower = filters.prefix.toLowerCase();
+            query.andWhereRaw('lower(w.name) LIKE ?', [`${prefixLower}%`]);
+            countQueryBase.andWhereRaw('lower(w.name) LIKE ?', [`${prefixLower}%`]);
+        }
+
+        // LockType filter
+        if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') {
+            query.andWhere('w.lock_type', filters.lockType);
+            countQueryBase.andWhere('w.lock_type', filters.lockType);
+        }
+        
+        // ExpiryDay filter (day of week)
+        if (filters.expiryDay) {
+            const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
+            const dayNum = dayMap[filters.expiryDay.toLowerCase()];
+            if (dayNum !== undefined) {
+                query.andWhereRaw("strftime('%w', date(w.expiry_date)) = ?", [dayNum.toString()]);
+                countQueryBase.andWhereRaw("strftime('%w', date(w.expiry_date)) = ?", [dayNum.toString()]);
+            }
+        }
+
+        // Days Owned filter (NEW)
+        // This filter is mutually exclusive with expiringDays (which was removed)
+        if (filters.daysOwned !== undefined && filters.daysOwned !== null) {
+            const daysOwnedInput = parseInt(filters.daysOwned);
+            if (!isNaN(daysOwnedInput)) {
+                if (daysOwnedInput === 180) { // Worlds that are already expired (or will expire today)
+                    const todayEnd = new Date(); // Consider "today" up to its very end for this condition
+                    todayEnd.setUTCHours(23, 59, 59, 999);
+                    query.andWhere('w.expiry_date', '<=', todayEnd.toISOString());
+                    countQueryBase.andWhere('w.expiry_date', '<=', todayEnd.toISOString());
+                } else if (daysOwnedInput >= 0 && daysOwnedInput < 180) {
+                    // Calculate the exact day for days_left = 180 - daysOwnedInput
+                    const targetDaysLeft = 180 - daysOwnedInput;
+                    
+                    const targetDate = new Date(); // Start with today
+                    targetDate.setUTCHours(0,0,0,0); // Start of today UTC
+                    targetDate.setUTCDate(targetDate.getUTCDate() + targetDaysLeft); // Add targetDaysLeft
+
+                    const targetStartDateISO = targetDate.toISOString();
+                    
+                    const targetEndDate = new Date(targetDate);
+                    targetEndDate.setUTCDate(targetDate.getUTCDate() + 1); // Start of the next day
+                    const targetEndDateISO = targetEndDate.toISOString();
+
+                    query.andWhere('w.expiry_date', '>=', targetStartDateISO)
+                         .andWhere('w.expiry_date', '<', targetEndDateISO);
+                    countQueryBase.andWhere('w.expiry_date', '>=', targetStartDateISO)
+                                  .andWhere('w.expiry_date', '<', targetEndDateISO);
+                }
+            }
+        }
+        
+        // Count query execution
+        const totalResult = await countQueryBase.count({ total: '*' }).first();
+        const totalCount = totalResult ? Number(totalResult.total) : 0;
+
+        // Main query execution with pagination and ordering
+        query.orderBy('w.expiry_date', 'asc') // Fewer days left = more days owned = higher in sort
+             .limit(pageSize)
+             .offset((page - 1) * pageSize);
+        
+        const worlds = await query;
+        const formattedWorlds = worlds.map(w => ({ ...w, is_public: !!w.is_public })); // Ensure boolean
+
+        logger.debug(`[DB] getFilteredWorlds returning ${formattedWorlds.length} worlds, total: ${totalCount}`);
+        return { worlds: formattedWorlds, total: totalCount };
+
+    } catch (error) {
+        logger.error(`[DB] Error in getFilteredWorlds (User: ${userId}, Filters: ${JSON.stringify(filters)}, Page: ${page}):`, error);
+        return { worlds: [], total: 0 }; // Consistent return type on error
+    }
 }
 
 async function updateAllWorldDays() { try { logger.info("[DB] Daily Task: Skipping days_owned increment (relying on expiry_date)."); return 0; } catch (error) { logger.error('[DB] Error in (commented out) updateAllWorldDays:', error); return 0; } }
@@ -1586,6 +1781,7 @@ module.exports = {
   getPublicWorldByCustomId,
   findWorldByIdentifier,
   getFilteredWorlds,
+  getAllFilteredWorlds, // Added new function
   searchWorlds: getFilteredWorlds, // Alias
   updateAllWorldDays,
   removeExpiredWorlds,
