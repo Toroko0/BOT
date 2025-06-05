@@ -916,6 +916,100 @@ async function removeWorldFromTeam(teamId, worldName, removerUserId) {
     }
 }
 
+async function getAllFilteredWorlds(userId, filters = {}) {
+    logger.debug(`[DB] getAllFilteredWorlds called - User: ${userId}, Filters: ${JSON.stringify(filters)}`);
+    try {
+        let query = knexInstance('worlds as w')
+            .leftJoin('users as u', 'w.user_id', 'u.id')
+            .select('w.*', 'u.username as added_by_tag');
+
+        // Handle Private vs. Public Context
+        if (filters.guildId) {
+            // Public worlds for a specific guild
+            query.where('w.is_public', true).andWhere('w.guild_id', filters.guildId);
+        } else if (userId) {
+            // Private worlds for a specific user
+            query.where('w.user_id', userId)
+                 .andWhere(function() {
+                     this.where('w.is_public', false).orWhereNull('w.is_public');
+                 });
+        } else {
+            logger.warn('[DB] getAllFilteredWorlds called without userId (for private) or guildId (for public). Returning empty array.');
+            return [];
+        }
+
+        // Prefix filter
+        if (filters.prefix) {
+            const prefixLower = filters.prefix.toLowerCase();
+            query.andWhereRaw('lower(w.name) LIKE ?', [`${prefixLower}%`]);
+        }
+
+        // LockType filter
+        if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') {
+            query.andWhere('w.lock_type', filters.lockType);
+        }
+
+        // ExpiryDay filter (day of week)
+        if (filters.expiryDay) {
+            const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
+            const dayNum = dayMap[filters.expiryDay.toLowerCase()];
+            if (dayNum !== undefined) {
+                query.andWhereRaw("strftime('%w', date(w.expiry_date)) = ?", [dayNum.toString()]);
+            }
+        }
+
+        // Days Owned filter
+        if (filters.daysOwned !== undefined && filters.daysOwned !== null) {
+            const daysOwnedInput = parseInt(filters.daysOwned);
+            if (!isNaN(daysOwnedInput)) {
+                if (daysOwnedInput === 180) {
+                    const todayEnd = new Date();
+                    todayEnd.setUTCHours(23, 59, 59, 999);
+                    query.andWhere('w.expiry_date', '<=', todayEnd.toISOString());
+                } else if (daysOwnedInput >= 0 && daysOwnedInput < 180) {
+                    const targetDaysLeft = 180 - daysOwnedInput;
+                    const targetDate = new Date();
+                    targetDate.setUTCHours(0,0,0,0);
+                    targetDate.setUTCDate(targetDate.getUTCDate() + targetDaysLeft);
+                    const targetStartDateISO = targetDate.toISOString();
+                    const targetEndDate = new Date(targetDate);
+                    targetEndDate.setUTCDate(targetDate.getUTCDate() + 1);
+                    const targetEndDateISO = targetEndDate.toISOString();
+                    query.andWhere('w.expiry_date', '>=', targetStartDateISO)
+                         .andWhere('w.expiry_date', '<', targetEndDateISO);
+                }
+            }
+        }
+
+        // Name Length Filters
+        if (filters.nameLengthMin !== undefined && filters.nameLengthMin !== null) {
+            const minLength = parseInt(filters.nameLengthMin);
+            if (!isNaN(minLength) && minLength > 0) {
+                query.andWhereRaw('LENGTH(w.name) >= ?', [minLength]);
+            }
+        }
+        if (filters.nameLengthMax !== undefined && filters.nameLengthMax !== null) {
+            const maxLength = parseInt(filters.nameLengthMax);
+            if (!isNaN(maxLength) && maxLength > 0) {
+                query.andWhereRaw('LENGTH(w.name) <= ?', [maxLength]);
+            }
+        }
+
+        // Ordering
+        query.orderBy('w.expiry_date', 'asc');
+
+        const worlds = await query;
+        const formattedWorlds = worlds.map(w => ({ ...w, is_public: !!w.is_public }));
+
+        logger.debug(`[DB] getAllFilteredWorlds returning ${formattedWorlds.length} worlds`);
+        return formattedWorlds;
+
+    } catch (error) {
+        logger.error(`[DB] Error in getAllFilteredWorlds (User: ${userId}, Filters: ${JSON.stringify(filters)}):`, error);
+        return []; // Return empty array on error
+    }
+}
+
 async function getTeamDetails(teamId) {
     logger.debug(`[DB] Fetching details for team ID ${teamId}`);
     try {
@@ -1687,6 +1781,7 @@ module.exports = {
   getPublicWorldByCustomId,
   findWorldByIdentifier,
   getFilteredWorlds,
+  getAllFilteredWorlds, // Added new function
   searchWorlds: getFilteredWorlds, // Alias
   updateAllWorldDays,
   removeExpiredWorlds,
