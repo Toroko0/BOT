@@ -948,7 +948,7 @@ async function getAllFilteredWorlds(userId, filters = {}) {
         if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') {
             query.andWhere('w.lock_type', filters.lockType);
         }
-
+        
         // ExpiryDay filter (day of week)
         if (filters.expiryDay) {
             const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
@@ -962,25 +962,25 @@ async function getAllFilteredWorlds(userId, filters = {}) {
         if (filters.daysOwned !== undefined && filters.daysOwned !== null) {
             const daysOwnedInput = parseInt(filters.daysOwned);
             if (!isNaN(daysOwnedInput)) {
-                if (daysOwnedInput === 180) {
-                    const todayEnd = new Date();
+                if (daysOwnedInput === 180) { 
+                    const todayEnd = new Date(); 
                     todayEnd.setUTCHours(23, 59, 59, 999);
                     query.andWhere('w.expiry_date', '<=', todayEnd.toISOString());
                 } else if (daysOwnedInput >= 0 && daysOwnedInput < 180) {
                     const targetDaysLeft = 180 - daysOwnedInput;
-                    const targetDate = new Date();
-                    targetDate.setUTCHours(0,0,0,0);
-                    targetDate.setUTCDate(targetDate.getUTCDate() + targetDaysLeft);
+                    const targetDate = new Date(); 
+                    targetDate.setUTCHours(0,0,0,0); 
+                    targetDate.setUTCDate(targetDate.getUTCDate() + targetDaysLeft); 
                     const targetStartDateISO = targetDate.toISOString();
                     const targetEndDate = new Date(targetDate);
-                    targetEndDate.setUTCDate(targetDate.getUTCDate() + 1);
+                    targetEndDate.setUTCDate(targetDate.getUTCDate() + 1); 
                     const targetEndDateISO = targetEndDate.toISOString();
                     query.andWhere('w.expiry_date', '>=', targetStartDateISO)
                          .andWhere('w.expiry_date', '<', targetEndDateISO);
                 }
             }
         }
-
+        
         // Name Length Filters
         if (filters.nameLengthMin !== undefined && filters.nameLengthMin !== null) {
             const minLength = parseInt(filters.nameLengthMin);
@@ -997,9 +997,9 @@ async function getAllFilteredWorlds(userId, filters = {}) {
 
         // Ordering
         query.orderBy('w.expiry_date', 'asc');
-
+        
         const worlds = await query;
-        const formattedWorlds = worlds.map(w => ({ ...w, is_public: !!w.is_public }));
+        const formattedWorlds = worlds.map(w => ({ ...w, is_public: !!w.is_public })); 
 
         logger.debug(`[DB] getAllFilteredWorlds returning ${formattedWorlds.length} worlds`);
         return formattedWorlds;
@@ -1451,7 +1451,7 @@ async function getFilteredWorlds(userId, filters = {}, page = 1, pageSize = 10) 
             query.andWhere('w.lock_type', filters.lockType);
             countQueryBase.andWhere('w.lock_type', filters.lockType);
         }
-
+        
         // ExpiryDay filter (day of week)
         if (filters.expiryDay) {
             const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
@@ -1475,13 +1475,13 @@ async function getFilteredWorlds(userId, filters = {}, page = 1, pageSize = 10) 
                 } else if (daysOwnedInput >= 0 && daysOwnedInput < 180) {
                     // Calculate the exact day for days_left = 180 - daysOwnedInput
                     const targetDaysLeft = 180 - daysOwnedInput;
-
+                    
                     const targetDate = new Date(); // Start with today
                     targetDate.setUTCHours(0,0,0,0); // Start of today UTC
                     targetDate.setUTCDate(targetDate.getUTCDate() + targetDaysLeft); // Add targetDaysLeft
 
                     const targetStartDateISO = targetDate.toISOString();
-
+                    
                     const targetEndDate = new Date(targetDate);
                     targetEndDate.setUTCDate(targetDate.getUTCDate() + 1); // Start of the next day
                     const targetEndDateISO = targetEndDate.toISOString();
@@ -1493,7 +1493,7 @@ async function getFilteredWorlds(userId, filters = {}, page = 1, pageSize = 10) 
                 }
             }
         }
-
+        
         // Count query execution
         const totalResult = await countQueryBase.count({ total: '*' }).first();
         const totalCount = totalResult ? Number(totalResult.total) : 0;
@@ -1502,7 +1502,7 @@ async function getFilteredWorlds(userId, filters = {}, page = 1, pageSize = 10) 
         query.orderBy('w.expiry_date', 'asc') // Fewer days left = more days owned = higher in sort
              .limit(pageSize)
              .offset((page - 1) * pageSize);
-
+        
         const worlds = await query;
         const formattedWorlds = worlds.map(w => ({ ...w, is_public: !!w.is_public })); // Ensure boolean
 

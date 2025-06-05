@@ -23,8 +23,8 @@ async function showRemoveWorldModal(interaction) {
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId('worldName')
-          .setLabel('World Name or Custom ID to Remove')
-          .setPlaceholder('Case-insensitive world name or ID')
+          .setLabel('World Name or Note to Remove')
+          .setPlaceholder('Case-insensitive world name or Note')
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
       )
@@ -40,8 +40,8 @@ async function showShareWorldModal(interaction, isShare) {
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId('worldName')
-          .setLabel('World Name or Custom ID')
-          .setPlaceholder(`Enter world name or ID to ${isShare ? 'share' : 'unshare'}`)
+          .setLabel('World Name or Note')
+          .setPlaceholder(`Enter world name or Note to ${isShare ? 'share' : 'unshare'}`)
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
       )
@@ -57,8 +57,8 @@ async function showInfoWorldModal(interaction) {
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId('worldName')
-          .setLabel('World Name or Custom ID')
-          .setPlaceholder('Enter world name or ID')
+          .setLabel('World Name or Note')
+          .setPlaceholder('Enter world name or Note')
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
       )
