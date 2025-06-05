@@ -5,7 +5,7 @@
 exports.up = function(knex) {
   return knex.schema.alterTable('users', function(table) {
     table.string('bot_username').nullable().unique(); // Unique, case-insensitive handled by DB or application logic
-    table.timestamp('bot_join_date').defaultTo(knex.fn.now());
+    table.timestamp('bot_join_date').nullable();
   });
 };
 
