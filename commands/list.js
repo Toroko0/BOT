@@ -23,8 +23,8 @@ async function showRemoveWorldModal(interaction) {
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId('worldName')
-          .setLabel('World Name or Note to Remove')
-          .setPlaceholder('Case-insensitive world name or Note')
+          .setLabel('World Name or Custom ID to Remove')
+          .setPlaceholder('Case-insensitive world name or ID')
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
       )
@@ -40,8 +40,8 @@ async function showShareWorldModal(interaction, isShare) {
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId('worldName')
-          .setLabel('World Name or Note')
-          .setPlaceholder(`Enter world name or Note to ${isShare ? 'share' : 'unshare'}`)
+          .setLabel('World Name or Custom ID')
+          .setPlaceholder(`Enter world name or ID to ${isShare ? 'share' : 'unshare'}`)
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
       )
@@ -57,8 +57,8 @@ async function showInfoWorldModal(interaction) {
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId('worldName')
-          .setLabel('World Name or Note')
-          .setPlaceholder('Enter world name or Note')
+          .setLabel('World Name or Custom ID')
+          .setPlaceholder('Enter world name or ID')
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
       )
@@ -322,9 +322,22 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
       new ButtonBuilder().setCustomId('list_btn_viewlocks').setLabel('🔐 View Locks').setStyle(ButtonStyle.Primary)
   );
    // list_button_179days was removed.
-  if (userTeam && type === 'private') { // Add View Team List button if user is in a team and viewing their private list
-        actionRow2.addComponents(new ButtonBuilder().setCustomId('list_btn_view_team_list').setLabel('🏢 View Team List').setStyle(ButtonStyle.Secondary));
+
+  // Conditionally add "View Team List" button to actionRow2 or a new actionRow3
+  if (userTeam && type === 'private') {
+    if (actionRow2.components.length < 5) {
+        actionRow2.addComponents(
+            new ButtonBuilder().setCustomId('list_btn_view_team_list').setLabel('🏢 View Team List').setStyle(ButtonStyle.Secondary)
+        );
+    } else {
+        const actionRow3 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('list_btn_view_team_list').setLabel('🏢 View Team List').setStyle(ButtonStyle.Secondary)
+        );
+        // No need to check actionRow3.components.length > 0 as we just added a button
+        components.push(actionRow3);
+    }
   }
+
   if (actionRow2.components.length > 0) components.push(actionRow2);
 
   if (viewMode === 'pc' && selectOptions.length > 0 && type === 'private') {

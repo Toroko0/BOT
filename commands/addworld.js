@@ -37,8 +37,8 @@ async function showAddWorldModal(interaction) {
     .setMaxLength(1); // Expect M or O
 
   const customIdInput = new TextInputBuilder()
-    .setCustomId('note')
-    .setLabel("Note (Optional)")
+    .setCustomId('customId')
+    .setLabel("Custom ID (Optional)")
     .setStyle(TextInputStyle.Short)
     .setRequired(false)
     .setMaxLength(24); // Optional length constraint
@@ -76,8 +76,8 @@ module.exports = {
           { name: 'Out Lock (O)', value: 'outlock' }
         ))
     .addStringOption(option =>
-      option.setName('note')
-        .setDescription('A short note for the world (optional, unique per user)')
+      option.setName('custom_id')
+        .setDescription('Custom ID for the world (optional, unique per user)')
         .setRequired(false)
         .setMaxLength(24)), // Added max length
 
@@ -85,7 +85,7 @@ module.exports = {
     const worldName = interaction.options.getString('world');
     const daysOwned = interaction.options.getInteger('days');
     const lockType = interaction.options.getString('locktype');
-    const note = interaction.options.getString('note');
+    const customId = interaction.options.getString('custom_id');
     const replyOpts = { flags: 1 << 6 }; // Ephemeral
 
     // If options are provided via slash command, add directly
@@ -105,7 +105,7 @@ module.exports = {
         worldName,
         daysOwned || 1, // Default to 1 if not provided
         lockType || 'mainlock', // Default to mainlock if not provided
-        note,
+        customId,
         interaction.user.username,
         interaction.guildId // Pass guildId, can be null
       );
@@ -154,7 +154,7 @@ module.exports = {
         const worldName = interaction.fields.getTextInputValue('worldName').trim();
         const daysOwnedStr = interaction.fields.getTextInputValue('daysOwned').trim();
         const lockTypeStr = interaction.fields.getTextInputValue('lockType').trim().toUpperCase();
-        const note = interaction.fields.getTextInputValue('note').trim();
+        const customId = interaction.fields.getTextInputValue('customId').trim();
 
         // --- Input Validation ---
         const daysOwned = parseInt(daysOwnedStr);
@@ -180,7 +180,7 @@ module.exports = {
           worldName,
           daysOwned, // Use validated number
           normalizedLockType,
-          note || null, // Pass null if empty
+          customId || null, // Pass null if empty
           interaction.user.username,
           interaction.guildId // Pass guildId, can be null
         );
