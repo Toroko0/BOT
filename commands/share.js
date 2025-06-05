@@ -11,7 +11,7 @@ module.exports = {
     .setDescription('Make one of your tracked worlds public in this server')
     .addStringOption(option =>
       option.setName('world') // Changed name for consistency
-        .setDescription('Name or Note of the world to share')
+        .setDescription('Name or Custom ID of the world to share')
         .setRequired(true)
         .setAutocomplete(true)), // Added autocomplete
 
@@ -84,12 +84,12 @@ module.exports = {
                     .filter(w => !w.is_public || w.guild_id !== interaction.guildId)
                     .filter(w =>
                         w.name.toLowerCase().includes(query) ||
-                        (w.note && w.note.toLowerCase().includes(query))
+                        (w.custom_id && w.custom_id.toLowerCase().includes(query))
                     )
                     .slice(0, CONSTANTS.MAX_SELECT_OPTIONS)
                     .map(w => ({
-                        name: w.note ? `${w.name.toUpperCase()} (${w.note.toUpperCase()})` : w.name.toUpperCase(),
-                        value: w.note || w.name
+                        name: w.custom_id ? `${w.name.toUpperCase()} (${w.custom_id.toUpperCase()})` : w.name.toUpperCase(),
+                        value: w.custom_id || w.name
                     }));
             } catch (e) {
                  logger.error("[share.js] Autocomplete DB error:", e);

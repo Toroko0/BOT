@@ -23,8 +23,8 @@ async function showRemoveWorldModal(interaction) {
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId('worldName')
-          .setLabel('World Name or Note to Remove')
-          .setPlaceholder('Case-insensitive world name or Note')
+          .setLabel('World Name or Custom ID to Remove')
+          .setPlaceholder('Case-insensitive world name or ID')
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
       )
@@ -40,8 +40,8 @@ async function showShareWorldModal(interaction, isShare) {
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId('worldName')
-          .setLabel('World Name or Note')
-          .setPlaceholder(`Enter world name or Note to ${isShare ? 'share' : 'unshare'}`)
+          .setLabel('World Name or Custom ID')
+          .setPlaceholder(`Enter world name or ID to ${isShare ? 'share' : 'unshare'}`)
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
       )
@@ -57,8 +57,8 @@ async function showInfoWorldModal(interaction) {
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
           .setCustomId('worldName')
-          .setLabel('World Name or Note')
-          .setPlaceholder('Enter world name or Note')
+          .setLabel('World Name or Custom ID')
+          .setPlaceholder('Enter world name or ID')
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
       )
@@ -322,9 +322,22 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
       new ButtonBuilder().setCustomId('list_btn_viewlocks').setLabel('🔐 View Locks').setStyle(ButtonStyle.Primary)
   );
    // list_button_179days was removed.
-  if (userTeam && type === 'private') { // Add View Team List button if user is in a team and viewing their private list
-        actionRow2.addComponents(new ButtonBuilder().setCustomId('list_btn_view_team_list').setLabel('🏢 View Team List').setStyle(ButtonStyle.Secondary));
+
+  // Conditionally add "View Team List" button to actionRow2 or a new actionRow3
+  if (userTeam && type === 'private') {
+    if (actionRow2.components.length < 5) {
+        actionRow2.addComponents(
+            new ButtonBuilder().setCustomId('list_btn_view_team_list').setLabel('🏢 View Team List').setStyle(ButtonStyle.Secondary)
+        );
+    } else {
+        const actionRow3 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('list_btn_view_team_list').setLabel('🏢 View Team List').setStyle(ButtonStyle.Secondary)
+        );
+        // No need to check actionRow3.components.length > 0 as we just added a button
+        components.push(actionRow3);
+    }
   }
+
   if (actionRow2.components.length > 0) components.push(actionRow2);
 
   if (viewMode === 'pc' && selectOptions.length > 0 && type === 'private') {
@@ -352,73 +365,118 @@ module.exports = {
     const cooldown = utils.checkCooldown(interaction.user.id, 'list_button');
     if (cooldown.onCooldown) { try { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, ephemeral: true }); } catch (e) { logger.error("[list.js] Error sending cooldown message", e)} return; }
     
-    const action = params[0];
-    let type, page; // Declare here for broader scope if needed
-    logger.info(`[list.js] Button Clicked: action=${action}, params=${params.join('_')}, customId=${interaction.customId}`);
+    // New parsing logic
+    let mainAction = params[0];
+    let subAction = params.length > 1 ? params[1] : null;
+    let derivedAction = mainAction; // Default action
+    let actionArgs = params.slice(1);   // Default arguments start after mainAction
+
+    if (mainAction === 'export' && subAction === 'names') {
+        derivedAction = 'export_names';
+        actionArgs = params.slice(2); // Remaining args: [type, page]
+    } else if (mainAction === 'filter' && subAction === 'show') {
+        derivedAction = 'filter_show';
+        actionArgs = params.slice(2); // Remaining args: [type]
+    }
+    // For simple actions like 'prev', 'next', 'switch', 'goto', 'page', 'remove', 'info', etc.,
+    // derivedAction remains mainAction (params[0]), and actionArgs (params.slice(1)) is already correct.
+    // Example: prev_private_1 -> mainAction='prev', actionArgs=['private', '1']
+    // Example: remove -> mainAction='remove', actionArgs=[]
+
+    logger.info(`[list.js] Button Clicked: derivedAction=${derivedAction}, actionArgs=${actionArgs.join(',')}, raw_params=${params.join('_')}, customId=${interaction.customId}`);
+
+    // Variables for type and page, to be extracted from actionArgs where applicable
+    let type, page;
 
     try {
-        switch(action) {
+        switch(derivedAction) { // Use derivedAction for the switch
             case 'prev':
             case 'next':
-                 type = params[1] || 'private';
-                 page = parseInt(params[2]) || 1;
-                 await showWorldsList(interaction, type, action === 'prev' ? Math.max(1, page - 1) : page + 1);
+                 type = actionArgs[0] || 'private';
+                 page = parseInt(actionArgs[1]) || 1;
+                 await showWorldsList(interaction, type, derivedAction === 'prev' ? Math.max(1, page - 1) : page + 1);
                  break;
-            case 'switch': // Handles list_button_switch_public_1 or list_button_switch_private_1
-                type = params[1] || 'private'; // This is the TARGET type
-                page = parseInt(params[2]) || 1; // This is the page to go to (usually 1)
+            case 'switch':
+                type = actionArgs[0] || 'private'; // This is the TARGET type
+                page = parseInt(actionArgs[1]) || 1; // This is the page to go to (usually 1)
                 await showWorldsList(interaction, type, page);
                 break;
             case 'view': // Not typically used with current button setup, but for completeness
-                type = params[1] || 'private';
-                page = parseInt(params[2]) || 1;
+                type = actionArgs[0] || 'private';
+                page = parseInt(actionArgs[1]) || 1;
                 await showWorldsList(interaction, type, page);
                 break;
             case 'goto':
-                type = params[1] || 'private';
+                type = actionArgs[0] || 'private'; // Type is from the button's customId part
                 const modal = new ModalBuilder().setCustomId(`list_modal_goto_${type}`).setTitle('Go to Page'); 
                 const pageInput = new TextInputBuilder().setCustomId('page_number').setLabel('Page Number').setPlaceholder('Enter page number').setStyle(TextInputStyle.Short).setRequired(true); 
                 modal.addComponents(new ActionRowBuilder().addComponents(pageInput)); 
                 await interaction.showModal(modal);
                 break;
-            case 'remove': await showRemoveWorldModal(interaction); break;
-            case 'info': await showInfoWorldModal(interaction); break;
-            case 'share': await showShareWorldModal(interaction, true); break;
-            case 'unshare': await showShareWorldModal(interaction, false); break;
-            // case 'search': await showSearchModal(interaction); break; // Old search button functionality
-            case 'search': // Re-route old search ID to new filter modal
-            case 'filter_show': { // New button for showing filters
-                // Params for list_button_filter_show_TYPE might be [ "filter_show", "private" ]
-                // The 'type' is the current list type being viewed.
-                const listType = params[1] || 'private';
+            case 'remove': await showRemoveWorldModal(interaction); break; // Uses its own modal, no args from params needed here
+            case 'info': await showInfoWorldModal(interaction); break; // Uses its own modal
+            case 'share': await showShareWorldModal(interaction, true); break; // Uses its own modal
+            case 'unshare': await showShareWorldModal(interaction, false); break; // Uses its own modal
+            case 'search': // This was re-routed to filter_show if search button existed with old ID
+            case 'filter_show': {
+                const listType = actionArgs[0] || 'private'; // Type is from button customId: list_button_filter_show_TYPE
                 await showListFilterModal(interaction, listType);
                 break;
             }
-            case 'addworld_button_show': await showAddWorldModal(interaction); break;
-            case 'opensettings':
+            case 'addworld_button_show': await showAddWorldModal(interaction); break; // Simple action
+            case 'opensettings': // Simple action
                 if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ ephemeral: true });
                 const { getSettingsReplyOptions } = require('./settings.js');
                 const settingsReplyOptions = await getSettingsReplyOptions(interaction.user.id);
                 await interaction.editReply(settingsReplyOptions);
                 break;
-            case 'page': 
+            case 'page':  // This is usually part of a pagination button ID, like list_button_page_TYPE_PAGE
+                // The current derivedAction would be 'page'. actionArgs would be [type, pageStr]
+                // This button is disabled, so it shouldn't be clicked. If it were, deferring is fine.
                 if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
                 break;
-            // case '179days': await show179WorldsList(interaction, 1); break; // Removed as 179.js is deleted
-            case 'viewlocks': await showLockedWorldsList(interaction, 1, {}); break;
-            case 'lockworld':
-                const lockModal = new ModalBuilder().setCustomId('list_modal_lock_getname').setTitle('Lock World: Enter Name');
-                const worldNameInput = new TextInputBuilder().setCustomId('worldname_to_lock').setLabel('World Name from Active List').setPlaceholder('Enter exact world name to lock').setStyle(TextInputStyle.Short).setRequired(true);
-                lockModal.addComponents(new ActionRowBuilder().addComponents(worldNameInput));
-                await interaction.showModal(lockModal);
+            // case '179days': await show179WorldsList(interaction, 1); break; // Already removed
+            case 'viewlocks': await showLockedWorldsList(interaction, 1, {}); break; // Simple action
+            case 'lockworld': { // Simple action, opens a modal
+                const newLockModal = new ModalBuilder()
+                    .setCustomId('list_modal_lockworldsubmit')
+                    .setTitle('Lock World from Active List');
+
+                const worldNameInput = new TextInputBuilder()
+                    .setCustomId('worldname_to_lock')
+                    .setLabel('World Name from Your Active List')
+                    .setPlaceholder('Enter exact world name to lock')
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true);
+
+                const lockTypeInput = new TextInputBuilder()
+                    .setCustomId('lock_type_for_move')
+                    .setLabel('Lock Type (main/out)')
+                    .setPlaceholder("main or out (defaults to main)")
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(false);
+
+                const noteInput = new TextInputBuilder()
+                    .setCustomId('note_for_move')
+                    .setLabel('Optional Note')
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setRequired(false);
+
+                newLockModal.addComponents(
+                    new ActionRowBuilder().addComponents(worldNameInput),
+                    new ActionRowBuilder().addComponents(lockTypeInput),
+                    new ActionRowBuilder().addComponents(noteInput)
+                );
+                await interaction.showModal(newLockModal);
                 break;
-            case 'view_team_list': // Handler for the new button
+            }
+            case 'view_team_list': // Simple action
                 await interaction.reply({ content: "Use `/team list` to view your team's worlds.", ephemeral: true });
                 break;
-            case 'export_names': {
+            case 'export_names': { // derivedAction is 'export_names', actionArgs = [type, page]
                 await interaction.deferReply({ ephemeral: true });
-                const listType = params[1] || 'private';
-                const listPage = parseInt(params[2]) || 1;
+                const listType = actionArgs[0] || 'private';
+                const listPage = parseInt(actionArgs[1]) || 1;
                 let dbResultExport;
 
                 if (listType === 'public') {
@@ -440,7 +498,7 @@ module.exports = {
 
                 let exportText = "```\n";
                 worldsForExport.forEach(world => {
-                    const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L'; // Default to 'L' if lock_type is null/undefined
+                    const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
                     const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
                     exportText += `(${lockChar}) ${world.name.toUpperCase()}${customIdPart}\n`;
                 });
@@ -455,7 +513,7 @@ module.exports = {
                 break;
             }
             default: 
-                logger.warn(`[list.js] Unknown list button action: ${action}`); 
+                logger.warn(`[list.js] Unknown list button action: ${derivedAction}`);
                 if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
                 await interaction.editReply({ content: 'Unknown button action.', ephemeral: true });
                 break;
@@ -498,27 +556,26 @@ module.exports = {
 
     // Let's assume params from interactionHandler is customId.split('_').slice(2) for modals
     // So, for list_modal_goto_private -> params = ["goto", "private"]
-    // For list_modal_lock_confirm_123 -> params = ["lock", "confirm", "123"]
     // For list_modal_filter_apply_private -> params = ["filter", "apply", "private"]
+    // For list_modal_lockworldsubmit -> params assumed to be ["lockworldsubmit"] (after interactionHandler processing)
 
     let action = params[0];
-    let dataParams = params.slice(1); // Default: action arguments start from params[1]
+    let dataParams = params.slice(1);
 
-    // Handle composite actions
-    if (params[0] === 'lock' && params.length > 1 && (params[1] === 'getname' || params[1] === 'confirm')) {
-      action = `${params[0]}_${params[1]}`;
-      dataParams = params.slice(2);
-    } else if (params[0] === 'filter' && params.length > 1 && params[1] === 'apply') {
+    // Simplified action parsing: if it's a known composite from previous structure, handle it.
+    // Otherwise, action is params[0].
+    if (params[0] === 'filter' && params.length > 1 && params[1] === 'apply') {
       action = `${params[0]}_${params[1]}`; // "filter_apply"
       dataParams = params.slice(2); // dataParams will contain [currentListType]
     }
-    // For other simple actions like 'goto', 'remove', etc., action remains params[0] and dataParams are params.slice(1)
+    // Note: The old 'lock_getname' and 'lock_confirm' parsing is removed as the cases are removed.
+    // The new 'lockworldsubmit' case will be handled by action = params[0].
 
     logger.info(`[list.js] Modal Submitted: derived_action=${action}, raw_params_for_handler='${params.join('_')}', customId=${interaction.customId}`);
     try {
       switch(action) {
         case 'goto': { 
-            const currentListType = dataParams[0] || 'private'; // Was params[1]
+            const currentListType = dataParams[0] || 'private';
             const pageInput = interaction.fields.getTextInputValue('page_number'); 
             const pageNumber = parseInt(pageInput); 
             if (isNaN(pageNumber) || pageNumber < 1) { 
@@ -526,13 +583,12 @@ module.exports = {
                 return; 
             } 
             await interaction.deferUpdate(); 
-            // When using goto, filters are cleared (showWorldsList called without currentFilters)
             await showWorldsList(interaction, currentListType, pageNumber, null);
             break; 
         }
         case 'filter_apply': {
             await interaction.deferUpdate();
-            const currentListType = dataParams[0] || 'private'; // Type of list being filtered (private/public)
+            const currentListType = dataParams[0] || 'private';
 
             const filtersToApply = {};
             const prefix = interaction.fields.getTextInputValue('filter_prefix')?.trim() || null;
@@ -560,50 +616,53 @@ module.exports = {
             }
 
             logger.info(`[list.js] Applying filters for list type ${currentListType}: ${JSON.stringify(filtersToApply)}`);
-            await showWorldsList(interaction, currentListType, 1, filtersToApply); // Filtered search always goes to page 1
+            await showWorldsList(interaction, currentListType, 1, filtersToApply);
             break;
         }
-        case 'lock_getname': { // This action itself doesn't use dataParams, it leads to another modal
+        case 'lockworldsubmit': { // New consolidated modal handler
+            // Assuming deferReply or deferUpdate will be handled by the calling button or here if needed.
+            // For a modal submission, it's usually an update to the existing message (list).
+            await interaction.deferUpdate(); // Or deferReply({ephemeral: true}) if it's a new message
+
             const worldNameInput = interaction.fields.getTextInputValue('worldname_to_lock').trim();
+            let targetLockTypeInput = interaction.fields.getTextInputValue('lock_type_for_move')?.trim().toLowerCase() || 'main';
+            const targetNote = interaction.fields.getTextInputValue('note_for_move')?.trim() || null;
+
+            if (!worldNameInput || worldNameInput.includes(' ')) {
+                await interaction.editReply({ content: '❌ Invalid world name format. Name cannot be empty or contain spaces.', ephemeral: true });
+                return;
+            }
+            if (targetLockTypeInput !== 'main' && targetLockTypeInput !== 'out') {
+                targetLockTypeInput = 'main'; // Default if invalid input
+            }
+
             const worldNameUpper = worldNameInput.toUpperCase();
-            if (!worldNameUpper || worldNameUpper.includes(' ')) {
-                await interaction.reply({ content: '❌ Invalid world name format. Name cannot be empty or contain spaces.', ephemeral: true }); return;
-            }
             const activeWorld = await db.getWorldByName(worldNameUpper, interaction.user.id);
+
             if (!activeWorld) {
-                await interaction.reply({ content: `❌ World "**${worldNameInput}**" not found in your active tracking list.`, ephemeral: true }); return;
+                await interaction.editReply({ content: `❌ World "**${worldNameInput}**" not found in your active tracking list.`, ephemeral: true });
+                return;
             }
+
             const alreadyLocked = await db.findLockedWorldByName(interaction.user.id, activeWorld.name);
             if (alreadyLocked) {
-                await interaction.reply({ content: `❌ World **${activeWorld.name}** is already in your Locks list.`, ephemeral: true }); return;
+                await interaction.editReply({ content: `❌ World **${activeWorld.name}** is already in your Locks list.`, ephemeral: true });
+                return;
             }
-            // The customId for the confirmation modal needs to be list_modal_lock_confirm_ID
-            // The interaction handler is assumed to split 'list_modal_lock_confirm_ID' into params for handleModal
-            // e.g. if handler uses .slice(1) -> ["modal", "lock", "confirm", ID] -> then our logic derives action="lock_confirm", dataParams=[ID]
-            // e.g. if handler uses .slice(2) -> ["lock", "confirm", ID] -> then our logic derives action="lock_confirm", dataParams=[ID]
-            const modalConfirm = new ModalBuilder().setCustomId(`list_modal_lock_confirm_${activeWorld.id}`).setTitle(`Lock: ${activeWorld.name}`);
-            const worldNameDisplay = new TextInputBuilder().setCustomId('worldname_display_readonly').setLabel('World Name (Cannot Change)').setValue(activeWorld.name).setStyle(TextInputStyle.Short).setRequired(false);
-            const lockTypeInput = new TextInputBuilder().setCustomId('lock_type_for_move').setLabel('Lock Type (main/out)').setValue(activeWorld.lock_type || 'main').setPlaceholder('main or out').setStyle(TextInputStyle.Short).setRequired(true);
-            const noteInput = new TextInputBuilder().setCustomId('note_for_move').setLabel('Optional Note').setStyle(TextInputStyle.Paragraph).setRequired(false);
-            modalConfirm.addComponents(new ActionRowBuilder().addComponents(worldNameDisplay), new ActionRowBuilder().addComponents(lockTypeInput), new ActionRowBuilder().addComponents(noteInput));
-            await interaction.showModal(modalConfirm);
+
+            const result = await db.moveWorldToLocks(interaction.user.id, activeWorld.id, targetLockTypeInput, targetNote);
+
+            if (result.success) {
+                await interaction.editReply({ content: `✅ ${result.message}`, ephemeral: true });
+                // Optionally, refresh the list view
+                // await showWorldsList(interaction, type, page, currentFilters); // Need to get type, page, currentFilters if refreshing
+            } else {
+                await interaction.editReply({ content: `❌ ${result.message}`, ephemeral: true });
+            }
             break;
         }
-        case 'lock_confirm': { // Action "lock_confirm", dataParams should contain [activeWorldIdStr]
-            const activeWorldIdStr = dataParams[0]; // Was params[1]
-            const activeWorldId = parseInt(activeWorldIdStr);
-            if (isNaN(activeWorldId)) {
-                await interaction.reply({ content: '❌ Error processing request: Invalid world ID for confirmation.', ephemeral: true }); return;
-            }
-            let targetLockType = interaction.fields.getTextInputValue('lock_type_for_move').trim().toLowerCase() || 'main';
-            if (targetLockType !== 'main' && targetLockType !== 'out') targetLockType = 'main';
-            const targetNote = interaction.fields.getTextInputValue('note_for_move').trim() || null;
-            const result = await db.moveWorldToLocks(interaction.user.id, activeWorldId, targetLockType, targetNote);
-            if (result.success) await interaction.reply({ content: `✅ ${result.message}`, ephemeral: true });
-            else await interaction.reply({ content: `❌ ${result.message}`, ephemeral: true });
-            break;
-        }
-        case 'remove': { // Action "remove", dataParams is empty as worldName comes from modal field
+        // Removed 'lock_getname' and 'lock_confirm' cases
+        case 'remove': {
             const worldIdentifier = interaction.fields.getTextInputValue('worldName').trim();
             const world = await db.findWorldByIdentifier(interaction.user.id, worldIdentifier, null);
             if (!world || world.user_id !== interaction.user.id) { 
