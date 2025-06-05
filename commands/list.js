@@ -374,13 +374,32 @@ module.exports = {
     } else { logger.warn(`[list.js] Unhandled list select menu action: ${action}`); await interaction.reply({ content: "Unknown select menu action.", ephemeral: true }); }
   },
   async handleModal(interaction, params) {
-    // ... (rest of handleModal, ensure ephemeral replies)
-    const action = params[0];
-    logger.info(`[list.js] Modal Submitted: action=${action}, params=${params}, customId=${interaction.customId}`);
+    // params are derived from customId.split('_').slice(N) where N depends on the handler structure.
+    // Example customId: list_modal_ACTION_ARG1 or list_modal_PARENT_CHILD_ARG1
+    // If interactionHandler sends params from customId.split('_').slice(1):
+    // For list_modal_goto_private -> params = ["modal", "goto", "private"]
+    // For list_modal_lock_confirm_123 -> params = ["modal", "lock", "confirm", "123"]
+
+    // Let's assume params from interactionHandler is customId.split('_').slice(2) for modals
+    // So, for list_modal_goto_private -> params = ["goto", "private"]
+    // For list_modal_lock_confirm_123 -> params = ["lock", "confirm", "123"]
+
+    let action = params[0];
+    let dataParams = params.slice(1); // Default: action arguments start from params[1]
+
+    // Handle composite actions like "lock_getname" or "lock_confirm"
+    // These would have params like ["lock", "getname"] or ["lock", "confirm", "worldId"]
+    if (action === 'lock' && params.length > 1 && (params[1] === 'getname' || params[1] === 'confirm')) {
+      action = `${params[0]}_${params[1]}`; // e.g., "lock_getname", "lock_confirm"
+      dataParams = params.slice(2); // Arguments for these composite actions start from params[2]
+    }
+    // For other actions like 'goto', 'remove', etc., action remains params[0] and dataParams are params.slice(1)
+
+    logger.info(`[list.js] Modal Submitted: derived_action=${action}, raw_params_for_handler='${params.join('_')}', customId=${interaction.customId}`);
     try {
       switch(action) {
         case 'goto': { 
-            const type = params[1] || 'private';
+            const type = dataParams[0] || 'private'; // Was params[1]
             const pageInput = interaction.fields.getTextInputValue('page_number'); 
             const pageNumber = parseInt(pageInput); 
             if (isNaN(pageNumber) || pageNumber < 1) { 
@@ -391,7 +410,7 @@ module.exports = {
             await showWorldsList(interaction, type, pageNumber);
             break; 
         }
-        case 'lock_getname': {
+        case 'lock_getname': { // This action itself doesn't use dataParams, it leads to another modal
             const worldNameInput = interaction.fields.getTextInputValue('worldname_to_lock').trim();
             const worldNameUpper = worldNameInput.toUpperCase();
             if (!worldNameUpper || worldNameUpper.includes(' ')) {
@@ -405,6 +424,10 @@ module.exports = {
             if (alreadyLocked) {
                 await interaction.reply({ content: `❌ World **${activeWorld.name}** is already in your Locks list.`, ephemeral: true }); return;
             }
+            // The customId for the confirmation modal needs to be list_modal_lock_confirm_ID
+            // The interaction handler is assumed to split 'list_modal_lock_confirm_ID' into params for handleModal
+            // e.g. if handler uses .slice(1) -> ["modal", "lock", "confirm", ID] -> then our logic derives action="lock_confirm", dataParams=[ID]
+            // e.g. if handler uses .slice(2) -> ["lock", "confirm", ID] -> then our logic derives action="lock_confirm", dataParams=[ID]
             const modalConfirm = new ModalBuilder().setCustomId(`list_modal_lock_confirm_${activeWorld.id}`).setTitle(`Lock: ${activeWorld.name}`);
             const worldNameDisplay = new TextInputBuilder().setCustomId('worldname_display_readonly').setLabel('World Name (Cannot Change)').setValue(activeWorld.name).setStyle(TextInputStyle.Short).setRequired(false);
             const lockTypeInput = new TextInputBuilder().setCustomId('lock_type_for_move').setLabel('Lock Type (main/out)').setValue(activeWorld.lock_type || 'main').setPlaceholder('main or out').setStyle(TextInputStyle.Short).setRequired(true);
@@ -413,8 +436,8 @@ module.exports = {
             await interaction.showModal(modalConfirm);
             break;
         }
-        case 'lock_confirm': {
-            const activeWorldIdStr = params[1];
+        case 'lock_confirm': { // Action "lock_confirm", dataParams should contain [activeWorldIdStr]
+            const activeWorldIdStr = dataParams[0]; // Was params[1]
             const activeWorldId = parseInt(activeWorldIdStr);
             if (isNaN(activeWorldId)) {
                 await interaction.reply({ content: '❌ Error processing request: Invalid world ID for confirmation.', ephemeral: true }); return;
@@ -427,7 +450,7 @@ module.exports = {
             else await interaction.reply({ content: `❌ ${result.message}`, ephemeral: true });
             break;
         }
-        case 'remove': {
+        case 'remove': { // Action "remove", dataParams is empty as worldName comes from modal field
             const worldIdentifier = interaction.fields.getTextInputValue('worldName').trim();
             const world = await db.findWorldByIdentifier(interaction.user.id, worldIdentifier, null);
             if (!world || world.user_id !== interaction.user.id) { 
@@ -442,8 +465,8 @@ module.exports = {
             await interaction.reply({ content: `⚠️ Are you sure you want to remove **${world.name.toUpperCase()}**?`, components: [row], ephemeral: true });
             break;
         }
-        case 'share': 
-        case 'unshare': {
+        case 'share':  // Assumes action is 'share', dataParams is empty
+        case 'unshare': { // Assumes action is 'unshare', dataParams is empty
             if (!interaction.guildId) { 
                 await interaction.reply({ content: "Sharing/unsharing only possible in a server.", ephemeral: true }); return;
             }
@@ -452,7 +475,7 @@ module.exports = {
             if (!world || world.user_id !== interaction.user.id) { 
                 await interaction.reply({ content: `❌ World "**${worldIdentifier}**" not found in your list.`, ephemeral: true }); return;
             }
-            const makePublic = (action === 'share');
+            const makePublic = (action === 'share'); // 'action' here is the derived one, e.g. "share"
             if (makePublic && world.is_public && world.guild_id === interaction.guildId) { 
                 await interaction.reply({ content: `🌐 **${world.name.toUpperCase()}** is already public here.`, ephemeral: true }); return;
             }
@@ -477,7 +500,7 @@ module.exports = {
             }
             break;
         }
-        case 'info': { 
+        case 'info': { // Assumes action is 'info', dataParams is empty
             const worldIdentifier = interaction.fields.getTextInputValue('worldName').trim(); 
             let world = await db.findWorldByIdentifier(interaction.user.id, worldIdentifier, interaction.guildId); 
             if (!world) { 
@@ -486,15 +509,13 @@ module.exports = {
             await showWorldInfo(interaction, world);
             break; 
         }
-        default: logger.warn(`[list.js] Unhandled list modal action: ${action} from customId: ${interaction.customId}`); await interaction.reply({ content: "This form submission is not recognized.", ephemeral: true });
+        default: logger.warn(`[list.js] Unhandled list modal action: ${action} (derived) from customId: ${interaction.customId}, raw_params_for_handler: ${params.join('_')}`); await interaction.reply({ content: "This form submission is not recognized.", ephemeral: true });
       }
     } catch (error) {
-      logger.error(`[list.js] Error handling modal ${interaction.customId}:`, error?.stack || error);
+      logger.error(`[list.js] Error handling modal ${interaction.customId} (derived_action: ${action}):`, error?.stack || error);
       const errorReply = { content: 'An error occurred processing this form.', ephemeral: true };
       try { if (!interaction.replied && !interaction.deferred) await interaction.reply(errorReply); else await interaction.followUp(errorReply); } catch {}
     }
   },
   showWorldsList // Export for use by other commands if needed
 };
-
-[end of commands/list.js]
