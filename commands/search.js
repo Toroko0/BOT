@@ -23,13 +23,15 @@ async function showSearchModal(interaction) {
   const prefixInput = new TextInputBuilder().setCustomId('prefix').setLabel('World Name Prefix (optional)').setStyle(TextInputStyle.Short).setRequired(false);
   const lockTypeInput = new TextInputBuilder().setCustomId('lockType').setLabel('Lock Type (M/O) (optional)').setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(1);
   const expiryDayInput = new TextInputBuilder().setCustomId('expiryDay').setLabel('Expiry Day (e.g., Monday) (optional)').setStyle(TextInputStyle.Short).setRequired(false);
-  const expiringDaysInput = new TextInputBuilder().setCustomId('expiringDays').setLabel('Expiring Within Days (0-180) (opt.)').setStyle(TextInputStyle.Short).setRequired(false);
+  // const expiringDaysInput = new TextInputBuilder().setCustomId('expiringDays').setLabel('Expiring Within Days (0-180) (opt.)').setStyle(TextInputStyle.Short).setRequired(false);
+  const daysOwnedInput = new TextInputBuilder().setCustomId('search_days_owned').setLabel('Days Owned (0-180) (opt.)').setStyle(TextInputStyle.Short).setRequired(false);
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(prefixInput),
     new ActionRowBuilder().addComponents(lockTypeInput),
     new ActionRowBuilder().addComponents(expiryDayInput),
-    new ActionRowBuilder().addComponents(expiringDaysInput)
+    // new ActionRowBuilder().addComponents(expiringDaysInput),
+    new ActionRowBuilder().addComponents(daysOwnedInput)
   );
 
   await interaction.showModal(modal);
@@ -57,10 +59,13 @@ async function performSearch(interaction, filters) {
 
   try {
       // Add guildId to filters if searching public worlds (currently defaults to private)
-      if (filters.showPublic) filters.guildId = interaction.guildId;
-      const worlds = await db.getFilteredWorlds(interaction.user.id, filters);
+      if (filters.showPublic) filters.guildId = interaction.guildId; // Note: getFilteredWorlds expects guildId within filters obj
+
+      // Fetch only the first page and total count initially
+      const { worlds: firstPageWorlds, total: totalMatchingWorlds } = await db.getFilteredWorlds(interaction.user.id, filters, 1, CONSTANTS.PAGE_SIZE);
+
       // Display results (always treated as an update after deferral)
-      await displaySearchResults(interaction, filters, worlds, 1, true);
+      await displaySearchResults(interaction, filters, firstPageWorlds, totalMatchingWorlds, 1, true);
   } catch (dbError) {
        logger.error("[search.js] Error performing search query:", dbError);
        const errorOptions = { ...replyOpts, content: "❌ An error occurred while searching.", components: [] };
@@ -72,19 +77,20 @@ async function performSearch(interaction, filters) {
 }
 
 // Function to display search results in a paginated table
-async function displaySearchResults(interaction, filters, worlds, page = 1, isUpdate = false) {
+async function displaySearchResults(interaction, filters, currentPageWorlds, totalWorlds, page = 1, isUpdate = false) {
   const PAGE_SIZE = CONSTANTS.PAGE_SIZE;
-  const totalWorlds = worlds.length;
+  // totalWorlds is now a parameter
   const totalPages = Math.ceil(totalWorlds / PAGE_SIZE) || 1;
-  page = Math.max(1, Math.min(page, totalPages));
+  page = Math.max(1, Math.min(page, totalPages)); // Ensure page is still valid, esp. if totalWorlds is 0
   const replyOpts = { flags: 1 << 6, fetchReply: true };
 
-  const startIdx = (page - 1) * PAGE_SIZE;
-  const endIdx = startIdx + PAGE_SIZE;
-  const currentPageWorlds = worlds.slice(startIdx, endIdx);
+  // currentPageWorlds is now a parameter, no need to slice 'worlds'
+  // const startIdx = (page - 1) * PAGE_SIZE;
+  // const endIdx = startIdx + PAGE_SIZE;
+  // const currentPageWorlds = worlds.slice(startIdx, endIdx);
 
    // Handle No Results
-  if (totalWorlds === 0) {
+  if (totalWorlds === 0) { // Check totalWorlds passed as parameter
     const noResultsOptions = { content: '📭 No worlds found matching your search criteria.', components: [], embeds: [], flags: 1 << 6 };
     try {
       if (isUpdate || interaction.deferred || interaction.replied) await interaction.editReply(noResultsOptions);
@@ -131,7 +137,8 @@ async function displaySearchResults(interaction, filters, worlds, page = 1, isUp
 
   actionRow.addComponents(
     new ButtonBuilder().setCustomId('list_button_view_private_1').setLabel('Back to List').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('search_button_new').setLabel('New Search').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('search_button_new').setLabel('New Search').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('search_button_export_all').setLabel('📄 Export All Names').setStyle(ButtonStyle.Success)
   );
   components.push(actionRow);
 
@@ -146,8 +153,8 @@ async function displaySearchResults(interaction, filters, worlds, page = 1, isUp
     // Cache results using message ID
     const messageId = interaction.message?.id || message?.id;
     if (messageId) {
-      logger.debug(`[search.js] Caching search results under key: ${messageId}`);
-      searchCache.set(messageId, { filters, worlds });
+      logger.debug(`[search.js] Caching search results under key: ${messageId} - Filters: ${JSON.stringify(filters)}, Total: ${totalWorlds}`);
+      searchCache.set(messageId, { filters, totalWorlds }); // Store totalWorlds instead of the full worlds array
       setTimeout(() => { if (searchCache.delete(messageId)) { logger.debug(`[search.js] Cleared expired search cache for key: ${messageId}`); } }, CONSTANTS.SEARCH_CACHE_TTL_MINUTES * 60 * 1000);
     } else { logger.warn("[search.js] Could not get message ID to cache search results."); }
 
@@ -169,21 +176,24 @@ module.exports = {
     )
     .addStringOption(option => option.setName('expiryday').setDescription('Filter by day of the week the world expires').setRequired(false)
         .addChoices( { name: 'Monday', value: 'monday' }, { name: 'Tuesday', value: 'tuesday' }, { name: 'Wednesday', value: 'wednesday' }, { name: 'Thursday', value: 'thursday' }, { name: 'Friday', value: 'friday' }, { name: 'Saturday', value: 'saturday' }, { name: 'Sunday', value: 'sunday' } ))
-    .addIntegerOption(option => option.setName('expiringdays').setDescription('Filter worlds expiring within this many days').setRequired(false).setMinValue(0).setMaxValue(180)),
+    // .addIntegerOption(option => option.setName('expiringdays').setDescription('Filter worlds expiring within this many days').setRequired(false).setMinValue(0).setMaxValue(180)),
+    .addIntegerOption(option => option.setName('daysowned').setDescription('Filter by exact days owned (0-180)').setRequired(false).setMinValue(0).setMaxValue(180)),
 
   async execute(interaction) {
     const prefix = interaction.options.getString('prefix');
     const lockType = interaction.options.getString('locktype');
     const expiryDay = interaction.options.getString('expiryday');
-    const expiringDays = interaction.options.getInteger('expiringdays');
-    const hasFilters = prefix || lockType || expiryDay || expiringDays !== null;
+    // const expiringDays = interaction.options.getInteger('expiringdays');
+    const daysOwned = interaction.options.getInteger('daysowned');
+    const hasFilters = prefix || lockType || expiryDay || daysOwned !== null;
 
     if (hasFilters) {
       const filters = { showPublic: false }; // Default to private search
       if (prefix) filters.prefix = prefix;
       if (lockType) filters.lockType = lockType;
       if (expiryDay) filters.expiryDay = expiryDay;
-      if (expiringDays !== null) filters.expiringDays = expiringDays;
+      // if (expiringDays !== null) filters.expiringDays = expiringDays;
+      if (daysOwned !== null) filters.daysOwned = daysOwned;
       await performSearch(interaction, filters); // Handles deferral
     } else {
       await showSearchModal(interaction); // Show modal if no filters given
@@ -205,17 +215,76 @@ module.exports = {
     const cachedData = searchCache.get(cacheKey);
     if (!cachedData) { logger.warn(`[search.js] Cache miss for key: ${cacheKey}`); await interaction.update({ content: "Search results expired. Please search again.", components: [], embeds: [], flags: 1 << 6 }); return; }
 
-    const { filters, worlds } = cachedData;
+    const { filters: cachedFilters, totalWorlds: cachedTotalWorlds } = cachedData;
     let targetPage = currentPage;
 
-    if (action === 'prev') targetPage = Math.max(1, currentPage - 1);
-    else if (action === 'next') targetPage = Math.min(Math.ceil(worlds.length / CONSTANTS.PAGE_SIZE) || 1, currentPage + 1);
-    else if (action === 'refresh') { logger.info(`[search.js] Refreshing search: ${JSON.stringify(filters)}`); if (!interaction.deferred) await interaction.deferUpdate(); await performSearch(interaction, filters); return; }
-    else if (action === 'page') { await interaction.deferUpdate(); return; }
-    else { logger.warn(`[search.js] Unknown search button action: ${action}`); await interaction.reply({ ...replyOpts, content: "Unknown search action." }); return; }
+    if (action === 'prev') {
+        targetPage = Math.max(1, currentPage - 1);
+    } else if (action === 'next') {
+        targetPage = Math.min(Math.ceil(cachedTotalWorlds / CONSTANTS.PAGE_SIZE) || 1, currentPage + 1);
+    } else if (action === 'refresh') {
+        logger.info(`[search.js] Refreshing search with filters: ${JSON.stringify(cachedFilters)}`);
+        if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate(); // Ensure deferral
+        // Fetch page 1 for refresh
+        const { worlds: refreshedPageOneWorlds } = await db.getFilteredWorlds(interaction.user.id, cachedFilters, 1, CONSTANTS.PAGE_SIZE);
+        await displaySearchResults(interaction, cachedFilters, refreshedPageOneWorlds, cachedTotalWorlds, 1, true);
+        return;
+    } else if (action === 'page') {
+        await interaction.deferUpdate(); return;
+    } else if (action === 'export_all') {
+        await interaction.deferReply({ ephemeral: true });
+        const cacheKeyForExport = interaction.message?.id; // Re-fetch cache key as it's a new interaction context
+        if (!cacheKeyForExport) {
+             logger.warn("[search.js] Export All: No message ID for cache key.");
+             await interaction.editReply({ content: "❌ Cannot retrieve search session for export."});
+             return;
+        }
+        const cachedDataForExport = searchCache.get(cacheKeyForExport);
+        if (!cachedDataForExport || !cachedDataForExport.filters) {
+            logger.warn(`[search.js] Export All: Cache miss or no filters for key: ${cacheKeyForExport}`);
+            await interaction.editReply({ content: "Search session expired or filters not found. Please perform a new search to export.", components: []});
+            return;
+        }
+        const { filters: exportFilters } = cachedDataForExport;
 
-    if (!interaction.deferred) await interaction.deferUpdate();
-    await displaySearchResults(interaction, filters, worlds, targetPage, true);
+        // Add guildId to filters if it was a public search context (original filters might not have it if it was a private search)
+        // This relies on the search context being implicitly private unless filters.showPublic was true.
+        // The original `performSearch` adds `filters.guildId` if `filters.showPublic` is true.
+        // `getAllFilteredWorlds` expects `filters.guildId` for public, and `userId` for private.
+        const userIdForExport = interaction.user.id; // getAllFilteredWorlds needs userId for private searches
+
+        const allMatchingWorlds = await db.getAllFilteredWorlds(userIdForExport, exportFilters);
+
+        if (!allMatchingWorlds || allMatchingWorlds.length === 0) {
+            await interaction.editReply({ content: 'No names to export for the current filters.', ephemeral: true });
+            return;
+        }
+
+        let exportText = "```\n";
+        allMatchingWorlds.forEach(world => {
+            const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
+            const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
+            exportText += `(${lockChar}) ${world.name.toUpperCase()}${customIdPart}\n`;
+        });
+        exportText += "```";
+
+        if (exportText.length > 2000) {
+            let cutOff = exportText.lastIndexOf('\n', 1990);
+            if (cutOff === -1) cutOff = 1990;
+            exportText = exportText.substring(0, cutOff) + "\n... (list truncated)```";
+        }
+        await interaction.editReply({ content: exportText, ephemeral: true });
+        return; // End export_all logic
+
+    } else {
+        logger.warn(`[search.js] Unknown search button action: ${action}`);
+        await interaction.reply({ ...replyOpts, content: "Unknown search action." }); return;
+    }
+
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
+    // Fetch the specific page needed for 'prev'/'next'
+    const { worlds: newPageWorlds } = await db.getFilteredWorlds(interaction.user.id, cachedFilters, targetPage, CONSTANTS.PAGE_SIZE);
+    await displaySearchResults(interaction, cachedFilters, newPageWorlds, cachedTotalWorlds, targetPage, true);
   },
 
   async handleModal(interaction, params) {
@@ -225,12 +294,34 @@ module.exports = {
           const prefix = interaction.fields.getTextInputValue('prefix');
           const lockTypeInput = interaction.fields.getTextInputValue('lockType');
           const expiryDay = interaction.fields.getTextInputValue('expiryDay');
-          const expiringDays = interaction.fields.getTextInputValue('expiringDays');
+          // const expiringDays = interaction.fields.getTextInputValue('expiringDays');
+          const daysOwnedStr = interaction.fields.getTextInputValue('search_days_owned');
+
           let lockType = null; const lockTypeUpper = lockTypeInput?.trim().toUpperCase();
           if (lockTypeUpper === 'M') lockType = 'mainlock'; else if (lockTypeUpper === 'O') lockType = 'outlock'; else if (lockTypeUpper !== '') { await interaction.reply({ ...replyOpts, content: "❌ Invalid Lock Type (M/O or blank)." }); return; }
-          const filters = { showPublic: false }; if (prefix?.trim()) filters.prefix = prefix.trim(); if (lockType) filters.lockType = lockType;
-          if (expiryDay?.trim()) { const validDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']; const lowerDay = expiryDay.trim().toLowerCase(); if (validDays.includes(lowerDay)) { filters.expiryDay = lowerDay; } else { await interaction.reply({ ...replyOpts, content: "❌ Invalid Expiry Day (use full name)." }); return; } }
-          if (expiringDays?.trim()) { const days = parseInt(expiringDays.trim()); if (!isNaN(days) && days >= 0 && days <= 180) { filters.expiringDays = days; } else { await interaction.reply({ ...replyOpts, content: "❌ Invalid 'Expiring Within Days' (0-180)." }); return; } }
+
+          const filters = { showPublic: false };
+          if (prefix?.trim()) filters.prefix = prefix.trim();
+          if (lockType) filters.lockType = lockType;
+
+          if (expiryDay?.trim()) {
+              const validDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+              const lowerDay = expiryDay.trim().toLowerCase();
+              if (validDays.includes(lowerDay)) { filters.expiryDay = lowerDay; }
+              else { await interaction.reply({ ...replyOpts, content: "❌ Invalid Expiry Day (use full name)." }); return; }
+          }
+
+          // if (expiringDays?.trim()) { const days = parseInt(expiringDays.trim()); if (!isNaN(days) && days >= 0 && days <= 180) { filters.expiringDays = days; } else { await interaction.reply({ ...replyOpts, content: "❌ Invalid 'Expiring Within Days' (0-180)." }); return; } }
+          if (daysOwnedStr?.trim()) {
+              const daysOwned = parseInt(daysOwnedStr.trim());
+              if (!isNaN(daysOwned) && daysOwned >= 0 && daysOwned <= 180) {
+                  filters.daysOwned = daysOwned;
+              } else {
+                  await interaction.reply({ ...replyOpts, content: "❌ Invalid 'Days Owned' (must be a number between 0-180)." });
+                  return;
+              }
+          }
+
           // Defer before performing search
           if (!interaction.deferred && !interaction.replied) { await interaction.deferReply(replyOpts); }
           await performSearch(interaction, filters);

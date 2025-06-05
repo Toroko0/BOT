@@ -1,6 +1,8 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js'); // Ensure all needed discord.js parts are here
 const db = require('../database.js');
 const logger = require('../utils/logger.js');
+const { table, getBorderCharacters } = require('table'); // Added for table display
+const CONSTANTS = require('../utils/constants'); // Assuming constants.js exists and has PAGE_SIZE
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -141,8 +143,9 @@ module.exports = {
   }
 };
 
-const CONSTANTS = require('../utils/constants'); // Assuming constants.js exists and has PAGE_SIZE
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+// const CONSTANTS = require('../utils/constants'); // This was the duplicate, removed. It's already at the top.
+// const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+// The discord.js components are already destructured at the top of the file.
 
 // Filter Encoding/Decoding Utilities
 function encodeFilters(filters) {
@@ -165,35 +168,74 @@ function decodeFilters(encodedString) {
   }
 }
 
+async function showLockFilterModal(interaction) {
+  const modal = new ModalBuilder()
+    .setCustomId('lock_modal_main_filter_apply')
+    .setTitle('Filter Locked Worlds');
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('lock_filter_prefix')
+        .setLabel('World Prefix (Optional)')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('lock_filter_min_len')
+        .setLabel('Min Name Length (Optional)')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+        .setPlaceholder('e.g., 3')
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('lock_filter_max_len')
+        .setLabel('Max Name Length (Optional)')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+        .setPlaceholder('e.g., 10')
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('lock_filter_type')
+        .setLabel('Lock Type (main/out, Optional)')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+        .setPlaceholder('main or out')
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('lock_filter_note')
+        .setLabel('Note Contains (Optional)')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+    )
+  );
+  await interaction.showModal(modal);
+}
 
 async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) {
   const ephemeralFlag = true;
-  const PAGE_SIZE_LOCKED = CONSTANTS.PAGE_SIZE || 10; // Use constant or default
+  const PAGE_SIZE_LOCKED = CONSTANTS.PAGE_SIZE || 10;
 
   try {
-    // Defer reply/update
     if (interaction.isMessageComponent() || interaction.isModalSubmit()) {
       if (!interaction.deferred && !interaction.replied) {
         await interaction.deferUpdate({ ephemeral: ephemeralFlag });
       }
-    } else { // For initial slash command
+    } else {
       if (!interaction.deferred && !interaction.replied) {
         await interaction.deferReply({ ephemeral: ephemeralFlag });
       }
     }
 
-    const userPrefs = await db.getUserPreferences(interaction.user.id);
-    // const viewMode = userPrefs?.view_mode || 'pc'; // pc or phone
-    // const timezoneOffset = userPrefs?.timezone_offset || 0; // For date formatting if needed
-
     const { worlds, total } = await db.getLockedWorlds(interaction.user.id, page, PAGE_SIZE_LOCKED, currentFilters);
-
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE_LOCKED));
-    page = Math.max(1, Math.min(page, totalPages)); // Ensure page is within bounds
-
+    page = Math.max(1, Math.min(page, totalPages));
     const encodedCurrentFilters = encodeFilters(currentFilters);
 
-    // Empty List Handling
     if (total === 0) {
       let content = "You have no locked worlds. Use `/lock add` to add some!";
       const components = [];
@@ -207,38 +249,46 @@ async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) 
       return;
     }
 
-    // --- Embed Formatting (Simplified for brevity, expand as needed) ---
-    const embed = new EmbedBuilder()
-      .setColor(0x0099FF)
-      .setTitle('Your Locked Worlds')
-      .setFooter({ text: `Total: ${total} | Page ${page}/${totalPages}` });
+    // --- Table-Based Display ---
+    const headers = ['WORLD', 'TYPE', 'LOCKED ON', 'NOTE'];
+    const data = [headers];
 
-    // Example: PC View (adapt for phone view using userPrefs.view_mode)
-    // This is a simplified representation. Actual formatting would be more detailed.
-    let description = '';
-    if (userPrefs?.view_mode === 'phone') {
-        embed.setTitle('Your Locked Worlds (Phone)');
-        worlds.forEach(world => {
-            const noteDisplay = world.note ? ` (${world.note.substring(0, 20)}${world.note.length > 20 ? '...' : ''})` : '';
-            const lockTypeDisplay = world.lock_type === 'main' ? 'M' : 'O';
-            const lockedDate = world.locked_on_date ? new Date(world.locked_on_date).toLocaleDateString('en-CA') : 'N/A';
-            description += `\`${lockTypeDisplay}\` **${world.world_name}**${noteDisplay} - Locked: ${lockedDate}\n`;
-        });
-    } else { // PC View
-        embed.addFields(
-            { name: 'WORLD NAME', value: worlds.map(w => w.world_name).join('\n') || 'N/A', inline: true },
-            { name: 'TYPE', value: worlds.map(w => w.lock_type).join('\n') || 'N/A', inline: true },
-            { name: 'NOTE', value: worlds.map(w => w.note ? w.note.substring(0,30) + (w.note.length > 30 ? '...' : '') : 'N/A').join('\n') || 'N/A', inline: true },
-            { name: 'LOCKED ON', value: worlds.map(w => new Date(w.locked_on_date).toLocaleDateString('en-CA')).join('\n') || 'N/A', inline: true }
-        );
+    worlds.forEach(world => {
+      const worldName = world.world_name;
+      const lockType = world.lock_type;
+      const lockedOnDate = world.locked_on_date ? new Date(world.locked_on_date).toLocaleDateString('en-CA') : 'N/A';
+      const noteText = world.note || 'N/A';
+      data.push([worldName, lockType, lockedOnDate, noteText]);
+    });
+
+    const tableConfig = {
+      columns: [
+        { alignment: 'left', width: 20, wrapWord: true }, // WORLD
+        { alignment: 'left', width: 8 },  // TYPE
+        { alignment: 'left', width: 12 }, // LOCKED ON
+        { alignment: 'left', width: 25, wrapWord: true }  // NOTE
+      ],
+      border: getBorderCharacters('norc'),
+      header: {
+        alignment: 'center',
+        content: '🔒 YOUR LOCKED WORLDS'
+      }
+    };
+
+    let tableOutput = `\`\`\`\n${table(data, tableConfig)}\n\`\`\``;
+    const footerText = `\n📊 Total locked worlds: ${total} | Page ${page}/${totalPages}`;
+
+    if (tableOutput.length + footerText.length > 1990) { // Adjusted for footer and potential truncation message
+        const availableLength = 1950 - footerText.length - "\n... (Table truncated) ...```".length;
+        let cutOff = tableOutput.lastIndexOf('\n', availableLength);
+        if (cutOff === -1 || cutOff < headers.join(" | ").length) cutOff = availableLength; // Ensure header is not cut awkwardly
+        tableOutput = tableOutput.substring(0, cutOff) + "\n... (Table truncated) ...```";
     }
-    if (description) embed.setDescription(description);
 
+    const finalContent = `${tableOutput}${footerText}`;
 
     // --- Action Rows (Buttons & Select Menus) ---
     const allActionRows = [];
-
-    // Pagination Row
     const paginationRow = new ActionRowBuilder()
       .addComponents(
         new ButtonBuilder().setCustomId(`lock_pgn_p_${page}_${encodedCurrentFilters}`).setLabel('Previous').setStyle(ButtonStyle.Primary).setDisabled(page <= 1),
@@ -248,29 +298,24 @@ async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) 
       );
     allActionRows.push(paginationRow);
 
-    // Filter Row 1
-    const filterRow1 = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder().setCustomId(`lock_btn_flen_${encodedCurrentFilters}`).setLabel('Filter: Length').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`lock_btn_fprfx_${encodedCurrentFilters}`).setLabel('Filter: Prefix').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`lock_btn_ftype_${encodedCurrentFilters}`).setLabel('Filter: Type').setStyle(ButtonStyle.Secondary)
-      );
-    allActionRows.push(filterRow1);
-
-    // Filter Row 2
-    const filterRow2 = new ActionRowBuilder();
-    filterRow2.addComponents(
-        new ButtonBuilder().setCustomId(`lock_btn_fnote_${encodedCurrentFilters}`).setLabel('Filter: Note').setStyle(ButtonStyle.Secondary)
+    // Unified Filter Button Row
+    const filterActionRow = new ActionRowBuilder();
+    filterActionRow.addComponents(
+        new ButtonBuilder().setCustomId('lock_btn_main_filter_show').setLabel('🔍 Filter List').setStyle(ButtonStyle.Secondary)
     );
+    // Add Export Names button
+    filterActionRow.addComponents(
+        new ButtonBuilder().setCustomId(`lock_btn_export_names_${page}_${encodedCurrentFilters}`).setLabel('📄 Export Page Names').setStyle(ButtonStyle.Success)
+    );
+
     if (Object.keys(currentFilters).length > 0) {
-      filterRow2.addComponents(
-        new ButtonBuilder().setCustomId(`lock_btn_fclr_1`).setLabel('Clear All Filters').setStyle(ButtonStyle.Danger)
+      filterActionRow.addComponents(
+        new ButtonBuilder().setCustomId(`lock_btn_fclr`).setLabel('Clear All Filters').setStyle(ButtonStyle.Danger) // Simplified customId for clear
       );
     }
-    allActionRows.push(filterRow2);
+    allActionRows.push(filterActionRow);
 
-
-    await interaction.editReply({ embeds: [embed], components: allActionRows, ephemeral: ephemeralFlag });
+    await interaction.editReply({ content: finalContent, embeds: [], components: allActionRows, ephemeral: ephemeralFlag });
 
   } catch (error) {
     logger.error(`[LockCommand - ShowLockedWorlds] Error displaying locked worlds for user ${interaction.user.id}:`, error);
@@ -325,59 +370,40 @@ async function handleButtonCommand(interaction, customIdParts) {
     // For lock_btn_rmconfirm_encodedWorldName, encodedWorldName is at index 3
     // For lock_btn_rmcancel_0, '0' is at index 3
     const actionSpecificData = customIdParts[3] || '';
-    const currentFilters = decodeFilters(actionSpecificData); // This will be empty for rmconfirm/rmcancel if data is not filter string
+    // const currentFilters = decodeFilters(actionSpecificData); // Not needed for main_filter_show or export_names if data is page
 
-    if (actionName === 'flen') {
-      const lenModal = new ModalBuilder()
-        .setCustomId(`lock_mod_flen_${actionSpecificData}`) // actionSpecificData here is encodedFilters
-        .setTitle('Filter by World Name Length')
-        .addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder().setCustomId('min_length').setLabel('Minimum Length (Optional)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('e.g., 3')
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder().setCustomId('max_length').setLabel('Maximum Length (Optional)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('e.g., 10')
-          )
-        );
-      await interaction.showModal(lenModal);
-    } else if (actionName === 'fprfx') {
-      const prefixModal = new ModalBuilder()
-        .setCustomId(`lock_mod_fprfx_${actionSpecificData}`) // actionSpecificData here is encodedFilters
-        .setTitle('Filter by World Name Prefix')
-        .addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder().setCustomId('prefix_text').setLabel('World Name Prefix (e.g., MYWORLD)').setStyle(TextInputStyle.Short).setRequired(true)
-          )
-        );
-      await interaction.showModal(prefixModal);
-    } else if (actionName === 'ftype') {
-      const typeSelectMenu = new StringSelectMenuBuilder()
-        .setCustomId(`lock_sel_ftype_${actionSpecificData}`) // actionSpecificData here is encodedFilters
-        .setPlaceholder('Select a lock type to filter by')
-        .addOptions([
-          { label: 'Main Lock', value: 'main', description: 'Filter by Main locks' },
-          { label: 'Out Lock', value: 'out', description: 'Filter by Out locks' },
-          { label: 'Any Lock Type (Clear)', value: 'any', description: 'Show all lock types' },
-        ]);
-      const row = new ActionRowBuilder().addComponents(typeSelectMenu);
-      // Check if interaction has been replied to or deferred. If so, use followUp.
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({ content: 'Select a lock type:', components: [row], ephemeral: true });
-      } else {
-        await interaction.reply({ content: 'Select a lock type:', components: [row], ephemeral: true });
-      }
-    } else if (actionName === 'fnote') {
-      const noteModal = new ModalBuilder()
-        .setCustomId(`lock_mod_fnote_${actionSpecificData}`) // actionSpecificData here is encodedFilters
-        .setTitle('Filter by Note Content')
-        .addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder().setCustomId('note_text').setLabel('Text to find in note (case-insensitive)').setStyle(TextInputStyle.Short).setRequired(true)
-          )
-        );
-      await interaction.showModal(noteModal);
+    if (actionName === 'main_filter_show') {
+        await showLockFilterModal(interaction);
+    } else if (actionName === 'export_names') {
+        await interaction.deferReply({ ephemeral: true });
+        const pageToExport = parseInt(actionSpecificData, 10); // Here actionSpecificData is the page number from lock_btn_export_names_PAGE_filters
+        const encodedFiltersForExport = customIdParts[4] || ''; // Filters are the 5th part of customId
+        const filtersForExport = decodeFilters(encodedFiltersForExport);
+
+        const { worlds: worldsForExport } = await db.getLockedWorlds(interaction.user.id, pageToExport, CONSTANTS.PAGE_SIZE, filtersForExport);
+
+        if (!worldsForExport || worldsForExport.length === 0) {
+            await interaction.editReply({ content: 'No names to export on this page with the current filters.', ephemeral: true });
+            return;
+        }
+
+        let exportText = "```\n";
+        worldsForExport.forEach(world => {
+            exportText += `${world.world_name.toUpperCase()} (${world.lock_type})\n`;
+        });
+        exportText += "```";
+
+        if (exportText.length > 2000) {
+            let cutOff = exportText.lastIndexOf('\n', 1990);
+            if (cutOff === -1) cutOff = 1990; // Should not happen with ```
+            exportText = exportText.substring(0, cutOff) + "\n... (list truncated)```";
+        }
+        await interaction.editReply({ content: exportText, ephemeral: true });
+
+    // } else if (actionName === 'flen') { // Old individual filter button logic - commented out/removed
+    //   // ...
     } else if (actionName === 'fclr') {
-      // The customId for clear is `lock_btn_fclr_1` (data is '1')
+      // CustomId for clear is now just `lock_btn_fclr`
       await showLockedWorldsList(interaction, 1, {}); // Page 1, empty filters
     } else if (actionName === 'rmconfirm') {
       const encodedWorldNameToRemove = actionSpecificData; // This is the encoded world name
@@ -400,74 +426,90 @@ async function handleButtonCommand(interaction, customIdParts) {
 }
 
 async function handleModalSubmitCommand(interaction, customIdParts) {
-  // customIdParts: [0: 'lock', 1: 'mod', 2: modal_type, 3: encodedFilters]
+  // customIdParts: [0: 'lock', 1: 'mod', 2: modal_type, (3: potentially encodedFilters, not used by main_filter_apply)]
   const modalType = customIdParts[2];
-  const encodedFilters = customIdParts[3] || '';
-  let currentFilters = decodeFilters(encodedFilters);
+  // const encodedFilters = customIdParts[3] || ''; // Not strictly needed if main_filter_apply clears all
+  // let currentFilters = decodeFilters(encodedFilters); // Old filters not needed, modal provides all new ones
 
   logger.debug(`[LockCommand - ModalSubmit] Handling modal: ${customIdParts.join('_')}`);
 
   if (modalType === 'gotopg') {
+    const encodedFiltersForGoto = customIdParts[3] || ''; // goto still uses existing filters
+    const currentFiltersForGoto = decodeFilters(encodedFiltersForGoto);
     const pageNumberStr = interaction.fields.getTextInputValue('page_number');
     const pageNumber = parseInt(pageNumberStr, 10);
     if (!isNaN(pageNumber) && pageNumber > 0) {
-      // showLockedWorldsList will handle capping the page number if it's too high
-      await showLockedWorldsList(interaction, pageNumber, currentFilters);
+      await showLockedWorldsList(interaction, pageNumber, currentFiltersForGoto);
     } else {
       await interaction.followUp({ content: 'Invalid page number provided.', ephemeral: true });
     }
-    return; // Early return as we don't modify filters here
-  }
+    return;
+  } else if (modalType === 'main_filter_apply') {
+    await interaction.deferUpdate();
+    const newFilters = {};
 
-  // For other modals, we are setting filters
-  if (modalType === 'flen') {
-    const minLengthStr = interaction.fields.getTextInputValue('min_length');
-    const maxLengthStr = interaction.fields.getTextInputValue('max_length');
-    const minLength = minLengthStr ? parseInt(minLengthStr, 10) : null;
-    const maxLength = maxLengthStr ? parseInt(maxLengthStr, 10) : null;
+    const prefix = interaction.fields.getTextInputValue('lock_filter_prefix')?.trim();
+    if (prefix) newFilters.prefix = prefix;
 
-    currentFilters.nameLength = {};
-    if (minLength !== null && !isNaN(minLength)) currentFilters.nameLength.min = minLength;
-    if (maxLength !== null && !isNaN(maxLength)) currentFilters.nameLength.max = maxLength;
-    if (Object.keys(currentFilters.nameLength).length === 0) delete currentFilters.nameLength;
-
-  } else if (modalType === 'fprfx') {
-    const prefix = interaction.fields.getTextInputValue('prefix_text');
-    if (prefix && prefix.trim() !== '') {
-      currentFilters.prefix = prefix.trim();
-    } else {
-      delete currentFilters.prefix; // Remove if empty
+    const minLenStr = interaction.fields.getTextInputValue('lock_filter_min_len')?.trim();
+    if (minLenStr) {
+        const minLen = parseInt(minLenStr);
+        if (!isNaN(minLen) && minLen > 0) {
+            if (!newFilters.nameLength) newFilters.nameLength = {};
+            newFilters.nameLength.min = minLen;
+        }
     }
-  } else if (modalType === 'fnote') {
-    const noteText = interaction.fields.getTextInputValue('note_text');
-    if (noteText && noteText.trim() !== '') {
-      currentFilters.note = noteText.trim();
-    } else {
-      delete currentFilters.note; // Remove if empty
+    const maxLenStr = interaction.fields.getTextInputValue('lock_filter_max_len')?.trim();
+    if (maxLenStr) {
+        const maxLen = parseInt(maxLenStr);
+        if (!isNaN(maxLen) && maxLen > 0) {
+            if (!newFilters.nameLength) newFilters.nameLength = {};
+            newFilters.nameLength.max = maxLen;
+        }
     }
-  }
 
-  await showLockedWorldsList(interaction, 1, currentFilters); // Go to page 1 with new filters
+    const lockType = interaction.fields.getTextInputValue('lock_filter_type')?.trim().toLowerCase();
+    if (lockType && (lockType === 'main' || lockType === 'out')) {
+        newFilters.lockType = lockType;
+    }
+
+    const note = interaction.fields.getTextInputValue('lock_filter_note')?.trim();
+    if (note) newFilters.note = note;
+
+    logger.info(`[LockCommand - ModalSubmit] Applying new filters: ${JSON.stringify(newFilters)}`);
+    await showLockedWorldsList(interaction, 1, newFilters);
+    return;
+  }
+  // Commenting out old individual filter modal handlers:
+  // if (modalType === 'flen') { ... }
+  // else if (modalType === 'fprfx') { ... }
+  // else if (modalType === 'fnote') { ... }
+
+  // If an old modal type that's no longer handled is submitted, it might fall through.
+  // Or, explicitly acknowledge and ask user to use new filter button if necessary.
+  logger.warn(`[LockCommand - ModalSubmit] Unhandled or deprecated modal type: ${modalType}`);
+  // await showLockedWorldsList(interaction, 1, currentFilters); // Or reshow with old filters if any
 }
 
 async function handleSelectMenuCommand(interaction, customIdParts) {
   // customIdParts: [0: 'lock', 1: 'sel', 2: select_type, 3: encodedFilters]
-  const selectType = customIdParts[2];
-  const encodedFilters = customIdParts[3] || '';
-  let currentFilters = decodeFilters(encodedFilters);
+  // const selectType = customIdParts[2];
+  // const encodedFilters = customIdParts[3] || '';
+  // let currentFilters = decodeFilters(encodedFilters);
 
-  logger.debug(`[LockCommand - SelectMenu] Handling select menu: ${customIdParts.join('_')}`);
+  // logger.debug(`[LockCommand - SelectMenu] Handling select menu: ${customIdParts.join('_')}`);
 
-  if (selectType === 'ftype') {
-    const selectedValue = interaction.values[0]; // Get the selected value from the menu
-    if (selectedValue === 'any') {
-      delete currentFilters.lockType; // Clear the lockType filter
-    } else {
-      currentFilters.lockType = selectedValue; // Set it to 'main' or 'out'
-    }
-  }
-
-  await showLockedWorldsList(interaction, 1, currentFilters); // Go to page 1 with new filters
+  // if (selectType === 'ftype') { // This select menu is removed
+  //   const selectedValue = interaction.values[0];
+  //   if (selectedValue === 'any') {
+  //     delete currentFilters.lockType;
+  //   } else {
+  //     currentFilters.lockType = selectedValue;
+  //   }
+  // }
+  // await showLockedWorldsList(interaction, 1, currentFilters);
+  logger.info(`[LockCommand - SelectMenu] Received select menu interaction, but 'ftype' (Filter by Type) is now part of the main filter modal: ${interaction.customId}`);
+  await interaction.reply({content: "Filter by Type is now part of the main '🔍 Filter List' modal. Please use that button.", ephemeral: true });
 }
 
 module.exports.handleButtonCommand = handleButtonCommand;
