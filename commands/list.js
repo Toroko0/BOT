@@ -10,7 +10,7 @@ const logger = require('../utils/logger.js');
 const { table, getBorderCharacters } = require('table');
 const { showWorldInfo, showEditWorldModal } = require('./info.js');
 const CONSTANTS = require('../utils/constants.js');
-const { showSearchModal } = require('./search.js');
+// const { showSearchModal } = require('./search.js'); // Keep if still used elsewhere, or remove if fully replaced
 const { show179WorldsList } = require('./179.js');
 const { showLockedWorldsList } = require('./lock.js');
 
@@ -71,9 +71,58 @@ async function showAddWorldModal(interaction) {
     await interaction.reply({ content: "Please use the `/addworld` command to add a new world.", ephemeral: true }); // Changed to ephemeral
 }
 
+async function showListFilterModal(interaction, currentListType) {
+  const modal = new ModalBuilder()
+    .setCustomId(`list_modal_filter_apply_${currentListType}`) // Page info removed, filter applies from page 1
+    .setTitle('Filter Worlds List');
+
+  const prefixInput = new TextInputBuilder()
+    .setCustomId('filter_prefix')
+    .setLabel('World Name Prefix (Optional)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false);
+
+  const nameLengthMinInput = new TextInputBuilder()
+    .setCustomId('filter_name_length_min')
+    .setLabel('Min Name Length (Optional, Number)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false);
+    // .setType(TextInputType.Number); // Not a valid method for TextInputBuilder, type is inferred or validated later
+
+  const nameLengthMaxInput = new TextInputBuilder()
+    .setCustomId('filter_name_length_max')
+    .setLabel('Max Name Length (Optional, Number)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false);
+
+  const expiryDayInput = new TextInputBuilder()
+    .setCustomId('filter_expiry_day')
+    .setLabel('Day of Expiry (e.g., Monday, Optional)')
+    .setPlaceholder('Full day name, case-insensitive')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false);
+
+  const daysOwnedInput = new TextInputBuilder()
+    .setCustomId('filter_days_owned')
+    .setLabel('Days Owned (Number, 0-180, Optional)')
+    .setPlaceholder('0 for worlds expiring in 180 days')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(prefixInput),
+    new ActionRowBuilder().addComponents(nameLengthMinInput),
+    new ActionRowBuilder().addComponents(nameLengthMaxInput),
+    new ActionRowBuilder().addComponents(expiryDayInput),
+    new ActionRowBuilder().addComponents(daysOwnedInput)
+  );
+
+  await interaction.showModal(modal);
+}
+
 
 // --- Core List Display Function ---
-async function showWorldsList(interaction, type = 'private', page = 1) {
+async function showWorldsList(interaction, type = 'private', page = 1, currentFilters = null) { // Added currentFilters
   let userPrefs = await db.getUserPreferences(interaction.user.id);
   if (!userPrefs) {
       userPrefs = { timezone_offset: 0.0, view_mode: 'pc', reminder_enabled: false, reminder_time_utc: null };
@@ -84,7 +133,7 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
   const userTeam = await db.getUserTeam(interaction.user.id); // Fetch user's team status
 
   logger.debug(`[list.js] User ID ${interaction.user.id} - Prefs: viewMode=${viewMode}, timezoneOffset=${timezoneOffset}, Team: ${userTeam ? userTeam.name : 'None'}`);
-  logger.info(`[list.js] showWorldsList called - Type: ${type}, Page: ${page}, Guild: ${interaction.guildId || 'DM'}, Component: ${interaction.isMessageComponent()}`);
+  logger.info(`[list.js] showWorldsList called - Type: ${type}, Page: ${page}, Guild: ${interaction.guildId || 'DM'}, Filters: ${JSON.stringify(currentFilters)}, Component: ${interaction.isMessageComponent()}`);
 
   const isUpdate = interaction.isMessageComponent() || interaction.type === InteractionType.ModalSubmit;
 
@@ -103,13 +152,29 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
 
   let dbResult = { worlds: [], total: 0 };
   try {
-    if (type === 'public') {
-      if (interaction.guildId) { dbResult = await db.getPublicWorldsByGuild(interaction.guildId, page, CONSTANTS.PAGE_SIZE); }
+    if (currentFilters && Object.keys(currentFilters).length > 0) {
+      logger.info(`[list.js] Fetching filtered worlds. Filters: ${JSON.stringify(currentFilters)}, Type: ${type}, Page: ${page}`);
+      const userIdForDb = type === 'private' ? interaction.user.id : null;
+      // Pass guildId in filters object for getFilteredWorlds to use
+      const filtersWithGuild = { ...currentFilters, guildId: type === 'public' ? interaction.guildId : null };
+      dbResult = await db.getFilteredWorlds(userIdForDb, filtersWithGuild, page, CONSTANTS.PAGE_SIZE);
     } else {
-      dbResult = await db.getWorlds(interaction.user.id, page, CONSTANTS.PAGE_SIZE);
+      // Original logic if no filters are applied
+      if (type === 'public') {
+        if (interaction.guildId) {
+          dbResult = await db.getPublicWorldsByGuild(interaction.guildId, page, CONSTANTS.PAGE_SIZE);
+        } else {
+          // Public list requested but not in a guild, should be handled (e.g. show error or empty)
+          // For now, it will result in empty list by getPublicWorldsByGuild if guildId is null
+           dbResult = { worlds: [], total: 0 }; // Explicitly set empty
+           logger.warn('[list.js] Public list requested outside of a guild context without filters.');
+        }
+      } else { // type === 'private'
+        dbResult = await db.getWorlds(interaction.user.id, page, CONSTANTS.PAGE_SIZE);
+      }
     }
   } catch (error) {
-    logger.error(`[list.js] Error fetching worlds:`, error?.stack || error);
+    logger.error(`[list.js] Error fetching worlds (Filters: ${JSON.stringify(currentFilters)}):`, error?.stack || error);
     const errorContent = '❌ Sorry, I couldn\'t fetch the worlds list.';
     const opts = { content: errorContent, components: [], embeds: [], ephemeral: true };
     try { 
@@ -220,7 +285,7 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
 
   const navRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`list_button_prev_${type}_${page}`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Primary).setDisabled(page <= 1),
-      new ButtonBuilder().setCustomId(`list_button_page_${type}_${page}`).setLabel(`Page ${page}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
+      new ButtonBuilder().setCustomId(`list_button_page_${type}_${page}`).setLabel(`Page ${page}/${totalPages}${currentFilters ? ' (Filtered)' : ''}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
       new ButtonBuilder().setCustomId(`list_button_next_${type}_${page}`).setLabel('Next ➡️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages),
       new ButtonBuilder().setCustomId(`list_button_goto_${type}`).setLabel('Go to').setStyle(ButtonStyle.Secondary)
   );
@@ -234,9 +299,13 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
           new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary),
           new ButtonBuilder().setCustomId('list_btn_lockworld').setLabel('🔒 Lock').setStyle(ButtonStyle.Secondary)
       );
-  } else {
+  } else { // public
       actionRow1.addComponents(new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary));
   }
+  // Add Export Names button to actionRow1 for both private and public lists
+  actionRow1.addComponents(
+      new ButtonBuilder().setCustomId(`list_button_export_names_${type}_${page}`).setLabel('📄 Export Page Names').setStyle(ButtonStyle.Secondary)
+  );
   if (actionRow1.components.length > 0) components.push(actionRow1);
 
   const actionRow2 = new ActionRowBuilder();
@@ -248,11 +317,11 @@ async function showWorldsList(interaction, type = 'private', page = 1) {
       );
   }
   actionRow2.addComponents(
-      new ButtonBuilder().setCustomId('list_button_search').setLabel('🔍 Search').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`list_button_filter_show_${type}`).setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary), // Changed ID and Label
       new ButtonBuilder().setCustomId('list_button_opensettings').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('list_btn_viewlocks').setLabel('🔐 View Locks').setStyle(ButtonStyle.Primary)
   );
-   actionRow2.addComponents(new ButtonBuilder().setCustomId('list_button_179days').setLabel('⏳ 179 Days').setStyle(ButtonStyle.Secondary));
+   // list_button_179days was removed.
   if (userTeam && type === 'private') { // Add View Team List button if user is in a team and viewing their private list
         actionRow2.addComponents(new ButtonBuilder().setCustomId('list_btn_view_team_list').setLabel('🏢 View Team List').setStyle(ButtonStyle.Secondary));
   }
@@ -316,7 +385,15 @@ module.exports = {
             case 'info': await showInfoWorldModal(interaction); break;
             case 'share': await showShareWorldModal(interaction, true); break;
             case 'unshare': await showShareWorldModal(interaction, false); break;
-            case 'search': await showSearchModal(interaction); break;
+            // case 'search': await showSearchModal(interaction); break; // Old search button functionality
+            case 'search': // Re-route old search ID to new filter modal
+            case 'filter_show': { // New button for showing filters
+                // Params for list_button_filter_show_TYPE might be [ "filter_show", "private" ]
+                // The 'type' is the current list type being viewed.
+                const listType = params[1] || 'private';
+                await showListFilterModal(interaction, listType);
+                break;
+            }
             case 'addworld_button_show': await showAddWorldModal(interaction); break;
             case 'opensettings':
                 if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ ephemeral: true });
@@ -338,6 +415,45 @@ module.exports = {
             case 'view_team_list': // Handler for the new button
                 await interaction.reply({ content: "Use `/team list` to view your team's worlds.", ephemeral: true });
                 break;
+            case 'export_names': {
+                await interaction.deferReply({ ephemeral: true });
+                const listType = params[1] || 'private';
+                const listPage = parseInt(params[2]) || 1;
+                let dbResultExport;
+
+                if (listType === 'public') {
+                    if (!interaction.guildId) {
+                        await interaction.editReply({ content: 'Public worlds can only be exported from within a server.', ephemeral: true });
+                        return;
+                    }
+                    dbResultExport = await db.getPublicWorldsByGuild(interaction.guildId, listPage, CONSTANTS.PAGE_SIZE);
+                } else { // private
+                    dbResultExport = await db.getWorlds(interaction.user.id, listPage, CONSTANTS.PAGE_SIZE);
+                }
+
+                const worldsForExport = dbResultExport.worlds || [];
+
+                if (worldsForExport.length === 0) {
+                    await interaction.editReply({ content: 'No names to export on this page.', ephemeral: true });
+                    return;
+                }
+
+                let exportText = "```\n";
+                worldsForExport.forEach(world => {
+                    const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L'; // Default to 'L' if lock_type is null/undefined
+                    const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
+                    exportText += `(${lockChar}) ${world.name.toUpperCase()}${customIdPart}\n`;
+                });
+                exportText += "```";
+
+                if (exportText.length > 2000) {
+                    let cutOff = exportText.lastIndexOf('\n', 1990);
+                    if (cutOff === -1) cutOff = 1990;
+                    exportText = exportText.substring(0, cutOff) + "\n... (list truncated)```";
+                }
+                await interaction.editReply({ content: exportText, ephemeral: true });
+                break;
+            }
             default: 
                 logger.warn(`[list.js] Unknown list button action: ${action}`); 
                 if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
@@ -383,23 +499,26 @@ module.exports = {
     // Let's assume params from interactionHandler is customId.split('_').slice(2) for modals
     // So, for list_modal_goto_private -> params = ["goto", "private"]
     // For list_modal_lock_confirm_123 -> params = ["lock", "confirm", "123"]
+    // For list_modal_filter_apply_private -> params = ["filter", "apply", "private"]
 
     let action = params[0];
     let dataParams = params.slice(1); // Default: action arguments start from params[1]
 
-    // Handle composite actions like "lock_getname" or "lock_confirm"
-    // These would have params like ["lock", "getname"] or ["lock", "confirm", "worldId"]
-    if (action === 'lock' && params.length > 1 && (params[1] === 'getname' || params[1] === 'confirm')) {
-      action = `${params[0]}_${params[1]}`; // e.g., "lock_getname", "lock_confirm"
-      dataParams = params.slice(2); // Arguments for these composite actions start from params[2]
+    // Handle composite actions
+    if (params[0] === 'lock' && params.length > 1 && (params[1] === 'getname' || params[1] === 'confirm')) {
+      action = `${params[0]}_${params[1]}`;
+      dataParams = params.slice(2);
+    } else if (params[0] === 'filter' && params.length > 1 && params[1] === 'apply') {
+      action = `${params[0]}_${params[1]}`; // "filter_apply"
+      dataParams = params.slice(2); // dataParams will contain [currentListType]
     }
-    // For other actions like 'goto', 'remove', etc., action remains params[0] and dataParams are params.slice(1)
+    // For other simple actions like 'goto', 'remove', etc., action remains params[0] and dataParams are params.slice(1)
 
     logger.info(`[list.js] Modal Submitted: derived_action=${action}, raw_params_for_handler='${params.join('_')}', customId=${interaction.customId}`);
     try {
       switch(action) {
         case 'goto': { 
-            const type = dataParams[0] || 'private'; // Was params[1]
+            const currentListType = dataParams[0] || 'private'; // Was params[1]
             const pageInput = interaction.fields.getTextInputValue('page_number'); 
             const pageNumber = parseInt(pageInput); 
             if (isNaN(pageNumber) || pageNumber < 1) { 
@@ -407,8 +526,42 @@ module.exports = {
                 return; 
             } 
             await interaction.deferUpdate(); 
-            await showWorldsList(interaction, type, pageNumber);
+            // When using goto, filters are cleared (showWorldsList called without currentFilters)
+            await showWorldsList(interaction, currentListType, pageNumber, null);
             break; 
+        }
+        case 'filter_apply': {
+            await interaction.deferUpdate();
+            const currentListType = dataParams[0] || 'private'; // Type of list being filtered (private/public)
+
+            const filtersToApply = {};
+            const prefix = interaction.fields.getTextInputValue('filter_prefix')?.trim() || null;
+            if (prefix) filtersToApply.prefix = prefix;
+
+            const nameLengthMinStr = interaction.fields.getTextInputValue('filter_name_length_min')?.trim();
+            if (nameLengthMinStr) {
+                const nameLengthMin = parseInt(nameLengthMinStr);
+                if (!isNaN(nameLengthMin)) filtersToApply.nameLengthMin = nameLengthMin;
+            }
+
+            const nameLengthMaxStr = interaction.fields.getTextInputValue('filter_name_length_max')?.trim();
+            if (nameLengthMaxStr) {
+                const nameLengthMax = parseInt(nameLengthMaxStr);
+                if (!isNaN(nameLengthMax)) filtersToApply.nameLengthMax = nameLengthMax;
+            }
+
+            const expiryDay = interaction.fields.getTextInputValue('filter_expiry_day')?.trim() || null;
+            if (expiryDay) filtersToApply.expiryDay = expiryDay.toLowerCase();
+
+            const daysOwnedStr = interaction.fields.getTextInputValue('filter_days_owned')?.trim();
+            if (daysOwnedStr) {
+                const daysOwned = parseInt(daysOwnedStr);
+                if (!isNaN(daysOwned)) filtersToApply.daysOwned = daysOwned;
+            }
+
+            logger.info(`[list.js] Applying filters for list type ${currentListType}: ${JSON.stringify(filtersToApply)}`);
+            await showWorldsList(interaction, currentListType, 1, filtersToApply); // Filtered search always goes to page 1
+            break;
         }
         case 'lock_getname': { // This action itself doesn't use dataParams, it leads to another modal
             const worldNameInput = interaction.fields.getTextInputValue('worldname_to_lock').trim();
