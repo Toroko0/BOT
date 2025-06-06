@@ -704,7 +704,7 @@ module.exports = {
             const success = await db.updateWorldVisibility(world.id, interaction.user.id, makePublic, guildToSet);
             if (success) { 
                 await require('./search.js').invalidateSearchCache(); 
-                await require('./utils/share_and_history.js').logHistory(world.id, interaction.user.id, action, `World ${world.name.toUpperCase()} ${action}d in guild ${interaction.guildId}`); 
+                await require('../utils/share_and_history.js').logHistory(world.id, interaction.user.id, action, `World ${world.name.toUpperCase()} ${action}d in guild ${interaction.guildId}`);
                 const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('list_button_view_private_1').setLabel('View My Worlds').setStyle(ButtonStyle.Primary));
                 await interaction.reply({ content: `✅ **${world.name.toUpperCase()}** is now ${makePublic ? 'public in this server' : 'private'}.`, components: [row], ephemeral: true });
             } else { 

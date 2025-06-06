@@ -10,6 +10,7 @@ const {
     StringSelectMenuBuilder,
     InteractionType,
 } = require('discord.js');
+const { table, getBorderCharacters } = require('table');
 const db = require('../database.js');
 const logger = require('../utils/logger.js');
 
@@ -223,14 +224,59 @@ async function handleMarketBrowse(interaction, page = 1, isButtonOrSelect = fals
             listings = result.listings; total = result.total;
         }
 
-        const embed = formatListingsForEmbed(listings, 'Marketplace Listings', page, totalPages, interaction.client);
+        if (!listings || listings.length === 0) {
+            const emptyContent = `Page ${page}/${totalPages}\nNo listings found on the market.\nWorld Watcher Market`;
+            await replyMethod({ content: emptyContent, components: [], ephemeral: false });
+            return;
+        }
+
+        const headers = ['ID', 'WORLD', 'PRICE (DLs)', 'SELLER', 'NOTE', 'LOCK TYPE', 'LISTED'];
+        const data = [headers];
+
+        listings.forEach(l => {
+            data.push([
+                l.listing_id.toString(),
+                l.world_name,
+                l.price_dl.toString(),
+                l.seller_display_name || 'Unknown',
+                l.listing_note || '-',
+                l.lock_type || 'N/A',
+                new Date(l.listed_on_date).toLocaleDateString()
+            ]);
+        });
+
+        const config = {
+            columns: [
+                { alignment: 'right', width: 5 }, // ID
+                { alignment: 'left', width: 15, wrapWord: true }, // WORLD
+                { alignment: 'right', width: 10 }, // PRICE (DLs)
+                { alignment: 'left', width: 15, wrapWord: true }, // SELLER
+                { alignment: 'left', width: 20, wrapWord: true }, // NOTE
+                { alignment: 'center', width: 10 }, // LOCK TYPE
+                { alignment: 'left', width: 10 }  // LISTED
+            ],
+            border: getBorderCharacters('norc'),
+            header: {
+                alignment: 'center',
+                content: 'Marketplace Listings',
+            }
+        };
+
+        let tableOutput = '```\n' + table(data, config) + '\n```';
+        if (tableOutput.length > 1900) { // Check if too long for Discord message, leave room for page info
+            let cutOff = tableOutput.lastIndexOf('\n', 1850);
+            if (cutOff === -1) cutOff = 1850;
+            tableOutput = tableOutput.substring(0, cutOff) + '\n... (Table truncated) ...```';
+        }
+
+        const finalContent = `Page ${page}/${totalPages}\n${tableOutput}\nWorld Watcher Market`;
         const components = total > ITEMS_PER_PAGE_MARKET ? [createPaginationRow(page, totalPages, 'market:browse')] : [];
 
-        await replyMethod({ embeds: [embed], components, ephemeral: false });
+        await replyMethod({ content: finalContent, components, ephemeral: false });
 
     } catch (error) {
         logger.error('[MarketCmd] Error browsing market:', error);
-        await replyMethod({ content: '❌ Error fetching market listings.', ephemeral: true, embeds: [], components: [] });
+        await replyMethod({ content: '❌ Error fetching market listings.', ephemeral: true, components: [] });
     }
 }
 

@@ -10,6 +10,7 @@ const {
     UserSelectMenuBuilder, // For selecting users if needed, otherwise parse UserOption
     InteractionType
 } = require('discord.js'); // Corrected import for v14
+const { table, getBorderCharacters } = require('table');
 const db = require('../database.js');
 const logger = require('../utils/logger.js');
 
@@ -236,13 +237,52 @@ async function handleTeamList(interaction, userId, userTeam, page = 1, isButton 
             const result = await db.getTeamWorlds(userTeam.id, page, WORLDS_PER_PAGE_TEAM);
             worlds = result.worlds; total = result.total;
         }
-        const embed = new EmbedBuilder().setTitle(`🌍 Team ${userTeam.name}'s Worlds (Page ${page}/${totalPages})`).setColor(0x3498DB);
-        if (worlds.length === 0) embed.setDescription("No worlds tracked yet.");
-        else worlds.forEach(w => embed.addFields({ name: `📍 ${w.world_name.toUpperCase()}`, value: `Days Left: **${w.days_left}**\nNote: ${w.note || '-'}\nAdded by: ${w.added_by_display_name} (<t:${Math.floor(new Date(w.added_date).getTime()/1000)}:R>)`}));
-        if(totalPages > 0) embed.setFooter({ text: `Page ${page} of ${totalPages}` });
+        if (worlds.length === 0) {
+            await replyMethod({ content: "No worlds tracked by the team yet.", components: [], ephemeral: true });
+            return;
+        }
+
+        const headers = ['WORLD', 'DAYS LEFT', 'NOTE', 'ADDED BY'];
+        const data = [headers];
+
+        worlds.forEach(w => {
+            const world_name = w.world_name || 'N/A';
+            const days_left_value = w.days_left !== null ? w.days_left.toString() : 'N/A';
+            const note_value = w.note || '-';
+            // Ensure added_by_display_name is fetched or use a placeholder
+            const added_by_value = w.added_by_display_name || (w.added_by_username || 'Unknown');
+            data.push([world_name.toUpperCase(), days_left_value, note_value, added_by_value]);
+        });
+
+        const config = {
+            columns: [
+                { alignment: 'left', width: 15, wrapWord: true }, // WORLD
+                { alignment: 'right', width: 10 }, // DAYS LEFT
+                { alignment: 'left', width: 20, wrapWord: true }, // NOTE
+                { alignment: 'left', width: 15, wrapWord: true }  // ADDED BY
+            ],
+            border: getBorderCharacters('norc'),
+            header: {
+                alignment: 'center',
+                content: `Team ${userTeam.name}'s Worlds`,
+            }
+        };
+
+        let tableOutput = '```\n' + table(data, config) + '\n```';
+        if (tableOutput.length > 1950) { // Check if too long for Discord message
+            let cutOff = tableOutput.lastIndexOf('\n', 1900);
+            if (cutOff === -1) cutOff = 1900;
+            tableOutput = tableOutput.substring(0, cutOff) + '\n... (Table truncated) ...```';
+        }
+
+        const finalContent = `Page ${page}/${totalPages}\n${tableOutput}`;
         const components = total > WORLDS_PER_PAGE_TEAM ? [createTeamWorldPaginationRow(page, totalPages, userTeam.id)] : [];
-        await replyMethod({ embeds: [embed], components, ephemeral: true });
-    } catch (e) { logger.error(e); await replyMethod({ content: '❌ Error fetching team worlds.', ephemeral: true }); }
+
+        await replyMethod({ content: finalContent, components, ephemeral: true });
+    } catch (e) {
+        logger.error('[team.js] Error in handleTeamList:', e);
+        await replyMethod({ content: '❌ Error fetching team worlds.', components:[], ephemeral: true });
+    }
 }
 
 async function handleTeamAddWorld(interaction, userId, userTeam) {
