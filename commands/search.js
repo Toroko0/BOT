@@ -50,10 +50,10 @@ async function performSearch(interaction, filters) {
 
   // Defer if not already handled
   if (!isUpdate) {
-    try { await interaction.deferReply(replyOpts); }
+    try { await interaction.deferReply(replyOpts); } // replyOpts already has flags
     catch (error) { logger.error("[search.js] Failed defer reply for search:", error); return; }
   } else if (interaction.isMessageComponent() && !interaction.deferred) {
-      try { await interaction.deferUpdate(replyOpts); }
+      try { await interaction.deferUpdate(); } // replyOpts (flags) not applicable to deferUpdate
       catch (error) { logger.error("[search.js] Failed defer update for search component:", error); return; }
   }
 
@@ -68,10 +68,11 @@ async function performSearch(interaction, filters) {
       await displaySearchResults(interaction, filters, firstPageWorlds, totalMatchingWorlds, 1, true);
   } catch (dbError) {
        logger.error("[search.js] Error performing search query:", dbError);
-       const errorOptions = { ...replyOpts, content: "❌ An error occurred while searching.", components: [] };
+       const errorOptionsReply = { content: "❌ An error occurred while searching.", components: [], flags: 1 << 6 };
+       const errorOptionsEdit = { content: "❌ An error occurred while searching.", components: [] };
        try {
-           if (interaction.deferred || interaction.replied) await interaction.editReply(errorOptions);
-           else await interaction.reply(errorOptions); // Fallback
+           if (interaction.deferred || interaction.replied) await interaction.editReply(errorOptionsEdit);
+           else await interaction.reply(errorOptionsReply);
        } catch (replyError) { logger.error("[search.js] Failed to send search error reply:", replyError); }
   }
 }
@@ -79,12 +80,11 @@ async function performSearch(interaction, filters) {
 // Function to display search results in a paginated table
 async function displaySearchResults(interaction, filters, currentPageWorlds, totalWorlds, page = 1, isUpdate = false) {
   const PAGE_SIZE = CONSTANTS.PAGE_SIZE;
-  // totalWorlds is now a parameter
   const totalPages = Math.ceil(totalWorlds / PAGE_SIZE) || 1;
-  page = Math.max(1, Math.min(page, totalPages)); // Ensure page is still valid, esp. if totalWorlds is 0
-  const replyOpts = { flags: 1 << 6, fetchReply: true };
+  page = Math.max(1, Math.min(page, totalPages));
+  const replyOpts = { flags: 1 << 6 }; // fetchReply: true removed
 
-  // currentPageWorlds is now a parameter, no need to slice 'worlds'
+  // currentPageWorlds is now a parameter
   // const startIdx = (page - 1) * PAGE_SIZE;
   // const endIdx = startIdx + PAGE_SIZE;
   // const currentPageWorlds = worlds.slice(startIdx, endIdx);
@@ -205,15 +205,21 @@ module.exports = {
     const currentPage = parseInt(params[1] || '1');
     const replyOpts = { flags: 1 << 6 };
     const cooldown = utils.checkCooldown(interaction.user.id, 'search_btn', 1);
-    if (cooldown.onCooldown) { await interaction.reply({ ...replyOpts, content: `⏱️ Wait ${cooldown.timeLeft}s.` }); return; }
+    if (cooldown.onCooldown) { await interaction.reply({ content: `⏱️ Wait ${cooldown.timeLeft}s.`, flags: 1 << 6 }); return; } // Used flags directly
     logger.debug(`[search.js] Button action: ${action}, page: ${currentPage}, customId: ${interaction.customId}`);
 
-    if (action === 'new') { await showSearchModal(interaction); return; } // Show modal for new search
+    if (action === 'new') { await showSearchModal(interaction); return; }
 
     const cacheKey = interaction.message?.id;
-    if (!cacheKey) { logger.warn("[search.js] No message ID for cache key."); await interaction.reply({ ...replyOpts, content: "❌ Cannot retrieve search results." }); return; }
+    if (!cacheKey) { logger.warn("[search.js] No message ID for cache key."); await interaction.reply({ content: "❌ Cannot retrieve search results.", flags: 1 << 6 }); return; } // Used flags directly
     const cachedData = searchCache.get(cacheKey);
-    if (!cachedData) { logger.warn(`[search.js] Cache miss for key: ${cacheKey}`); await interaction.update({ content: "Search results expired. Please search again.", components: [], embeds: [], flags: 1 << 6 }); return; }
+    if (!cachedData) {
+        logger.warn(`[search.js] Cache miss for key: ${cacheKey}`);
+        // interaction.update is for components, use editReply for message content.
+        // Ephemerality is inherited if the original reply was ephemeral.
+        await interaction.editReply({ content: "Search results expired. Please search again.", components: [], embeds: [] });
+        return;
+    }
 
     const { filters: cachedFilters, totalWorlds: cachedTotalWorlds } = cachedData;
     let targetPage = currentPage;
@@ -232,31 +238,27 @@ module.exports = {
     } else if (action === 'page') {
         await interaction.deferUpdate(); return;
     } else if (action === 'export_all') {
-        await interaction.deferReply({ ephemeral: true });
-        const cacheKeyForExport = interaction.message?.id; // Re-fetch cache key as it's a new interaction context
+        await interaction.deferReply({ flags: 1 << 6 }); // ephemeral: true -> flags
+        const cacheKeyForExport = interaction.message?.id;
         if (!cacheKeyForExport) {
              logger.warn("[search.js] Export All: No message ID for cache key.");
-             await interaction.editReply({ content: "❌ Cannot retrieve search session for export."});
+             await interaction.editReply({ content: "❌ Cannot retrieve search session for export."}); // Ephemeral inherited
              return;
         }
         const cachedDataForExport = searchCache.get(cacheKeyForExport);
         if (!cachedDataForExport || !cachedDataForExport.filters) {
             logger.warn(`[search.js] Export All: Cache miss or no filters for key: ${cacheKeyForExport}`);
-            await interaction.editReply({ content: "Search session expired or filters not found. Please perform a new search to export.", components: []});
+            await interaction.editReply({ content: "Search session expired or filters not found. Please perform a new search to export.", components: []}); // Ephemeral inherited
             return;
         }
         const { filters: exportFilters } = cachedDataForExport;
 
-        // Add guildId to filters if it was a public search context (original filters might not have it if it was a private search)
-        // This relies on the search context being implicitly private unless filters.showPublic was true.
-        // The original `performSearch` adds `filters.guildId` if `filters.showPublic` is true.
-        // `getAllFilteredWorlds` expects `filters.guildId` for public, and `userId` for private.
-        const userIdForExport = interaction.user.id; // getAllFilteredWorlds needs userId for private searches
+        const userIdForExport = interaction.user.id;
 
         const allMatchingWorlds = await db.getAllFilteredWorlds(userIdForExport, exportFilters);
 
         if (!allMatchingWorlds || allMatchingWorlds.length === 0) {
-            await interaction.editReply({ content: 'No names to export for the current filters.', ephemeral: true });
+            await interaction.editReply({ content: 'No names to export for the current filters.'}); // Ephemeral inherited
             return;
         }
 
@@ -273,12 +275,12 @@ module.exports = {
             if (cutOff === -1) cutOff = 1990;
             exportText = exportText.substring(0, cutOff) + "\n... (list truncated)```";
         }
-        await interaction.editReply({ content: exportText, ephemeral: true });
-        return; // End export_all logic
+        await interaction.editReply({ content: exportText }); // Ephemeral inherited
+        return;
 
     } else {
         logger.warn(`[search.js] Unknown search button action: ${action}`);
-        await interaction.reply({ ...replyOpts, content: "Unknown search action." }); return;
+        await interaction.reply({ content: "Unknown search action.", flags: 1 << 6 }); return;  // Used flags directly
     }
 
     if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();

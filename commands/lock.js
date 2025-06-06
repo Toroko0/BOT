@@ -53,7 +53,7 @@ module.exports = {
 
       // Validate world name (e.g., no spaces)
       if (worldNameInput.includes(' ')) {
-        await interaction.reply({ content: '❌ World names cannot contain spaces.', ephemeral: true });
+        await interaction.reply({ content: '❌ World names cannot contain spaces.', flags: 1 << 6 });
         return;
       }
       const worldName = worldNameInput.toUpperCase().trim();
@@ -64,60 +64,52 @@ module.exports = {
         if (result.success) {
           await interaction.reply({
             content: `✅ World **${worldName}** (Type: ${lockTypeInput}, Note: ${noteInput ? noteInput : 'N/A'}) added to your Locks list.`,
-            ephemeral: true
+            flags: 1 << 6
           });
         } else {
           // Check for specific message content if db.addLockedWorld provides it
           if (result.message && (result.message.toLowerCase().includes('already') || result.message.toLowerCase().includes('in your locked list'))) {
-            await interaction.reply({ content: `❌ World **${worldName}** is already in your Locks list.`, ephemeral: true });
+            await interaction.reply({ content: `❌ World **${worldName}** is already in your Locks list.`, flags: 1 << 6 });
           } else {
-            await interaction.reply({ content: '❌ An error occurred while adding the world to your locks. Please try again.', ephemeral: true });
+            await interaction.reply({ content: '❌ An error occurred while adding the world to your locks. Please try again.', flags: 1 << 6 });
           }
         }
       } catch (error) {
         logger.error(`[LockCommand - Add] Error executing /lock add for user ${interaction.user.id} with world ${worldName}:`, error);
-        // Check if interaction has already been replied to or deferred
         if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: '❌ An unexpected error occurred. Please try again later.', ephemeral: true });
+            await interaction.reply({ content: '❌ An unexpected error occurred. Please try again later.', flags: 1 << 6 });
         } else {
-            // If already replied/deferred, try to follow up if possible, or just log
-            // For ephemeral messages, a followUp is also ephemeral
-            await interaction.followUp({ content: '❌ An unexpected error occurred. Please try again later.', ephemeral: true }).catch(e => logger.error(`[LockCommand - Add] Error sending follow-up after initial error for ${interaction.user.id}:`, e));
+            await interaction.followUp({ content: '❌ An unexpected error occurred. Please try again later.', flags: 1 << 6 }).catch(e => logger.error(`[LockCommand - Add] Error sending follow-up after initial error for ${interaction.user.id}:`, e));
         }
       }
     } else if (subcommand === 'view') {
       await showLockedWorldsList(interaction, 1, {});
     } else if (subcommand === 'remove') {
       const worldNameInput = interaction.options.getString('worldname').trim();
-      const worldNameUpper = worldNameInput.toUpperCase(); // DB stores world_name in uppercase
+      const worldNameUpper = worldNameInput.toUpperCase();
 
       try {
-        // findLockedWorldByName should return the world object including its id
         const world = await db.findLockedWorldByName(interaction.user.id, worldNameUpper);
 
         if (!world) {
-          await interaction.reply({ content: `❌ World "**${worldNameInput}**" not found in your Locks list.`, ephemeral: true });
+          await interaction.reply({ content: `❌ World "**${worldNameInput}**" not found in your Locks list.`, flags: 1 << 6 });
           return;
         }
-
-        // Using world.world_name (which is already uppercased from DB) for the button ID.
-        // This assumes world_name is not excessively long to break 100 char customId limit after encoding.
-        // Using world.id would be safer if db.removeLockedWorld could take an ID.
         const worldNameToEncode = world.world_name;
         const encodedWorldName = Buffer.from(worldNameToEncode).toString('base64url');
 
         if (`lock_btn_rmconfirm_${encodedWorldName}`.length > 100) {
             logger.error(`[LockCommand - RemoveSubcommand] Encoded world name for custom ID is too long: ${worldNameToEncode}`);
-            await interaction.reply({ content: '❌ Could not create removal confirmation due to world name length. Please contact support or try a shorter name if possible.', ephemeral: true });
+            await interaction.reply({ content: '❌ Could not create removal confirmation due to world name length. Please contact support or try a shorter name if possible.', flags: 1 << 6 });
             return;
         }
 
         const confirmButton = new ButtonBuilder()
-          .setCustomId(`lock_btn_rmconfirm_${encodedWorldName}`) // Using encoded world_name
+          .setCustomId(`lock_btn_rmconfirm_${encodedWorldName}`)
           .setLabel('Confirm Remove')
           .setStyle(ButtonStyle.Danger);
         const cancelButton = new ButtonBuilder()
-          .setCustomId('lock_btn_rmcancel_0') // _0 is a placeholder, not used by cancel logic
+          .setCustomId('lock_btn_rmcancel_0')
           .setLabel('Cancel')
           .setStyle(ButtonStyle.Secondary);
 
@@ -126,16 +118,15 @@ module.exports = {
         await interaction.reply({
           content: `⚠️ Are you sure you want to remove **${world.world_name}** from your Locks list? This action cannot be undone.`,
           components: [row],
-          ephemeral: true
+          flags: 1 << 6
         });
 
       } catch (error) {
         logger.error(`[LockCommand - RemoveSubcommand] Error during remove confirmation for world ${worldNameInput} by user ${interaction.user.id}:`, error);
-        // Check if interaction has already been replied to or deferred
         if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: '❌ An unexpected error occurred while trying to find the world for removal.', ephemeral: true });
+            await interaction.reply({ content: '❌ An unexpected error occurred while trying to find the world for removal.', flags: 1 << 6 });
         } else {
-            await interaction.followUp({ content: '❌ An unexpected error occurred while trying to find the world for removal.', ephemeral: true }).catch(e => logger.error(`[LockCommand - RemoveSubcommand] Error sending follow-up after initial error for ${interaction.user.id}:`, e));
+            await interaction.followUp({ content: '❌ An unexpected error occurred while trying to find the world for removal.', flags: 1 << 6 }).catch(e => logger.error(`[LockCommand - RemoveSubcommand] Error sending follow-up after initial error for ${interaction.user.id}:`, e));
         }
       }
     }
@@ -216,18 +207,34 @@ async function showLockFilterModal(interaction) {
   await interaction.showModal(modal);
 }
 
+async function showRemoveLockedWorldModal(interaction) {
+  const modal = new ModalBuilder()
+    .setCustomId('lock_modal_remove_submit')
+    .setTitle('Remove Locked World');
+
+  const worldNameInput = new TextInputBuilder()
+    .setCustomId('worldname_to_remove')
+    .setLabel('Name of Locked World to Remove')
+    .setPlaceholder('Case-sensitive exact world name')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(worldNameInput));
+  await interaction.showModal(modal);
+}
+
 async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) {
-  const ephemeralFlag = true;
+  // const ephemeralFlag = true; // No longer needed directly for defer/reply
   const PAGE_SIZE_LOCKED = CONSTANTS.PAGE_SIZE || 10;
 
   try {
     if (interaction.isMessageComponent() || interaction.isModalSubmit()) {
       if (!interaction.deferred && !interaction.replied) {
-        await interaction.deferUpdate({ ephemeral: ephemeralFlag });
+        await interaction.deferUpdate(); // ephemeralFlag removed
       }
     } else {
       if (!interaction.deferred && !interaction.replied) {
-        await interaction.deferReply({ ephemeral: ephemeralFlag });
+        await interaction.deferReply({ flags: 1 << 6 }); // ephemeralFlag replaced
       }
     }
 
@@ -242,10 +249,10 @@ async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) 
       if (Object.keys(currentFilters).length > 0) {
         content = "No locked worlds match your current filters.";
         components.push(new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`lock_btn_fclr_1`).setLabel('Clear Filters').setStyle(ButtonStyle.Danger)
+          new ButtonBuilder().setCustomId(`lock_btn_fclr_1`).setLabel('Clear Filters').setStyle(ButtonStyle.Danger) // This customId might need review if it implies data like page
         ));
       }
-      await interaction.editReply({ content, embeds: [], components, ephemeral: ephemeralFlag });
+      await interaction.editReply({ content, embeds: [], components }); // ephemeralFlag removed
       return;
     }
 
@@ -307,6 +314,10 @@ async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) 
     filterActionRow.addComponents(
         new ButtonBuilder().setCustomId(`lock_btn_export_names_${page}_${encodedCurrentFilters}`).setLabel('📄 Export Page Names').setStyle(ButtonStyle.Success)
     );
+    // Add Remove World button
+    filterActionRow.addComponents(
+        new ButtonBuilder().setCustomId('lock_btn_remove_show_modal').setLabel('🗑️ Remove World').setStyle(ButtonStyle.Danger)
+    );
 
     if (Object.keys(currentFilters).length > 0) {
       filterActionRow.addComponents(
@@ -315,113 +326,127 @@ async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) 
     }
     allActionRows.push(filterActionRow);
 
-    await interaction.editReply({ content: finalContent, embeds: [], components: allActionRows, ephemeral: ephemeralFlag });
+    await interaction.editReply({ content: finalContent, embeds: [], components }); // ephemeralFlag removed
 
   } catch (error) {
     logger.error(`[LockCommand - ShowLockedWorlds] Error displaying locked worlds for user ${interaction.user.id}:`, error);
     const errorMessage = '❌ An error occurred while displaying your locked worlds. Please try again.';
     if (interaction.deferred || interaction.replied) {
-      await interaction.editReply({ content: errorMessage, embeds: [], components: [], ephemeral: ephemeralFlag }).catch(e => logger.error(`[LockCommand - ShowLockedWorlds] Error sending error editReply for ${interaction.user.id}:`, e));
+      await interaction.editReply({ content: errorMessage, embeds: [], components: [] }).catch(e => logger.error(`[LockCommand - ShowLockedWorlds] Error sending error editReply for ${interaction.user.id}:`, e));
     } else {
-      // This case should ideally not happen if deferral is handled correctly
-      await interaction.reply({ content: errorMessage, ephemeral: ephemeralFlag }).catch(e => logger.error(`[LockCommand - ShowLockedWorlds] Error sending error reply for ${interaction.user.id}:`, e));
+      await interaction.reply({ content: errorMessage, flags: 1 << 6 }).catch(e => logger.error(`[LockCommand - ShowLockedWorlds] Error sending error reply for ${interaction.user.id}:`, e));
     }
   }
 }
 
 // Interaction Handlers
 async function handleButtonCommand(interaction, customIdParts) {
-  // customIdParts: [0: 'lock', 1: 'pgn'/'btn', 2: action_name, 3: data, 4: more_data/encodedFilters]
-  const actionType = customIdParts[1]; // 'pgn' or 'btn'
-  const actionName = customIdParts[2]; // e.g., 'p', 'n', 'g', 'flen', 'fprfx', 'ftype', 'fnote', 'fclr', 'rmconfirm', 'rmcancel'
+  // customIdParts: [0: 'lock', 1: 'pgn'/'btn', 2: action_name_part1, 3: action_name_part2/data, ...]
+  const typeOfAction = customIdParts[1]; // 'pgn' or 'btn'
+  let derivedAction = customIdParts[2]; // Default to the first part after pgn/btn
+  let actionArgs = customIdParts.slice(3); // Default args start after derivedAction
 
-  logger.debug(`[LockCommand - Button] Handling button: ${customIdParts.join('_')}`);
+  // Derive composite actions for 'btn' type
+  if (typeOfAction === 'btn') {
+    if (customIdParts[2] === 'export' && customIdParts[3] === 'names') {
+      derivedAction = 'export_names';
+      actionArgs = customIdParts.slice(4); // page, encodedFilters
+    } else if (customIdParts[2] === 'main' && customIdParts[3] === 'filter' && customIdParts[4] === 'show') {
+      derivedAction = 'main_filter_show';
+      actionArgs = customIdParts.slice(5); // Should be empty
+    } else if (customIdParts[2] === 'remove' && customIdParts[3] === 'show' && customIdParts[4] === 'modal') {
+      derivedAction = 'remove_show_modal';
+      actionArgs = customIdParts.slice(5); // Should be empty
+    }
+    // Simple btn actions like 'fclr', 'rmconfirm', 'rmcancel' will have derivedAction = customIdParts[2]
+    // and actionArgs = customIdParts.slice(3) which is correct for them.
+    // For 'fclr', actionArgs will be empty or contain '1' which is fine.
+    // For 'rmconfirm', actionArgs[0] will be the encodedWorldName.
+  }
+  // For 'pgn' type, derivedAction is already correct (p, n, g) and actionArgs contains [page, encodedFilters] or [encodedFilters] for 'g'.
 
-  if (actionType === 'pgn') { // Pagination for 'view'
-    const currentPage = parseInt(customIdParts[3], 10);
-    const encodedFilters = customIdParts[4] || '';
+  logger.debug(`[LockCommand - Button] Handling: typeOfAction=${typeOfAction}, derivedAction=${derivedAction}, actionArgs=${actionArgs.join(',')}, rawParts=${customIdParts.join('_')}`);
+
+  if (typeOfAction === 'pgn') {
+    const currentPage = parseInt(actionArgs[0], 10); // For 'p', 'n'
+    const encodedFilters = actionName === 'g' ? actionArgs[0] || '' : actionArgs[1] || ''; // For 'g', page is from modal
     const currentFilters = decodeFilters(encodedFilters);
     let newPage = currentPage;
 
-    if (actionName === 'p') newPage = Math.max(1, currentPage - 1);
-    if (actionName === 'n') newPage = currentPage + 1; // showLockedWorldsList will cap it at totalPages
-    if (actionName === 'g') {
+    if (derivedAction === 'p') newPage = Math.max(1, currentPage - 1);
+    if (derivedAction === 'n') newPage = currentPage + 1;
+    if (derivedAction === 'g') {
       const goToModal = new ModalBuilder()
-        .setCustomId(`lock_mod_gotopg_${encodedFilters}`) // encodedFilters is at customIdParts[4] for pgn_g
+        .setCustomId(`lock_mod_gotopg_${encodedFilters}`)
         .setTitle('Go to Page')
-        .addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId('page_number')
-              .setLabel('Enter Page Number')
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setPlaceholder('E.g., 5')
-          )
-        );
+        .addComponents( /* ... TextInput ... */ new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('page_number').setLabel('Enter Page Number').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('E.g., 5')));
       await interaction.showModal(goToModal);
-      return; // Modal submission will handle list update for 'g'
+      return;
     }
-    // For 'p' and 'n', directly show the list
     await showLockedWorldsList(interaction, newPage, currentFilters);
 
-  } else if (actionType === 'btn') {
-    // For buttons like lock_btn_flen_encodedFilters, encodedFilters is at index 3
-    // For lock_btn_rmconfirm_encodedWorldName, encodedWorldName is at index 3
-    // For lock_btn_rmcancel_0, '0' is at index 3
-    const actionSpecificData = customIdParts[3] || '';
-    // const currentFilters = decodeFilters(actionSpecificData); // Not needed for main_filter_show or export_names if data is page
-
-    if (actionName === 'main_filter_show') {
+  } else if (typeOfAction === 'btn') {
+    switch (derivedAction) {
+      case 'main_filter_show':
         await showLockFilterModal(interaction);
-    } else if (actionName === 'export_names') {
-        await interaction.deferReply({ ephemeral: true });
-        const pageToExport = parseInt(actionSpecificData, 10); // Here actionSpecificData is the page number from lock_btn_export_names_PAGE_filters
-        const encodedFiltersForExport = customIdParts[4] || ''; // Filters are the 5th part of customId
+        break;
+      case 'remove_show_modal': // New case
+        await showRemoveLockedWorldModal(interaction);
+        break;
+      case 'export_names': {
+        await interaction.deferReply({ flags: 1 << 6 });
+        const pageToExport = parseInt(actionArgs[0], 10);
+        const encodedFiltersForExport = actionArgs[1] || '';
         const filtersForExport = decodeFilters(encodedFiltersForExport);
 
         const { worlds: worldsForExport } = await db.getLockedWorlds(interaction.user.id, pageToExport, CONSTANTS.PAGE_SIZE, filtersForExport);
 
         if (!worldsForExport || worldsForExport.length === 0) {
-            await interaction.editReply({ content: 'No names to export on this page with the current filters.', ephemeral: true });
-            return;
+          await interaction.editReply({ content: 'No names to export on this page with the current filters.'});
+          return;
         }
-
         let exportText = "```\n";
         worldsForExport.forEach(world => {
-            exportText += `${world.world_name.toUpperCase()} (${world.lock_type})\n`;
+          exportText += `${world.world_name.toUpperCase()} (${world.lock_type})\n`;
         });
         exportText += "```";
-
         if (exportText.length > 2000) {
-            let cutOff = exportText.lastIndexOf('\n', 1990);
-            if (cutOff === -1) cutOff = 1990; // Should not happen with ```
-            exportText = exportText.substring(0, cutOff) + "\n... (list truncated)```";
+          let cutOff = exportText.lastIndexOf('\n', 1990);
+          if (cutOff === -1) cutOff = 1990;
+          exportText = exportText.substring(0, cutOff) + "\n... (list truncated)```";
         }
-        await interaction.editReply({ content: exportText, ephemeral: true });
-
-    // } else if (actionName === 'flen') { // Old individual filter button logic - commented out/removed
-    //   // ...
-    } else if (actionName === 'fclr') {
-      // CustomId for clear is now just `lock_btn_fclr`
-      await showLockedWorldsList(interaction, 1, {}); // Page 1, empty filters
-    } else if (actionName === 'rmconfirm') {
-      const encodedWorldNameToRemove = actionSpecificData; // This is the encoded world name
-      try {
-        const decodedWorldName = Buffer.from(encodedWorldNameToRemove, 'base64url').toString('utf8');
-        const success = await db.removeLockedWorld(interaction.user.id, decodedWorldName);
-        if (success) {
-          await interaction.update({ content: `✅ World **${decodedWorldName}** removed from your Locks list.`, components: [] });
-        } else {
-          await interaction.update({ content: `❌ Could not remove world **${decodedWorldName}**. It might have already been removed or a database error occurred.`, components: [] });
-        }
-      } catch (error) {
-        logger.error(`[LockCommand - ButtonRmConfirm] Error removing world (Encoded: ${encodedWorldNameToRemove}):`, error);
-        await interaction.update({ content: '❌ An error occurred during removal. The name might be corrupted or an issue happened.', components: [] });
+        await interaction.editReply({ content: exportText }); // Ephemeral inherited
+        break;
       }
-    } else if (actionName === 'rmcancel') {
-      await interaction.update({ content: '❌ Removal of locked world cancelled.', components: [] });
+      case 'fclr':
+        await showLockedWorldsList(interaction, 1, {}); // Page 1, empty filters
+        break;
+      case 'rmconfirm': {
+        const encodedWorldNameToRemove = actionArgs[0]; // Data is at first position in actionArgs
+        try {
+          const decodedWorldName = Buffer.from(encodedWorldNameToRemove, 'base64url').toString('utf8');
+          const success = await db.removeLockedWorld(interaction.user.id, decodedWorldName);
+          if (success) {
+            await interaction.update({ content: `✅ World **${decodedWorldName}** removed from your Locks list.`, components: [] });
+          } else {
+            await interaction.update({ content: `❌ Could not remove world **${decodedWorldName}**. It might have already been removed or a database error occurred.`, components: [] });
+          }
+        } catch (error) {
+          logger.error(`[LockCommand - ButtonRmConfirm] Error removing world (Encoded: ${encodedWorldNameToRemove}):`, error);
+          await interaction.update({ content: '❌ An error occurred during removal. The name might be corrupted or an issue happened.', components: [] });
+        }
+        break;
+      }
+      case 'rmcancel':
+        await interaction.update({ content: '❌ Removal of locked world cancelled.', components: [] });
+        break;
+      default:
+        logger.warn(`[LockCommand - Button] Unknown 'btn' derivedAction: ${derivedAction}`);
+        await interaction.reply({content: 'Unknown button action.', flags: 1 << 6});
     }
+  } else {
+    logger.warn(`[LockCommand - Button] Unknown actionType: ${typeOfAction}`);
+    await interaction.reply({content: 'Unknown button type.', flags: 1 << 6});
   }
 }
 
@@ -441,7 +466,7 @@ async function handleModalSubmitCommand(interaction, customIdParts) {
     if (!isNaN(pageNumber) && pageNumber > 0) {
       await showLockedWorldsList(interaction, pageNumber, currentFiltersForGoto);
     } else {
-      await interaction.followUp({ content: 'Invalid page number provided.', ephemeral: true });
+      await interaction.followUp({ content: 'Invalid page number provided.', flags: 1 << 6 });
     }
     return;
   } else if (modalType === 'main_filter_apply') {
@@ -479,16 +504,28 @@ async function handleModalSubmitCommand(interaction, customIdParts) {
     logger.info(`[LockCommand - ModalSubmit] Applying new filters: ${JSON.stringify(newFilters)}`);
     await showLockedWorldsList(interaction, 1, newFilters);
     return;
-  }
-  // Commenting out old individual filter modal handlers:
-  // if (modalType === 'flen') { ... }
-  // else if (modalType === 'fprfx') { ... }
-  // else if (modalType === 'fnote') { ... }
+  } else if (modalType === 'remove' && customIdParts.length > 3 && customIdParts[3] === 'submit') { // Corrected structure
+    await interaction.deferUpdate();
+    const worldNameToRemove = interaction.fields.getTextInputValue('worldname_to_remove').trim();
 
-  // If an old modal type that's no longer handled is submitted, it might fall through.
-  // Or, explicitly acknowledge and ask user to use new filter button if necessary.
-  logger.warn(`[LockCommand - ModalSubmit] Unhandled or deprecated modal type: ${modalType}`);
-  // await showLockedWorldsList(interaction, 1, currentFilters); // Or reshow with old filters if any
+    if (!worldNameToRemove) {
+        await interaction.editReply({ content: '❌ World name cannot be empty.', flags: 1 << 6 });
+        return;
+    }
+
+    const success = await db.removeLockedWorld(interaction.user.id, worldNameToRemove.toUpperCase());
+
+    if (success) {
+        await interaction.editReply({ content: `✅ World "**${worldNameToRemove}**" removed from your locked list. Refreshing list...`, flags: 1 << 6 });
+    } else {
+        await interaction.editReply({ content: `❌ Could not remove world "**${worldNameToRemove}**". It might not exist in your locked list or an error occurred.`, flags: 1 << 6 });
+    }
+    // Refresh the list view
+    await showLockedWorldsList(interaction, 1, {}); // Refresh to page 1, no filters
+    return;
+  }
+  // Fallthrough for unhandled modal types
+  logger.warn(`[LockCommand - ModalSubmit] Unhandled or deprecated modal type: ${modalType}, full customId: ${customIdParts.join('_')}`);
 }
 
 async function handleSelectMenuCommand(interaction, customIdParts) {
@@ -509,7 +546,7 @@ async function handleSelectMenuCommand(interaction, customIdParts) {
   // }
   // await showLockedWorldsList(interaction, 1, currentFilters);
   logger.info(`[LockCommand - SelectMenu] Received select menu interaction, but 'ftype' (Filter by Type) is now part of the main filter modal: ${interaction.customId}`);
-  await interaction.reply({content: "Filter by Type is now part of the main '🔍 Filter List' modal. Please use that button.", ephemeral: true });
+  await interaction.reply({content: "Filter by Type is now part of the main '🔍 Filter List' modal. Please use that button.", flags: 1 << 6 });
 }
 
 module.exports.handleButtonCommand = handleButtonCommand;
