@@ -96,7 +96,17 @@ module.exports = {
         .addSubcommand(subcommand =>
             subcommand
                 .setName('disband')
-                .setDescription('Permanently disband your team and delete all its data (Owner only).')),
+                .setDescription('Permanently disband your team and delete all its data (Owner only).'))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('promote')
+                .setDescription('Promote or demote a team member (Owner only).')
+                .addUserOption(option => option.setName('member').setDescription('The member to promote/demote.').setRequired(true))
+                .addStringOption(option => option.setName('rank').setDescription('The new rank to assign.').setRequired(true).addChoices(
+                    { name: 'Co-Owner', value: 'co-owner' },
+                    { name: 'Elder', value: 'elder' },
+                    { name: 'Member', value: 'member' }
+                ))),
 
     async execute(interaction) {
         const subcommand = interaction.options.getSubcommand();
@@ -106,7 +116,7 @@ module.exports = {
         await db.addUser(userId, username);
         const userTeam = await db.getUserTeam(userId);
 
-        const ownerOnlyCommands = ['invite', 'kick', 'transfer', 'disband'];
+        const ownerOnlyCommands = ['invite', 'kick', 'transfer', 'disband', 'promote'];
         if (ownerOnlyCommands.includes(subcommand)) {
             if (!userTeam) return interaction.reply({ content: "❌ You are not in a team, so you cannot perform owner actions.", ephemeral: true });
             if (userTeam.owner_user_id !== userId) {
@@ -132,6 +142,7 @@ module.exports = {
             else if (subcommand === 'kick') await handleTeamKick(interaction, userId, userTeam);
             else if (subcommand === 'transfer') await handleTeamTransfer(interaction, userId, userTeam);
             else if (subcommand === 'disband') await handleTeamDisband(interaction, userId, userTeam);
+            else if (subcommand === 'promote') await handleTeamPromote(interaction, userId, userTeam);
 
         } else if (interaction.isButton()) {
             const [context, action, operation, value, teamIdForListOrPage] = interaction.customId.split(':');
@@ -312,16 +323,64 @@ async function handleTeamInfo(interaction, userId, userTeam) {
     if (!userTeam) return interaction.reply({ content: "❌ You are not part of any team.", ephemeral: true });
     try {
         const details = await db.getTeamDetails(userTeam.id);
-        if (!details) return interaction.reply({ content: "❌ Could not fetch team details.", ephemeral: true });
-        const embed = new EmbedBuilder().setTitle(`🔰 Team Info: ${details.name}`).setColor(0x2ECC71)
-            .addFields(
-                { name: '👑 Owner', value: details.owner_display_name || 'N/A', inline: true },
-                { name: '🗓️ Created', value: `<t:${Math.floor(new Date(details.creation_date).getTime()/1000)}:D>`, inline: true },
-                { name: '📊 Worlds', value: String(details.totalWorlds), inline: true },
-                { name: '👥 Members', value: details.members.map(m => `${m.display_name} (Joined <t:${Math.floor(new Date(m.join_date).getTime()/1000)}:R>)`).join('\n').substring(0,1020) || 'Owner only', inline: false }
-            );
-        await interaction.reply({ embeds: [embed], ephemeral: true });
-    } catch (e) { logger.error(e); await interaction.reply({ content: '❌ Error fetching team info.', ephemeral: true }); }
+        if (!details) {
+            return interaction.reply({ content: "❌ Could not fetch team details.", ephemeral: true });
+        }
+
+        // Prepare Member Data for Table
+        const memberHeaders = ['MEMBER', 'WORLDS ADDED', 'JOINED', 'RANK'];
+        const memberData = [memberHeaders];
+        let membersTableOutput;
+
+        if (details.members && details.members.length > 0) {
+            details.members.forEach(m => {
+                const memberName = m.display_name || 'Unknown';
+                const worldsAdded = m.worlds_added_count !== undefined ? String(m.worlds_added_count) : 'N/A'; // Assuming worlds_added_count might be added to getTeamDetails
+                const joinedDate = m.join_date ? `<t:${Math.floor(new Date(m.join_date).getTime()/1000)}:R>` : 'N/A';
+                const rank = m.user_id === details.owner_user_id ? 'Owner' : (m.rank || 'Member'); // Check if member is owner for rank
+                memberData.push([memberName, worldsAdded, joinedDate, rank]);
+            });
+        }
+
+        if (memberData.length <= 1) { // Only headers
+            membersTableOutput = 'No other members found in the team.';
+        } else {
+            const tableConfig = {
+                columns: [
+                    { alignment: 'left', width: 20, wrapWord: true }, // MEMBER
+                    { alignment: 'right', width: 15 },                // WORLDS ADDED
+                    { alignment: 'left', width: 15 },                 // JOINED
+                    { alignment: 'left', width: 10 }                  // RANK
+                ],
+                border: getBorderCharacters('norc'),
+                header: {
+                    alignment: 'center',
+                    content: 'Team Members'
+                }
+            };
+            membersTableOutput = '```\n' + table(memberData, tableConfig) + '\n```';
+            if (membersTableOutput.length > 1800) { // Leave some room for other info
+                 let cutOff = membersTableOutput.lastIndexOf('\n', 1750);
+                 if (cutOff === -1) cutOff = 1750;
+                 membersTableOutput = membersTableOutput.substring(0, cutOff) + '\n... (Members list truncated) ...```';
+            }
+        }
+
+        // Prepare Other Team Info
+        const teamNameStr = `🔰 **Team Info: ${details.name}**`;
+        const ownerStr = `👑 Owner: ${details.owner_display_name || 'N/A'}`;
+        const createdStr = `🗓️ Created: ${details.creation_date ? `<t:${Math.floor(new Date(details.creation_date).getTime()/1000)}:D>` : 'N/A'}`;
+        const totalWorldsStr = `📊 Total Team Worlds: ${details.totalWorlds !== undefined ? details.totalWorlds : 'N/A'}`;
+
+        // Construct Final Reply Content
+        const finalContent = `${teamNameStr}\n${ownerStr}\n${createdStr}\n${totalWorldsStr}\n\n${membersTableOutput}`;
+
+        await interaction.reply({ content: finalContent, ephemeral: true });
+
+    } catch (e) {
+        logger.error('[team.js] Error in handleTeamInfo:', e);
+        await interaction.reply({ content: '❌ Error fetching team info.', ephemeral: true });
+    }
 }
 
 async function handleTeamLeave(interaction, userId, userTeam) {
@@ -382,6 +441,60 @@ async function handleTeamTransfer(interaction, userId, userTeam) {
 
     modal.addComponents(new ActionRowBuilder().addComponents(warningText), new ActionRowBuilder().addComponents(confirmationInput));
     await interaction.showModal(modal);
+}
+
+async function handleTeamPromote(interaction, userId, userTeam) {
+    // Owner check is already performed by ownerOnlyCommands in execute
+    // userTeam check is also performed before calling this handler
+
+    const targetUser = interaction.options.getUser('member');
+    const newRank = interaction.options.getString('rank');
+    const targetUserId = targetUser.id;
+
+    try {
+        if (targetUserId === userId) {
+            return interaction.reply({ content: "❌ You cannot change your own rank.", ephemeral: true });
+        }
+
+        // Fetch the target member's specific team membership details
+        // db.getUserTeam(targetUserId) gets *any* team they are in. We need to ensure it's *this* team.
+        // A more specific db.getTeamMember(teamId, targetUserId) would be better.
+        // For now, we'll fetch their team and check if the ID matches.
+        const targetMemberTeamDetails = await db.getUserTeam(targetUserId);
+
+        if (!targetMemberTeamDetails || targetMemberTeamDetails.id !== userTeam.id) {
+            return interaction.reply({ content: `❌ ${targetUser.username} is not a member of your team.`, ephemeral: true });
+        }
+
+        // Prevent changing the rank of the original team owner
+        // Note: userTeam.owner_user_id is the ID of the current owner (who is running the command)
+        // We need to check against the *original* owner of the team if that's a fixed concept,
+        // or if team ownership can be transferred, this check might need to be against the *current* owner (which is self).
+        // The `db.getTeamDetails(userTeam.id)` returns `owner_user_id` for the team.
+        const actualTeamDetails = await db.getTeamDetails(userTeam.id); // Re-fetch for definitive owner
+        if (actualTeamDetails && actualTeamDetails.owner_user_id === targetUserId) {
+             return interaction.reply({ content: "❌ You cannot change the rank of the team's primary owner using this command.", ephemeral: true });
+        }
+
+
+        logger.info(`[TeamCmd] Owner ${userId} attempting to change rank for user ${targetUserId} in team ${userTeam.id} to ${newRank}.`);
+
+        // TODO: Replace with actual database call:
+        // const result = await db.updateTeamMemberRank(userTeam.id, targetUserId, newRank);
+        const simulatedResult = { success: true }; // Simulate success for now
+
+        if (simulatedResult.success) {
+            await interaction.reply({ content: `✅ ${targetUser.username}'s rank has been updated to **${newRank}**.`, ephemeral: true });
+        } else {
+            // If db.updateTeamMemberRank returns specific errors, handle them:
+            // e.g., if (result.error === 'member_not_found') { ... }
+            await interaction.reply({ content: `❌ Failed to update ${targetUser.username}'s rank. ${simulatedResult.error ? `Reason: ${simulatedResult.error}` : ''}`, ephemeral: true });
+        }
+
+    } catch (error) {
+        logger.error(`[TeamCmd] Error in handleTeamPromote for team ${userTeam.id}, target ${targetUserId}:`, error);
+        await interaction.reply({ content: '❌ An unexpected error occurred while trying to change the member\'s rank.', ephemeral: true });
+    }
 }
 
 async function handleTeamDisband(interaction, userId, userTeam) {

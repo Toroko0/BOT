@@ -1,10 +1,10 @@
 const {
     SlashCommandBuilder,
-    EmbedBuilder,
+    EmbedBuilder, // Will be removed if not used by individual message blocks
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
-    StringSelectMenuBuilder,
+    // StringSelectMenuBuilder, // Removed
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle,
@@ -13,175 +13,175 @@ const {
 const db = require('../database.js');
 const logger = require('../utils/logger.js');
 
-const MESSAGES_PER_PAGE = 5; // Number of messages per page in the mailbox
+const MESSAGES_PER_PAGE_NEW = 3; // New messages per page
 
 // Helper function to create pagination buttons for mailbox
-function createMailboxPaginationRow(currentPage, totalPages, viewType) {
+function createMailboxPaginationRow(currentPage, totalPages) { // viewType removed
     return new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
-                .setCustomId(`mailbox:page:prev:${currentPage - 1}:${viewType}`)
+                .setCustomId(`mailbox:page:prev:${currentPage - 1}`) // viewType removed
                 .setLabel('⬅️ Previous')
                 .setStyle(ButtonStyle.Primary)
                 .setDisabled(currentPage === 1),
             new ButtonBuilder()
-                .setCustomId(`mailbox:page:next:${currentPage + 1}:${viewType}`)
+                .setCustomId(`mailbox:page:next:${currentPage + 1}`) // viewType removed
                 .setLabel('Next ➡️')
                 .setStyle(ButtonStyle.Primary)
-                .setDisabled(currentPage >= totalPages)
+                .setDisabled(currentPage >= totalPages),
+            new ButtonBuilder() // Added Go To Page button
+                .setCustomId(`mailbox:page:goto:${currentPage}`) // currentPage can be a placeholder here
+                .setLabel('Go To')
+                .setStyle(ButtonStyle.Secondary)
         );
 }
 
-// Helper function to format messages for mailbox embed
-function formatMailboxEmbed(messages, title, currentPage, totalPages, client) {
-    const embed = new EmbedBuilder()
-        .setTitle(title)
-        .setColor(0x4A90E2); // A pleasant blue
-
-    if (!messages || messages.length === 0) {
-        embed.setDescription('Your mailbox is empty or no messages match your criteria.');
-    } else {
-        messages.forEach(msg => {
-            const readStatusIcon = msg.is_read ? '📨 (Read)' : '📩 (Unread)';
-            const senderDisplayName = msg.sender_display_name || 'Unknown Sender';
-            let messagePreview = msg.message_content.substring(0, 150); // Show a preview
-            if (msg.message_content.length > 150) messagePreview += '...';
-
-            embed.addFields({
-                name: `${readStatusIcon} From: ${senderDisplayName} (ID: ${msg.id})`,
-                value: `> ${messagePreview}\n*Sent: <t:${Math.floor(new Date(msg.sent_at).getTime() / 1000)}:R>*`
-            });
-        });
-    }
-
-    const iconURL = client.user?.displayAvatarURL();
-    if (totalPages > 0) {
-        embed.setFooter({ text: `Page ${currentPage} of ${totalPages} • Your Mailbox`, iconURL });
-    } else {
-        embed.setFooter({ text: `Your Mailbox`, iconURL });
-    }
-    return embed;
-}
+// formatMailboxEmbed function will be removed
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('mailbox')
-        .setDescription('View and manage your direct messages within the bot.')
-        .addStringOption(option =>
-            option.setName('view_type')
-                .setDescription('Filter messages to view.')
-                .setRequired(false)
-                .addChoices(
-                    { name: '📬 All Messages', value: 'all' },
-                    { name: '📩 Unread Only', value: 'unread' }
-                ))
-        .addIntegerOption(option =>
-            option.setName('page')
-                .setDescription('Page number to view.')
-                .setRequired(false)
-                .setMinValue(1)),
+        .setDescription('View and manage your direct messages within the bot.'),
+        // Removed view_type and page options
 
     async execute(interaction) {
         await db.addUser(interaction.user.id, interaction.user.username); // Ensure user exists
 
         if (interaction.isChatInputCommand()) {
-            const viewType = interaction.options.getString('view_type') || 'all';
-            const page = interaction.options.getInteger('page') || 1;
-            await displayMailbox(interaction, viewType, page);
+            // const viewType = interaction.options.getString('view_type') || 'all'; // Removed
+            // const page = interaction.options.getInteger('page') || 1; // Removed
+            await displayMailbox(interaction, 1); // Always page 1, viewType effectively 'all'
         } else if (interaction.isButton()) {
             const [context, action, operation, value, viewTypeOrPage] = interaction.customId.split(':');
-            // mailbox:page:next:2:all (page navigation)
-            // mailbox:confirmdelete:yes:MSG_ID:PAGE:VIEWTYPE (delete confirmation)
+            // mailbox:page:next:2 (page navigation) - viewType removed
+            // mailbox:confirmdelete:yes:MSG_ID:PAGE (delete confirmation) - viewType removed
+            // mailbox:replybutton:MSG_ID:PAGE (new)
+            // mailbox:deletebutton:MSG_ID:PAGE (new)
             if (context !== 'mailbox') return;
 
+            const page = parseInt(value); // For page operations, value is newPage
+                                         // For message actions, operation is msgId, value is page
+
             if (action === 'page') {
-                const newPage = parseInt(value);
-                const viewType = viewTypeOrPage || 'all';
-                await displayMailbox(interaction, viewType, newPage, true);
+                if (operation === 'prev' || operation === 'next') {
+                    const newPage = parseInt(value); // value is the target page
+                    await displayMailbox(interaction, newPage, true);
+                } else if (operation === 'goto') {
+                    // Show modal for page input - to be handled in handleModalSubmitCommand
+                    const goToModal = new ModalBuilder()
+                        .setCustomId('mailbox:gotopagemodal')
+                        .setTitle('Go to Page')
+                        .addComponents(
+                            new ActionRowBuilder().addComponents(
+                                new TextInputBuilder()
+                                    .setCustomId('page_number')
+                                    .setLabel('Enter Page Number')
+                                    .setStyle(TextInputStyle.Short)
+                                    .setRequired(true)
+                                    .setPlaceholder('E.g., 5')
+                            )
+                        );
+                    await interaction.showModal(goToModal);
+                }
             } else if (action === 'confirmdelete') {
-                const messageId = parseInt(operation); // operation is message_id
-                const pageToRefresh = parseInt(value); // value is page
-                const viewTypeForRefresh = viewTypeOrPage || 'all';
+                const messageId = parseInt(operation);
+                const pageToRefresh = parseInt(value);
+                // viewTypeForRefresh removed
                 if (interaction.customId.startsWith('mailbox:confirmdelete:yes')) {
-                    await processDeleteMessage(interaction, messageId, pageToRefresh, viewTypeForRefresh);
+                    await processDeleteMessage(interaction, messageId, pageToRefresh);
                 } else { // "no"
                     await interaction.update({ content: 'Deletion cancelled.', components: [], ephemeral: true });
                 }
+            } else if (action === 'replybutton') {
+                const messageId = parseInt(operation);
+                const currentPage = parseInt(value);
+                const message = await db.getMessageById(messageId, interaction.user.id);
+                if (!message) return interaction.reply({ content: 'Error: Could not find message to reply to.', ephemeral: true });
+                await showReplyModal(interaction, messageId, message.sender_user_id, currentPage);
+            } else if (action === 'deletebutton') {
+                const messageId = parseInt(operation);
+                const currentPage = parseInt(value);
+                await showDeleteConfirmation(interaction, messageId, currentPage);
             }
         } else if (interaction.isStringSelectMenu()) {
-            if (interaction.customId === 'mailbox:actionselect') {
-                const [action, messageIdStr, currentPageStr, currentStatusStr, viewType] = interaction.values[0].split(':');
-                const messageId = parseInt(messageIdStr);
-                const currentPage = parseInt(currentPageStr);
-                const isRead = currentStatusStr === 'read';
-
-                if (action === 'toggleRead') {
-                    await processToggleRead(interaction, messageId, isRead, currentPage, viewType);
-                } else if (action === 'reply') {
-                    // Fetch original sender ID to prefill or pass to modal.
-                    // This requires getting the message details first.
-                    const message = await db.getMessageById(messageId, interaction.user.id);
-                    if (!message) return interaction.reply({ content: 'Error: Could not find message to reply to.', ephemeral: true });
-                    await showReplyModal(interaction, messageId, message.sender_user_id, currentPage, viewType);
-                } else if (action === 'delete') {
-                    await showDeleteConfirmation(interaction, messageId, currentPage, viewType);
-                }
-            }
+            // StringSelectMenu is being removed
+             logger.warn(`[MailboxCmd] Received unexpected StringSelectMenu interaction: ${interaction.customId}`);
+             await interaction.reply({content: "This action is no longer supported.", ephemeral: true});
         } else if (interaction.type === InteractionType.ModalSubmit) {
             if (interaction.customId.startsWith('mailbox:replymodal:')) {
-                const [, , originalMessageIdStr, originalSenderId, currentPageStr, viewType] = interaction.customId.split(':');
+                const [, , originalMessageIdStr, originalSenderId, currentPageStr] = interaction.customId.split(':'); // viewType removed
                 const originalMessageId = parseInt(originalMessageIdStr);
-                await processReplyModal(interaction, originalMessageId, originalSenderId, currentPageStr, viewType);
+                await processReplyModal(interaction, originalMessageId, originalSenderId, currentPageStr);
+            } else if (interaction.customId === 'mailbox:gotopagemodal') {
+                const pageNumberStr = interaction.fields.getTextInputValue('page_number');
+                const pageNumber = parseInt(pageNumberStr);
+                if (!isNaN(pageNumber) && pageNumber > 0) {
+                    await displayMailbox(interaction, pageNumber, true);
+                } else {
+                    await interaction.followUp({ content: 'Invalid page number provided.', ephemeral: true }); // Or editReply if deferred
+                }
             }
         }
     },
 };
 
-async function displayMailbox(interaction, viewType = 'all', page = 1, isButtonOrSelect = false) {
+async function displayMailbox(interaction, page = 1, isButtonOrSelect = false) {
     const userId = interaction.user.id;
-    const unreadOnly = viewType === 'unread';
+    // const unreadOnly = viewType === 'unread'; // Removed, always fetch all
     const replyMethod = isButtonOrSelect ? interaction.update.bind(interaction) : interaction.reply.bind(interaction);
 
     try {
-        let { messages, total } = await db.getReceivedMessages(userId, { page, pageSize: MESSAGES_PER_PAGE, unreadOnly });
-        const totalPages = Math.ceil(total / MESSAGES_PER_PAGE) || 1;
+        let { messages, total } = await db.getReceivedMessages(userId, { page, pageSize: MESSAGES_PER_PAGE_NEW }); // No unreadOnly, new page size
+        const totalPages = Math.ceil(total / MESSAGES_PER_PAGE_NEW) || 1;
+
         if (page > totalPages && totalPages > 0) { // Adjust page if out of bounds
             page = totalPages;
-            const result = await db.getReceivedMessages(userId, { page, pageSize: MESSAGES_PER_PAGE, unreadOnly });
+            const result = await db.getReceivedMessages(userId, { page, pageSize: MESSAGES_PER_PAGE_NEW });
             messages = result.messages; total = result.total;
         }
 
-        const embedTitle = unreadOnly ? '📬 Your Unread Messages' : '📬 Your Mailbox - All Messages';
-        const embed = formatMailboxEmbed(messages, embedTitle, page, totalPages, interaction.client);
-        const components = [];
-
-        if (messages.length > 0) {
-            const selectOptions = messages.map(msg => ({
-                label: `${msg.is_read ? '📨' : '📩'} From: ${msg.sender_display_name} (ID: ${msg.id})`,
-                description: `${msg.message_content.substring(0, 40)}... Sent <t:${Math.floor(new Date(msg.sent_at).getTime() / 1000)}:R>`,
-                value: `toggleRead:${msg.id}:${page}:${msg.is_read ? 'read' : 'unread'}:${viewType}` // action:messageId:currentPage:currentStatus:viewType
-            }));
-             selectOptions.push(...messages.map(msg => ({ // Add reply and delete options separately for clarity if needed, or combine
-                label: `↪️ Reply to ID: ${msg.id}`,
-                value: `reply:${msg.id}:${page}:NA:${viewType}` // NA for currentStatus
-            })));
-            selectOptions.push(...messages.map(msg => ({
-                label: `🗑️ Delete ID: ${msg.id}`,
-                value: `delete:${msg.id}:${page}:NA:${viewType}`
-            })));
-
-
-            components.push(new ActionRowBuilder().addComponents(
-                new StringSelectMenuBuilder()
-                    .setCustomId('mailbox:actionselect')
-                    .setPlaceholder('Select a message to manage...')
-                    .addOptions(selectOptions.slice(0,25)) // Max 25 options
-            ));
+        if (!messages || messages.length === 0) {
+            await replyMethod({ content: 'Your mailbox is empty.', embeds: [], components: [], ephemeral: true });
+            return;
         }
-        if (totalPages > 1) {
-            components.push(createMailboxPaginationRow(page, totalPages, viewType));
+
+        const messageContents = [];
+        const actionRows = [];
+
+        for (const msg of messages) {
+            const readStatusIcon = msg.is_read ? '📨 (Read)' : '📩 (Unread)'; // Read status still shown
+            const senderDisplayName = msg.sender_display_name || 'Unknown Sender';
+            let messagePreview = msg.message_content.substring(0, 200);
+            if (msg.message_content.length > 200) messagePreview += '...';
+
+            messageContents.push(
+                `**${readStatusIcon} From: ${senderDisplayName} (ID: ${msg.id})**\n` +
+                `> ${messagePreview}\n` +
+                `*Sent: <t:${Math.floor(new Date(msg.sent_at).getTime() / 1000)}:R>*\n---`
+            );
+
+            actionRows.push(
+                new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`mailbox:replybutton:${msg.id}:${page}`).setLabel('↪️ Reply').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`mailbox:deletebutton:${msg.id}:${page}`).setLabel('🗑️ Delete').setStyle(ButtonStyle.Danger)
+                )
+            );
         }
-        await replyMethod({ embeds: [embed], components, ephemeral: true });
+
+        const finalContent = `**📬 Your Mailbox - Page ${page}/${totalPages}**\n\n` + messageContents.join('\n');
+
+        // Pagination row
+        if (totalPages > 0) { // Always add pagination if there are messages, even if only 1 page (for goto)
+            actionRows.push(createMailboxPaginationRow(page, totalPages));
+        }
+
+        // Ensure not too many action rows (max 5)
+        // If messageContents.length is 3, actionRows will have 3 for messages + 1 for pagination = 4. This is fine.
+        // If MESSAGES_PER_PAGE_NEW is 4, then 4 message rows + 1 pagination row = 5. Fine.
+        // If MESSAGES_PER_PAGE_NEW is 5, then 5 message rows. Pagination row cannot be added.
+        // Current MESSAGES_PER_PAGE_NEW = 3, so this is fine.
+
+        await replyMethod({ content: finalContent, embeds: [], components: actionRows.slice(0,5) , ephemeral: true });
 
     } catch (error) {
         logger.error(`[MailboxCmd] Error displaying mailbox for user ${userId}:`, error);
@@ -189,41 +189,35 @@ async function displayMailbox(interaction, viewType = 'all', page = 1, isButtonO
     }
 }
 
-async function processToggleRead(interaction, messageId, isRead, currentPage, viewType) {
-    const success = isRead
-        ? await db.markMessageAsUnread(messageId, interaction.user.id)
-        : await db.markMessageAsRead(messageId, interaction.user.id);
+// processToggleRead function will be removed
 
-    if (success) {
-        await interaction.update({ content: `Message ID ${messageId} marked as ${isRead ? 'unread' : 'read'}. Refreshing...`, components: [], ephemeral:true });
-    } else {
-        await interaction.update({ content: `Failed to update read status for message ID ${messageId}.`, components: [], ephemeral:true });
-    }
-    await displayMailbox(interaction, viewType, currentPage, true);
-}
-
-async function showDeleteConfirmation(interaction, messageId, currentPage, viewType) {
+async function showDeleteConfirmation(interaction, messageId, currentPage) { // viewType removed
     const row = new ActionRowBuilder()
         .addComponents(
-            new ButtonBuilder().setCustomId(`mailbox:confirmdelete:yes:${messageId}:${currentPage}:${viewType}`).setLabel('✅ Yes, Delete').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId(`mailbox:confirmdelete:no:${messageId}:${currentPage}:${viewType}`).setLabel('❌ No, Keep').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(`mailbox:confirmdelete:yes:${messageId}:${currentPage}`).setLabel('✅ Yes, Delete').setStyle(ButtonStyle.Danger), // viewType removed
+            new ButtonBuilder().setCustomId(`mailbox:confirmdelete:no:${messageId}:${currentPage}`).setLabel('❌ No, Keep').setStyle(ButtonStyle.Secondary) // viewType removed
         );
-    await interaction.reply({ content: `Are you sure you want to delete message ID **${messageId}**? This cannot be undone.`, components: [row], ephemeral: true });
+    // Use reply for select menu, update for button
+    if (interaction.isMessageComponent()) { // from deletebutton
+         await interaction.update({ content: `Are you sure you want to delete message ID **${messageId}**? This cannot be undone.`, components: [row], ephemeral: true });
+    } else { // Should not happen if select menu is removed
+         await interaction.reply({ content: `Are you sure you want to delete message ID **${messageId}**? This cannot be undone.`, components: [row], ephemeral: true });
+    }
 }
 
-async function processDeleteMessage(interaction, messageId, currentPage, viewType) {
+async function processDeleteMessage(interaction, messageId, currentPage) { // viewType removed
     const result = await db.deleteMessage(messageId, interaction.user.id);
     if (result.success) {
         await interaction.update({ content: `🗑️ Message ID ${messageId} deleted. Refreshing mailbox...`, components: [] });
     } else {
         await interaction.update({ content: `❌ Failed to delete message ID ${messageId}. Error: ${result.error}`, components: [] });
     }
-    await displayMailbox(interaction, viewType, currentPage, true);
+    await displayMailbox(interaction, currentPage, true); // viewType removed
 }
 
-async function showReplyModal(interaction, originalMessageId, originalSenderId, currentPage, viewType) {
+async function showReplyModal(interaction, originalMessageId, originalSenderId, currentPage) { // viewType removed
     const modal = new ModalBuilder()
-        .setCustomId(`mailbox:replymodal:${originalMessageId}:${originalSenderId}:${currentPage}:${viewType}`)
+        .setCustomId(`mailbox:replymodal:${originalMessageId}:${originalSenderId}:${currentPage}`) // viewType removed
         .setTitle(`Replying to Message ID: ${originalMessageId}`);
     const replyContentInput = new TextInputBuilder()
         .setCustomId('reply_content')
@@ -235,7 +229,7 @@ async function showReplyModal(interaction, originalMessageId, originalSenderId, 
     await interaction.showModal(modal);
 }
 
-async function processReplyModal(interaction, originalMessageId, originalSenderId, currentPageStr, viewType) {
+async function processReplyModal(interaction, originalMessageId, originalSenderId, currentPageStr) { // viewType removed
     const replyContent = interaction.fields.getTextInputValue('reply_content');
     const senderUserId = interaction.user.id;
     const currentPage = parseInt(currentPageStr);

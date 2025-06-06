@@ -89,20 +89,12 @@ module.exports = {
                 .setName('mylistings')
                 .setDescription('View and manage your active marketplace listings.')
                 .addIntegerOption(o => o.setName('page').setDescription('Page number to view.').setRequired(false).setMinValue(1))
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('buy')
-                .setDescription('Buy a world from the marketplace.')
-                .addIntegerOption(o => o.setName('listing_id').setDescription('The ID of the listing you want to buy.').setRequired(true))
         ),
 
     async execute(interaction) {
+        // Adjusted addUser call: removed 'buy' related conditions
         if (interaction.options?.getSubcommand() === 'mylistings' ||
-            interaction.customId?.includes('mylisting') ||
-            interaction.options?.getSubcommand() === 'buy' ||
-            interaction.customId?.startsWith('market:confirmbuy') ||
-            interaction.customId?.startsWith('market:cancelbuy')) {
+            interaction.customId?.includes('mylisting')) {
              await db.addUser(interaction.user.id, interaction.user.username);
         }
 
@@ -111,7 +103,7 @@ module.exports = {
             if (subcommand === 'list') await handleMarketList(interaction);
             else if (subcommand === 'browse') await handleMarketBrowse(interaction, interaction.options.getInteger('page') || 1);
             else if (subcommand === 'mylistings') await handleMyListings(interaction, interaction.options.getInteger('page') || 1);
-            else if (subcommand === 'buy') await handleMarketBuy(interaction);
+            // Removed: else if (subcommand === 'buy') await handleMarketBuy(interaction);
 
         } else if (interaction.isButton()) {
             const [context, command, operation, value, pageStr] = interaction.customId.split(':');
@@ -131,10 +123,7 @@ module.exports = {
             } else if (command === 'confirmcancel') {
                  if (operation === 'yes') await processCancelListing(interaction, listingId, page);
                  else await interaction.update({ content: 'Cancellation aborted.', components: [], ephemeral: true });
-            } else if (command === 'confirmbuy') {
-                await processMarketPurchaseButton(interaction, listingId);
-            } else if (command === 'cancelbuy') {
-                await interaction.update({ content: 'Purchase cancelled.', embeds: [], components: [], ephemeral: true });
+            // Removed confirmbuy and cancelbuy button handlers
             }
 
         } else if (interaction.type === InteractionType.ModalSubmit) {
@@ -387,93 +376,4 @@ async function handleAdjustPriceModalSubmit(interaction, listingId) {
     }
 }
 
-// --- BUY SUBCOMMAND ---
-async function handleMarketBuy(interaction) {
-    const buyerUserId = interaction.user.id;
-    await db.addUser(buyerUserId, interaction.user.username); // Ensure buyer exists
-
-    const listingId = interaction.options.getInteger('listing_id');
-
-    try {
-        const listing = await db.getMarketListingById(listingId);
-        if (!listing) {
-            return interaction.reply({ content: '❌ Listing not found.', ephemeral: true });
-        }
-        if (listing.seller_user_id === buyerUserId) {
-            return interaction.reply({ content: '❌ You cannot buy your own listing.', ephemeral: true });
-        }
-
-        const buyerBalance = await db.getUserDiamondLocksBalance(buyerUserId);
-        if (buyerBalance < listing.price_dl) {
-            return interaction.reply({ content: `❌ You have insufficient Diamond Locks. You need ${listing.price_dl} DLs, but you have ${buyerBalance} DLs.`, ephemeral: true });
-        }
-
-        const embed = new EmbedBuilder()
-            .setTitle('🛒 Confirm Purchase')
-            .setColor(0x00FF00) // Green
-            .setDescription(`Are you sure you want to buy **${listing.world_name}** for **${listing.price_dl}** DLs from **${listing.seller_display_name}**?`)
-            .addFields({ name: 'World Name', value: listing.world_name, inline: true }, { name: 'Price', value: `${listing.price_dl} DLs`, inline: true }, { name: 'Seller', value: listing.seller_display_name, inline: true });
-        if (listing.listing_note) {
-            embed.addFields({ name: 'Listing Note', value: listing.listing_note });
-        }
-
-        const row = new ActionRowBuilder()
-            .addComponents(
-                new ButtonBuilder().setCustomId(`market:confirmbuy:yes:${listingId}`).setLabel('✅ Confirm Purchase').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId(`market:cancelbuy:no:${listingId}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Danger)
-            );
-        await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
-
-    } catch (error) {
-        logger.error(`[MarketCmd] Error preparing to buy listing ${listingId}:`, error);
-        await interaction.reply({ content: '❌ Error fetching listing details for purchase.', ephemeral: true });
-    }
-}
-
-async function processMarketPurchaseButton(interaction, listingId) {
-    // Re-fetch listing to ensure it's still available at the same price, etc.
-    const listing = await db.getMarketListingById(listingId);
-    const buyerUserId = interaction.user.id;
-    const buyerUsername = interaction.user.username;
-
-
-    if (!listing) {
-        return interaction.update({ content: '❌ This listing is no longer available.', embeds: [], components: [], ephemeral: true });
-    }
-    if (listing.seller_user_id === buyerUserId) {
-        return interaction.update({ content: '❌ You cannot buy your own listing.', embeds: [], components: [], ephemeral: true });
-    }
-    const buyerBalance = await db.getUserDiamondLocksBalance(buyerUserId);
-    if (buyerBalance < listing.price_dl) {
-        return interaction.update({ content: `❌ Your DL balance is too low. You need ${listing.price_dl} DLs, but have ${buyerBalance}.`, embeds: [], components: [], ephemeral: true });
-    }
-
-    try {
-        // seller_display_name contains bot username or discord tag
-        const result = await db.processMarketPurchase(buyerUserId, listing.seller_user_id, listing.listing_id, listing.locked_world_id, listing.price_dl, buyerUsername, listing.seller_display_name, listing.world_name);
-
-        if (result.success) {
-            await interaction.update({ content: `✅ Congratulations! You have purchased **${result.worldName}** for **${listing.price_dl}** DLs.`, embeds: [], components: [], ephemeral: true });
-
-            // DM Seller (best effort)
-            try {
-                const sellerUser = await interaction.client.users.fetch(listing.seller_user_id);
-                if (sellerUser) {
-                    await sellerUser.send(`🔔 Your marketplace listing for **${result.worldName}** has been sold to **${buyerUsername}** for **${listing.price_dl}** DLs!`);
-                }
-            } catch (dmError) {
-                logger.warn(`[MarketCmd] Failed to DM seller ${listing.seller_user_id} about purchase of listing ${listingId}:`, dmError.message);
-            }
-        } else {
-            let errorMsg = '❌ Purchase failed.';
-            if (result.error === 'insufficient_funds') errorMsg = '❌ You do not have enough Diamond Locks for this purchase.';
-            else if (result.error === 'listing_not_found' || result.error === 'listing_not_found_during_delete') errorMsg = '❌ This listing is no longer available.';
-            else if (result.error === 'world_transfer_failed') errorMsg = '❌ Failed to transfer world ownership. Please contact support.';
-            else errorMsg = '❌ An unexpected database error occurred during purchase.';
-            await interaction.update({ content: errorMsg, embeds: [], components: [], ephemeral: true });
-        }
-    } catch (error) { // Catch errors from processMarketPurchase if it throws directly
-        logger.error(`[MarketCmd] Exception processing purchase for listing ${listingId}:`, error);
-        await interaction.update({ content: '❌ An critical error occurred while processing your purchase.', embeds: [], components: [], ephemeral: true });
-    }
-}
+// Removed handleMarketBuy and processMarketPurchaseButton functions

@@ -1,6 +1,7 @@
 const { SlashCommandBuilder } = require('@discordjs/builders');
 const db = require('../database.js');
 const logger = require('../utils/logger.js');
+const utils = require('../utils.js'); // Added utils import
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -17,6 +18,13 @@ module.exports = {
                 .setMaxLength(1000)), // Max length for message content
 
     async execute(interaction) {
+        const commandCooldownKey = `message_cmd_${interaction.user.id}`;
+        const COOLDOWN_DURATION_SECONDS = 5 * 60; // 5 minutes
+        const cooldown = utils.checkCooldown(interaction.user.id, commandCooldownKey, COOLDOWN_DURATION_SECONDS);
+        if (cooldown.onCooldown) {
+            return interaction.reply({ content: `⏱️ This command is on cooldown. Please wait ${cooldown.timeLeft} seconds.`, ephemeral: true });
+        }
+
         const senderUserId = interaction.user.id;
         const senderUsername = interaction.user.username; // Discord username of the sender
 

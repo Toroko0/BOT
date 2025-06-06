@@ -216,6 +216,33 @@ async function showLockFilterModal(interaction) {
   await interaction.showModal(modal);
 }
 
+async function showListMarketDetailsModal(interaction, worldId) {
+  const modal = new ModalBuilder()
+    .setCustomId(`lock_modal_listmarket_finalsubmit_${worldId}`)
+    .setTitle('Set Price & Note for Market');
+
+  const priceInput = new TextInputBuilder()
+    .setCustomId('market_price_dl')
+    .setLabel('Price in Diamond Locks (DLs)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder('e.g., 100');
+
+  const noteInput = new TextInputBuilder()
+    .setCustomId('market_note')
+    .setLabel('Optional Note for Listing')
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(false)
+    .setPlaceholder('e.g., Good condition, fast sale!')
+    .setMaxLength(200);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(priceInput),
+    new ActionRowBuilder().addComponents(noteInput)
+  );
+  await interaction.showModal(modal);
+}
+
 async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) {
   const ephemeralFlag = true;
   const PAGE_SIZE_LOCKED = CONSTANTS.PAGE_SIZE || 10;
@@ -315,6 +342,14 @@ async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) 
     }
     allActionRows.push(filterActionRow);
 
+    // Add List on Market button to the filterActionRow
+    filterActionRow.addComponents(
+        new ButtonBuilder()
+            .setCustomId('lock_btn_listmarket_showmodal')
+            .setLabel('🛒 List on Market')
+            .setStyle(ButtonStyle.Success)
+    );
+
     await interaction.editReply({ content: finalContent, embeds: [], components: allActionRows, ephemeral: ephemeralFlag });
 
   } catch (error) {
@@ -327,6 +362,24 @@ async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) 
       await interaction.reply({ content: errorMessage, ephemeral: ephemeralFlag }).catch(e => logger.error(`[LockCommand - ShowLockedWorlds] Error sending error reply for ${interaction.user.id}:`, e));
     }
   }
+}
+
+// Function to show the modal for entering world name to list on market
+async function showListMarketPrepModal(interaction) {
+  const modal = new ModalBuilder()
+    .setCustomId('lock_modal_listmarket_submitname')
+    .setTitle('List Locked World on Market')
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('world_to_list_name')
+          .setLabel('Name of Locked World to List')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setPlaceholder('Enter exact world name')
+      )
+    );
+  await interaction.showModal(modal);
 }
 
 // Interaction Handlers
@@ -421,6 +474,8 @@ async function handleButtonCommand(interaction, customIdParts) {
       }
     } else if (actionName === 'rmcancel') {
       await interaction.update({ content: '❌ Removal of locked world cancelled.', components: [] });
+    } else if (actionName === 'listmarket_showmodal') {
+      await showListMarketPrepModal(interaction);
     }
   }
 }
@@ -478,6 +533,74 @@ async function handleModalSubmitCommand(interaction, customIdParts) {
 
     logger.info(`[LockCommand - ModalSubmit] Applying new filters: ${JSON.stringify(newFilters)}`);
     await showLockedWorldsList(interaction, 1, newFilters);
+    return;
+  } else if (modalType === 'listmarket_submitname') {
+    await interaction.deferUpdate(); // Using deferUpdate as we will edit the reply
+    const worldNameInput = interaction.fields.getTextInputValue('world_to_list_name').trim().toUpperCase();
+
+    try {
+      const lockedWorld = await db.findLockedWorldByName(interaction.user.id, worldNameInput);
+
+      if (!lockedWorld) {
+        await interaction.editReply({ content: `❌ World "**${worldNameInput}**" not found in your Locks list.`, components: [], ephemeral: true });
+        return;
+      }
+
+      // Assuming db.isWorldListed is available and works as in market.js
+      // This function might need to be added to database.js or its logic replicated
+      const alreadyListed = await db.isWorldListed(lockedWorld.id);
+      if (alreadyListed) {
+        await interaction.editReply({ content: `❌ World "**${lockedWorld.world_name}**" is already listed on the market.`, components: [], ephemeral: true });
+        return;
+      }
+
+      await showListMarketDetailsModal(interaction, lockedWorld.id);
+
+    } catch (error) {
+      logger.error(`[LockCommand - ModalSubmit - listmarket_submitname] Error processing world ${worldNameInput} for listing by ${interaction.user.id}:`, error);
+      await interaction.editReply({ content: '❌ An unexpected error occurred while checking the world for market listing.', components: [], ephemeral: true });
+    }
+    return;
+  } else if (modalType.startsWith('listmarket_finalsubmit_')) {
+    await interaction.deferReply({ ephemeral: true });
+    const worldIdStr = modalType.substring('listmarket_finalsubmit_'.length);
+    const worldId = parseInt(worldIdStr);
+
+    if (isNaN(worldId)) {
+      logger.error(`[LockCommand - ModalSubmit - listmarket_finalsubmit_] Invalid worldId from modal customId: ${modalType}`);
+      await interaction.editReply({ content: 'Error: Invalid world ID in modal submission.', ephemeral: true });
+      return;
+    }
+
+    const priceDlStr = interaction.fields.getTextInputValue('market_price_dl');
+    const note = interaction.fields.getTextInputValue('market_note') || null;
+    const priceDl = parseInt(priceDlStr);
+
+    if (isNaN(priceDl) || priceDl <= 0) {
+      await interaction.editReply({ content: '❌ Invalid price. Must be a positive whole number.', ephemeral: true });
+      return;
+    }
+
+    try {
+      // Ensure interaction.user.id is the seller_user_id
+      // worldId is the locked_world_id
+      const result = await db.createMarketListing(interaction.user.id, worldId, priceDl, note);
+
+      if (result.success) {
+        await interaction.editReply({ content: `✅ World listed successfully! Listing ID: **${result.listingId}**`, ephemeral: true });
+      } else {
+        let errorMsg = `❌ Failed to list world. Reason: ${result.error || 'Unknown error'}`;
+        if (result.error === 'already_listed') {
+            errorMsg = `❌ This world was already listed. It might have been listed through another command or by an automated process just now.`;
+        } else if (result.error === 'not_found' || result.error === 'db_error' ) { // Assuming db.createMarketListing might return 'not_found' if locked_world_id isn't valid
+             errorMsg = `❌ Failed to list world. The world might have been removed from your locks or a database error occurred.`;
+        }
+        await interaction.editReply({ content: errorMsg, ephemeral: true });
+      }
+    } catch (error) {
+      logger.error(`[LockCommand - ModalSubmit - listmarket_finalsubmit_] Error creating market listing for world ID ${worldId} by user ${interaction.user.id}:`, error);
+      await interaction.editReply({ content: '❌ An unexpected error occurred while trying to list the world.', ephemeral: true });
+    }
     return;
   }
   // Commenting out old individual filter modal handlers:
