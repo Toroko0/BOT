@@ -154,13 +154,17 @@ if (!process.env.DISCORD_TOKEN) {
     logger.error('[Startup] FATAL: DISCORD_TOKEN is missing! Cannot login.');
     process.exit(1);
 }
-logger.info('[Startup] DISCORD_TOKEN found. Attempting to login...');
+// logger.info('[Startup] DISCORD_TOKEN found. Attempting to login...'); // Original logger line, can be kept or removed. For this task, we replace with console.log
+console.log('[DIAGNOSTIC] Preparing to call client.login()');
 client.login(process.env.DISCORD_TOKEN)
   .then(() => {
-    logger.info('[Startup] client.login() promise resolved successfully. Waiting for ClientReady event...');
+    // logger.info('[Startup] client.login() promise resolved successfully. Waiting for ClientReady event...'); // Original
+    console.log('[DIAGNOSTIC] client.login() promise RESOLVED. Waiting for ClientReady event.');
   })
   .catch(err => {
-    logger.error('[Startup] client.login() promise rejected. Bot failed to login:', err);
+    // logger.error('[Startup] client.login() promise rejected. Bot failed to login:', err); // Original
+    console.error('[DIAGNOSTIC] client.login() promise REJECTED:', err);
     process.exit(1); // Exit if login fails, as it's a critical step
   });
+console.log('[DIAGNOSTIC] client.login() call has been fully dispatched (promise chain set up).');
 // logger.info('[Startup] client.login() call has been executed. Waiting for ClientReady event...'); // Removed as .then() handles this
