@@ -155,5 +155,12 @@ if (!process.env.DISCORD_TOKEN) {
     process.exit(1);
 }
 logger.info('[Startup] DISCORD_TOKEN found. Attempting to login...');
-client.login(process.env.DISCORD_TOKEN);
-logger.info('[Startup] client.login() call has been executed. Waiting for ClientReady event...');
+client.login(process.env.DISCORD_TOKEN)
+  .then(() => {
+    logger.info('[Startup] client.login() promise resolved successfully. Waiting for ClientReady event...');
+  })
+  .catch(err => {
+    logger.error('[Startup] client.login() promise rejected. Bot failed to login:', err);
+    process.exit(1); // Exit if login fails, as it's a critical step
+  });
+// logger.info('[Startup] client.login() call has been executed. Waiting for ClientReady event...'); // Removed as .then() handles this
