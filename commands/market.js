@@ -135,12 +135,95 @@ module.exports = {
                 await processMarketPurchaseButton(interaction, listingId);
             } else if (command === 'cancelbuy') {
                 await interaction.update({ content: 'Purchase cancelled.', embeds: [], components: [], ephemeral: true });
+            } else if (interaction.customId === 'market:messageSellerModalButton') { // Button to OPEN the modal
+                const modal = new ModalBuilder()
+                    .setCustomId('market:messageSellerSubmitModal')
+                    .setTitle('Message Seller');
+                const listingIdInput = new TextInputBuilder()
+                    .setCustomId('listing_id_input')
+                    .setLabel('Listing ID to Message About')
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true)
+                    .setPlaceholder('Enter the numeric ID of the listing');
+                const messageContentInput = new TextInputBuilder()
+                    .setCustomId('message_content_input')
+                    .setLabel('Your Message to the Seller')
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setRequired(true)
+                    .setPlaceholder('Type your message here...');
+
+                modal.addComponents(
+                    new ActionRowBuilder().addComponents(listingIdInput),
+                    new ActionRowBuilder().addComponents(messageContentInput)
+                );
+                await interaction.showModal(modal);
             }
 
         } else if (interaction.type === InteractionType.ModalSubmit) {
-            const [context, command, operation, listingIdStr] = interaction.customId.split(':');
+            const [context, command, operation, listingIdStrFromCustomId] = interaction.customId.split(':'); // operation and listingIdStrFromCustomId might be undefined
             if (context === 'market' && command === 'mylistingmodal' && operation === 'submitadjust') {
-                await handleAdjustPriceModalSubmit(interaction, parseInt(listingIdStr));
+                await handleAdjustPriceModalSubmit(interaction, parseInt(listingIdStrFromCustomId));
+            } else if (interaction.customId === 'market:messageSellerSubmitModal') {
+                await interaction.deferReply({ ephemeral: true });
+                const listingIdStr = interaction.fields.getTextInputValue('listing_id_input');
+                const messageContent = interaction.fields.getTextInputValue('message_content_input');
+                const listingId = parseInt(listingIdStr);
+
+                if (isNaN(listingId)) {
+                    await interaction.editReply({ content: '❌ Invalid Listing ID. Please enter a numeric ID.', ephemeral: true });
+                    return;
+                }
+
+                try {
+                    const listing = await db.getMarketListingById(listingId);
+                    if (!listing) {
+                        await interaction.editReply({ content: `❌ Listing with ID **${listingId}** not found.`, ephemeral: true });
+                        return;
+                    }
+
+                    if (listing.seller_user_id === interaction.user.id) {
+                        await interaction.editReply({ content: '❌ You cannot message yourself about your own listing.', ephemeral: true });
+                        return;
+                    }
+
+                    const buyerDisplayName = interaction.user.displayName || interaction.user.username;
+                    const buyerDiscordTag = interaction.user.tag;
+                    // Use seller_display_name from listing if available, otherwise try to fetch tag (though less reliable without direct user object)
+                    const sellerGreetingName = listing.seller_display_name || `Seller (ID: ${listing.seller_user_id})`;
+
+
+                    const dmMessageContent = `Hello, ${sellerGreetingName}!\n\nUser **${buyerDisplayName}** (*${buyerDiscordTag}*) is interested in your marketplace listing:\nWorld: **${listing.world_name}**\nPrice: **${listing.price_dl}** DL(s)\nNote: ${listing.listing_note || 'N/A'}\nListing ID: **${listing.listing_id}**\n\nTheir message:\n>>> ${messageContent}`;
+
+                    const sellerDiscordUser = await interaction.client.users.fetch(listing.seller_user_id).catch(() => null);
+
+                    if (!sellerDiscordUser) {
+                        await interaction.editReply({ content: '⚠️ Could not find the seller\'s Discord account. They might have left shared servers or their account was deleted. Your message was not sent.', ephemeral: true });
+                        return;
+                    }
+
+                    let dmFailed = false;
+                    await sellerDiscordUser.send(dmMessageContent).catch(async (dmError) => {
+                        logger.warn(`[MarketCmd] Failed to DM seller ${listing.seller_user_id} for listing ${listingId}: ${dmError.message}`);
+                        dmFailed = true;
+                        let replyMessage = '⚠️ Your message could not be directly DMed to the seller. They might have DMs disabled or have blocked the bot.';
+                        // Optionally, log the message to a channel if DMs fail, as a fallback.
+                        // For now, just inform the buyer.
+                        // const fallbackChannel = interaction.client.channels.cache.get('YOUR_FALLBACK_CHANNEL_ID');
+                        // if (fallbackChannel) {
+                        //    fallbackChannel.send(`Market Message (DM Failed for Listing ${listingId}):\nFrom: ${buyerDiscordTag} (${interaction.user.id})\nTo Seller: ${sellerDiscordUser.tag} (${listing.seller_user_id})\nMessage: ${messageContent}`);
+                        //    replyMessage += "\nThe message has been forwarded to bot staff."
+                        // }
+                        await interaction.editReply({ content: replyMessage, ephemeral: true });
+                    });
+
+                    if (!dmFailed) {
+                        await interaction.editReply({ content: '✅ Your message has been sent to the seller!', ephemeral: true });
+                    }
+
+                } catch (error) {
+                    logger.error(`[MarketCmd] Error processing message seller modal for listing ${listingId}:`, error);
+                    await interaction.editReply({ content: '❌ An unexpected error occurred while trying to send your message.', ephemeral: true });
+                }
             }
         } else if (interaction.isStringSelectMenu()) {
              if (interaction.customId === 'market:mylisting:selectaction') {
@@ -270,7 +353,22 @@ async function handleMarketBrowse(interaction, page = 1, isButtonOrSelect = fals
         }
 
         const finalContent = `Page ${page}/${totalPages}\n${tableOutput}\nWorld Watcher Market`;
-        const components = total > ITEMS_PER_PAGE_MARKET ? [createPaginationRow(page, totalPages, 'market:browse')] : [];
+        const components = [];
+         if (total > ITEMS_PER_PAGE_MARKET) {
+            components.push(createPaginationRow(page, totalPages, 'market:browse'));
+        }
+        // Add Message Seller button if there are listings
+        if (listings && listings.length > 0) {
+            const messageSellerRow = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('market:messageSellerModalButton')
+                        .setLabel('✉️ Message Seller about a Listing')
+                        .setStyle(ButtonStyle.Success) // Or Primary
+                );
+            components.push(messageSellerRow);
+        }
+
 
         await replyMethod({ content: finalContent, components, ephemeral: false });
 
