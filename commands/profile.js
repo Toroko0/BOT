@@ -42,6 +42,16 @@ module.exports = {
                                 .setRequired(true)
                         )
                 )
+                .addSubcommand(subcommand =>
+                    subcommand
+                        .setName('bio')
+                        .setDescription('Set or update your profile bio.')
+                        .addStringOption(option =>
+                            option.setName('text')
+                                .setDescription('Your bio (max 200 characters). Leave empty to clear.')
+                                .setRequired(false) // False, as empty means clear
+                        )
+                )
         ),
 
     async execute(interaction) {
@@ -50,14 +60,16 @@ module.exports = {
             const subcommand = interaction.options.getSubcommand();
 
             // Ensure user exists for relevant commands
-            if ((group === 'set' && subcommand === 'username') ||
+            if ((group === 'set' && (subcommand === 'username' || subcommand === 'bio')) || // Added bio
                 (!group && subcommand === 'view') ||
-                (!group && subcommand === 'show')) { // Also for 'show' to ensure target user might be added
+                (!group && subcommand === 'show')) {
                 await db.addUser(interaction.user.id, interaction.user.username);
             }
 
             if (group === 'set' && subcommand === 'username') {
                 await handleSetUsername(interaction);
+            } else if (group === 'set' && subcommand === 'bio') {
+                await handleSetBio(interaction);
             } else if (!group && subcommand === 'view') {
                 await handleViewOwnProfile(interaction);
             } else if (!group && subcommand === 'show') {
@@ -66,30 +78,82 @@ module.exports = {
                 await interaction.reply({ content: 'Unknown profile command.', ephemeral: true });
             }
         } else if (interaction.isButton()) {
-            const [actionPrefix, operation, targetIdFromButton] = interaction.customId.split(':');
+            const [context, operation, targetIdFromButton] = interaction.customId.split(':'); // context is 'profile'
 
-            // Standard buttons from own profile view
-            if (actionPrefix === 'profile_btn_view_list') { // No targetIdFromButton needed here, it's for the interactor
+            if (context !== 'profile') return; // Ensure it's a profile button
+
+            if (operation === 'editBioButton') {
+                const currentUserProfile = await db.getUser(interaction.user.id);
+                const currentBio = currentUserProfile?.bio || '';
+
+                const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder: ModalActionRowBuilder } = require('discord.js'); // Required for modals
+                const modal = new ModalBuilder()
+                    .setCustomId('profile:bioModalSubmit')
+                    .setTitle('Set/Edit Your Bio');
+                const bioInput = new TextInputBuilder()
+                    .setCustomId('bio_input')
+                    .setLabel('Your Bio (max 200 chars, leave empty to clear)')
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setRequired(false)
+                    .setValue(currentBio)
+                    .setMaxLength(200);
+                modal.addComponents(new ModalActionRowBuilder().addComponents(bioInput));
+                await interaction.showModal(modal);
+
+            } else if (operation === 'btn_view_list') {
                 await interaction.reply({ content: `To view your list, use the \`/list\` command.`, ephemeral: true });
-            } else if (actionPrefix === 'profile_btn_view_locks') { // No targetIdFromButton needed
+            } else if (operation === 'btn_view_locks') {
                 await interaction.reply({ content: `To view your locked worlds, use the \`/lock view\` command.`, ephemeral: true });
-            } else if (actionPrefix === 'profile_btn_view_market_listings_own') {
+            } else if (operation === 'btn_view_market_listings_own') {
                  await interaction.reply({ content: 'Use `/market mylistings` to see your active market listings.', ephemeral: true });
-            }
-            // Button from other's profile view
-            else if (actionPrefix === 'profile_btn_view_market_listings_other') {
-                const actualTargetId = operation; // operation from split is the target_user_id
+            } else if (operation === 'btn_view_market_listings_other') {
+                const actualTargetId = targetIdFromButton; // targetIdFromButton is the target_user_id
                 const targetUser = await db.getUser(actualTargetId);
                 const targetIdentifier = targetUser?.bot_username || `<@${actualTargetId}>`;
                 await interaction.reply({ content: `Use \`/market browse seller:${targetIdentifier}\` to see listings from **${targetIdentifier}**.`, ephemeral: true });
-            }
-            // New button for team list from own profile
-            else if (actionPrefix === 'profile_btn_view_team_list') { // No targetIdFromButton needed
+            } else if (operation === 'btn_view_team_list') {
                  await interaction.reply({ content: "Use `/team list` to view your team's worlds.", ephemeral: true });
+            }
+        } else if (interaction.isModalSubmit()) {
+            if (interaction.customId === 'profile:bioModalSubmit') {
+                const bioText = interaction.fields.getTextInputValue('bio_input');
+                const bioToSet = (bioText && bioText.trim().length > 0) ? bioText.trim() : null;
+
+                if (bioToSet && bioToSet.length > 200) {
+                    return interaction.reply({ content: '❌ Your bio cannot exceed 200 characters.', ephemeral: true });
+                }
+                try {
+                    await db.setBio(interaction.user.id, bioToSet);
+                    await interaction.reply({ content: bioToSet ? '✅ Your bio has been updated!' : '✅ Your bio has been cleared!', ephemeral: true });
+                } catch (error) {
+                    logger.error(`[ProfileCmd] Error setting bio via modal for ${interaction.user.id}:`, error);
+                    await interaction.reply({ content: '❌ An error occurred while updating your bio.', ephemeral: true });
+                }
             }
         }
     },
 };
+
+async function handleSetBio(interaction) {
+    const bioText = interaction.options.getString('text');
+    const bioToSet = (bioText && bioText.trim().length > 0) ? bioText.trim() : null;
+
+    if (bioToSet && bioToSet.length > 200) {
+        return interaction.reply({ content: '❌ Your bio cannot exceed 200 characters.', ephemeral: true });
+    }
+
+    try {
+        await db.setBio(interaction.user.id, bioToSet);
+        if (bioToSet) {
+            return interaction.reply({ content: '✅ Your bio has been set/updated successfully!', ephemeral: true });
+        } else {
+            return interaction.reply({ content: '✅ Your bio has been cleared successfully!', ephemeral: true });
+        }
+    } catch (error) {
+        logger.error(`[ProfileCmd] Error setting bio for ${interaction.user.id}:`, error);
+        return interaction.reply({ content: '❌ An error occurred while setting your bio.', ephemeral: true });
+    }
+}
 
 async function handleSetUsername(interaction) {
     const userId = interaction.user.id;
@@ -139,9 +203,14 @@ async function handleViewOwnProfile(interaction) {
                 { name: '🌍 Worlds Tracked', value: String(profileStats.worldsTracked), inline: true },
                 { name: '🔒 Worlds Locked', value: String(profileStats.worldsLocked), inline: true },
                 { name: '📈 Market Listings', value: String(profileStats.marketListingsActive), inline: true }
-            )
-            .setTimestamp()
-            .setFooter({ text: 'World Watcher Bot', iconURL: interaction.client.user.displayAvatarURL() });
+            );
+
+        if (userProfile.bio) {
+            embed.addFields({ name: '📝 Bio', value: userProfile.bio, inline: false });
+        }
+
+        embed.setTimestamp().setFooter({ text: 'World Watcher Bot', iconURL: interaction.client.user.displayAvatarURL() });
+
 
         if (userTeam) {
             embed.addFields({ name: '🏢 Current Team', value: userTeam.name, inline: true });
@@ -149,23 +218,24 @@ async function handleViewOwnProfile(interaction) {
 
         const actionRow1 = new ActionRowBuilder()
             .addComponents(
-                new ButtonBuilder().setCustomId(`profile_btn_view_list`).setLabel('View My List').setStyle(ButtonStyle.Primary), // Removed :userId, not needed for own profile
-                new ButtonBuilder().setCustomId(`profile_btn_view_locks`).setLabel('View Locked Worlds').setStyle(ButtonStyle.Secondary)
+                new ButtonBuilder().setCustomId(`profile:btn_view_list`).setLabel('View My List').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId(`profile:btn_view_locks`).setLabel('View Locked Worlds').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('profile:editBioButton').setLabel('📝 Set/Edit Bio').setStyle(ButtonStyle.Secondary) // Added Edit Bio button
             );
 
         const actionRow2 = new ActionRowBuilder()
             .addComponents(
-                 new ButtonBuilder().setCustomId('profile_btn_view_market_listings_own').setLabel('🛍️ My Market Listings').setStyle(ButtonStyle.Success)
+                 new ButtonBuilder().setCustomId('profile:btn_view_market_listings_own').setLabel('🛍️ My Market Listings').setStyle(ButtonStyle.Success)
             );
 
         if (userTeam) {
             actionRow2.addComponents(
-                new ButtonBuilder().setCustomId('profile_btn_view_team_list').setLabel('🏢 View Team List').setStyle(ButtonStyle.Secondary)
+                new ButtonBuilder().setCustomId('profile:btn_view_team_list').setLabel('🏢 View Team List').setStyle(ButtonStyle.Secondary)
             );
         }
 
         const components = [actionRow1];
-        if(actionRow2.components.length > 0) components.push(actionRow2);
+        if (actionRow2.components.length > 0) components.push(actionRow2);
 
 
         await interaction.reply({ embeds: [embed], components: components, ephemeral: false });
@@ -181,39 +251,86 @@ async function handleViewOtherProfile(interaction) {
     let targetDbUser = null;
     let targetDiscordUser = null;
 
+    // 1. Try mention
     const mentionMatch = targetArg.match(/^<@!?(\d+)>$/);
     if (mentionMatch) {
         const targetId = mentionMatch[1];
         targetDbUser = await db.getUser(targetId);
         try {
             targetDiscordUser = await interaction.client.users.fetch(targetId);
-            if (!targetDbUser && targetDiscordUser) { // User not in DB but exists in Discord
+            if (!targetDbUser && targetDiscordUser) {
                  await db.addUser(targetId, targetDiscordUser.username);
                  targetDbUser = await db.getUser(targetId);
             } else if (targetDbUser && targetDiscordUser && targetDiscordUser.username !== targetDbUser.username) {
                  await db.addUser(targetId, targetDiscordUser.username);
                  targetDbUser.username = targetDiscordUser.username;
             }
-        } catch (e) { logger.warn(`[ProfileCmd] Could not fetch Discord user for ID ${targetId}.`); }
+        } catch (e) { logger.warn(`[ProfileCmd] Could not fetch Discord user by ID ${targetId} from mention.`); }
     } else {
+        // 2. Try bot username
         targetDbUser = await db.getUserByBotUsername(targetArg);
-        if (!targetDbUser) {
+        if (targetDbUser) {
+            try { targetDiscordUser = await interaction.client.users.fetch(targetDbUser.id); }
+            catch (e) { logger.warn(`[ProfileCmd] Could not fetch Discord user for ID ${targetDbUser.id} (from bot username lookup).`);}
+        } else {
+            // 3. Try direct user ID
             if (/^\d{17,19}$/.test(targetArg)) {
                 targetDbUser = await db.getUser(targetArg);
-                 try {
+                try {
                     targetDiscordUser = await interaction.client.users.fetch(targetArg);
-                     if (!targetDbUser && targetDiscordUser) {
-                         await db.addUser(targetArg, targetDiscordUser.username);
-                         targetDbUser = await db.getUser(targetArg);
-                     } else if (targetDbUser && targetDiscordUser && targetDiscordUser.username !== targetDbUser.username) {
-                         await db.addUser(targetArg, targetDiscordUser.username);
-                         targetDbUser.username = targetDiscordUser.username;
-                     }
-                } catch (e) { logger.warn(`[ProfileCmd] Could not fetch Discord user for ID ${targetArg} (direct ID).`); }
+                    if (!targetDbUser && targetDiscordUser) {
+                        await db.addUser(targetArg, targetDiscordUser.username);
+                        targetDbUser = await db.getUser(targetArg);
+                    } else if (targetDbUser && targetDiscordUser && targetDiscordUser.username !== targetDbUser.username) {
+                        await db.addUser(targetArg, targetDiscordUser.username);
+                        targetDbUser.username = targetDiscordUser.username;
+                    }
+                } catch (e) { logger.warn(`[ProfileCmd] Could not fetch Discord user by ID ${targetArg} (direct ID string).`); }
             }
-        } else {
-             try { targetDiscordUser = await interaction.client.users.fetch(targetDbUser.id); }
-             catch (e) { logger.warn(`[ProfileCmd] Could not fetch Discord user for ID ${targetDbUser.id} (from bot username lookup).`);}
+        }
+    }
+
+    // 4. If still not found, try searching by Discord username/tag
+    if (!targetDbUser && !targetDiscordUser) { // Check both, as targetDiscordUser might be set without targetDbUser if ID fetch failed
+        let foundByUsername = false;
+        logger.debug(`[ProfileCmd] User not found by mention, bot username, or ID. Attempting search by Discord username/tag for: ${targetArg}`);
+        if (interaction.inGuild()) {
+            try {
+                const members = await interaction.guild.members.fetch(); // Fetch all members if cache might be incomplete
+                const member = members.find(m => m.user.tag === targetArg || m.user.username === targetArg);
+                if (member) {
+                    targetDiscordUser = member.user;
+                    foundByUsername = true;
+                    logger.debug(`[ProfileCmd] Found user in guild members cache/fetch: ${targetDiscordUser.tag}`);
+                }
+            } catch (guildFetchError) {
+                logger.warn(`[ProfileCmd] Error fetching guild members for username search: ${guildFetchError.message}. Falling back to client cache.`);
+            }
+        }
+
+        if (!foundByUsername) {
+            // Attempt to find in client's cache as a fallback or if not in a guild
+            // This is less reliable for finding users not in cached guilds but worth a try.
+            const userFromClientCache = interaction.client.users.cache.find(u => u.tag === targetArg || u.username === targetArg);
+            if (userFromClientCache) {
+                targetDiscordUser = userFromClientCache;
+                foundByUsername = true;
+                logger.debug(`[ProfileCmd] Found user in client cache: ${targetDiscordUser.tag}`);
+            }
+        }
+
+        if (foundByUsername && targetDiscordUser) {
+            const resolvedId = targetDiscordUser.id;
+            targetDbUser = await db.getUser(resolvedId);
+            if (!targetDbUser) {
+                logger.info(`[ProfileCmd] User ${targetDiscordUser.tag} (ID: ${resolvedId}) found on Discord but not in DB. Adding.`);
+                await db.addUser(resolvedId, targetDiscordUser.username);
+                targetDbUser = await db.getUser(resolvedId); // Re-fetch
+            } else if (targetDiscordUser.username !== targetDbUser.username) {
+                logger.info(`[ProfileCmd] User ${targetDiscordUser.tag} (ID: ${resolvedId}) found in DB, updating username from ${targetDbUser.username} to ${targetDiscordUser.username}.`);
+                await db.addUser(resolvedId, targetDiscordUser.username); // addUser handles updates
+                targetDbUser.username = targetDiscordUser.username; // Update in-memory object
+            }
         }
     }
 
@@ -242,9 +359,14 @@ async function handleViewOtherProfile(interaction) {
             { name: '🌍 Worlds Tracked', value: String(profileStats.worldsTracked), inline: true },
             { name: '🔒 Worlds Locked', value: String(profileStats.worldsLocked), inline: true },
             { name: '📈 Market Listings', value: String(profileStats.marketListingsActive), inline: true }
-        )
-        .setTimestamp()
-        .setFooter({ text: 'World Watcher Bot', iconURL: interaction.client.user.displayAvatarURL() });
+            );
+
+        if (finalUserProfile.bio) {
+            embed.addFields({ name: '📝 Bio', value: finalUserProfile.bio, inline: false });
+        }
+
+        embed.setTimestamp().setFooter({ text: 'World Watcher Bot', iconURL: interaction.client.user.displayAvatarURL() });
+
 
     if (userTeam) {
         embed.addFields({ name: '🏢 Current Team', value: userTeam.name, inline: true });
@@ -254,7 +376,7 @@ async function handleViewOtherProfile(interaction) {
     const actionRow = new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
-                .setCustomId(`profile_btn_view_market_listings_other:${finalUserProfile.id}`)
+                    .setCustomId(`profile:btn_view_market_listings_other:${finalUserProfile.id}`) // Changed customId prefix
                 .setLabel("🛍️ View User's Listings")
                 .setStyle(ButtonStyle.Success)
         );

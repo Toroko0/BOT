@@ -52,10 +52,11 @@ async function addUser(userId, username) {
         view_mode: 'pc',           // Default 'pc'
         reminder_enabled: false,   // Default false
         reminder_time_utc: null,   // Default null
+        bio: null,                 // Initialize bio as null
         // Initialize bot_join_date when a new user is added
         bot_join_date: knexInstance.fn.now()
       });
-      logger.info(`[DB] Added new user ${userId} (${username}) with default preferences and bot_join_date`);
+      logger.info(`[DB] Added new user ${userId} (${username}) with default preferences, bio, and bot_join_date`);
       return true;
     }
   } catch (error) { logger.error(`[DB] Error adding/updating user ${userId}:`, error); return false; }
@@ -107,7 +108,7 @@ async function getUser(userId) {
   try {
     const user = await knexInstance('users')
       .where({ id: userId })
-      .select('id', 'username', 'bot_username', 'bot_join_date', 'diamond_locks_balance', 'notify_on_new_message') // Added notify_on_new_message
+      .select('id', 'username', 'bot_username', 'bot_join_date', 'diamond_locks_balance', 'notify_on_new_message', 'bio') // Added bio
       .first();
     return user || null;
   } catch (error) {
@@ -170,6 +171,7 @@ async function getUserByBotUsername(botUsername) {
     // Case-insensitive search for bot_username
     const user = await knexInstance('users')
       .whereRaw('LOWER(bot_username) = ?', [botUsername.toLowerCase()])
+      .select('id', 'username', 'bot_username', 'bot_join_date', 'diamond_locks_balance', 'notify_on_new_message', 'bio') // Added bio and other fields for consistency
       .first();
     return user || null;
   } catch (error) {
@@ -1805,6 +1807,9 @@ module.exports = {
   getUser, // Added
   getUserProfileStats, // Added
 
+  // Bio function
+  setBio,
+
   // Marketplace Functions
   getLockedWorldForListing,
   isWorldListed,
@@ -1849,6 +1854,24 @@ module.exports = {
   findLockedWorldByName,
   moveWorldToLocks
 };
+
+
+// --- Bio Function Implementation ---
+async function setBio(userId, bio) {
+  logger.info(`[DB] Setting bio for user ${userId}. Bio length: ${bio ? bio.length : 'null'}`);
+  try {
+    const bioToSet = (bio && bio.trim().length > 0) ? bio.trim() : null;
+    await knexInstance('users')
+      .where({ id: userId })
+      .update({ bio: bioToSet });
+    logger.info(`[DB] Successfully set bio for user ${userId}.`);
+    return { success: true };
+  } catch (error) {
+    logger.error(`[DB] Error setting bio for user ${userId}:`, error);
+    return { success: false, error: 'db_error' };
+  }
+}
+
 
 // --- Locked Worlds Functions Implementation ---
 
