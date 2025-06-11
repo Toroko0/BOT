@@ -41,6 +41,8 @@ async function deployCommands(logger) { // Renamed and added logger as a paramet
         }
     }
     logger.info(`[Deploy] Found ${adminCommandsData.length} admin command(s) and ${globalCommandsData.length} global command(s).`);
+    logger.info(`[Deploy] Admin commands to be deployed to guild: ${adminCommandsData.map(cmd => cmd.name).join(', ') || 'None'}`);
+    logger.info(`[Deploy] Global commands initially loaded: ${globalCommandsData.map(cmd => cmd.name).join(', ') || 'None'}`);
 
     const rest = new REST({ version: '10' }).setToken(token);
     let deployedAdminCount = 0;
@@ -80,13 +82,17 @@ async function deployCommands(logger) { // Renamed and added logger as a paramet
         }
     }
 
+    // Filter out 'admin' command from global deployment
+    const finalGlobalCommands = globalCommandsData.filter(cmd => cmd.name !== 'admin');
+    logger.info(`[Deploy] Final global commands for deployment after filtering 'admin': ${finalGlobalCommands.map(cmd => cmd.name).join(', ') || 'None'}`);
+
     // Deploy Global Commands
-    if (globalCommandsData.length > 0) {
+    if (finalGlobalCommands.length > 0) {
         try {
-            logger.info(`[Deploy] Deploying ${globalCommandsData.length} global command(s)...`);
+            logger.info(`[Deploy] Deploying ${finalGlobalCommands.length} global command(s)...`);
             const globalData = await rest.put(
                 Routes.applicationCommands(clientId),
-                { body: globalCommandsData }
+                { body: finalGlobalCommands }
             );
             logger.info(`[Deploy] Successfully deployed ${globalData.length} global command(s).`);
             deployedGlobalCount = globalData.length;
@@ -94,15 +100,19 @@ async function deployCommands(logger) { // Renamed and added logger as a paramet
             logger.error('[Deploy] Error deploying global commands:', error);
             // We might still want to return partial success if admin commands deployed
         }
-    } else {
-        logger.info("[Deploy] No global commands found to deploy.");
-         // Attempt to clear existing global commands if no global commands are defined now
-        try {
-            logger.info(`[Deploy] Clearing existing global commands as no global commands are currently defined.`);
-            await rest.put(Routes.applicationCommands(clientId), { body: [] });
-            logger.info(`[Deploy] Successfully cleared global commands.`);
-        } catch (error) {
-            logger.error(`[Deploy] Error clearing global commands:`, error);
+    } else { // This means finalGlobalCommands is empty
+        logger.info("[Deploy] No global commands to deploy (either none were loaded, or all were filtered out).");
+        if (globalCommandsData.length === 0 && adminCommandsData.length === 0) {
+            logger.warn("[Deploy] All command lists are empty (admin and global). Attempting to clear global commands.");
+            try {
+                logger.info(`[Deploy] Clearing ALL global commands as no commands were loaded at all.`);
+                await rest.put(Routes.applicationCommands(clientId), { body: [] });
+                logger.info(`[Deploy] Successfully cleared ALL global commands.`);
+            } catch (error) {
+                logger.error(`[Deploy] Error clearing ALL global commands:`, error);
+            }
+        } else {
+            logger.warn("[Deploy] No global commands are being deployed, but other commands (e.g., admin) might exist or global commands were filtered. Global commands will NOT be cleared automatically.");
         }
     }
 

@@ -145,7 +145,7 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
   const isUpdate = interaction.isMessageComponent() || interaction.type === InteractionType.ModalSubmit;
 
   if (isUpdate && !interaction.deferred && !interaction.replied) {
-    try { await interaction.deferUpdate({ fetchReply: true }); }
+    try { await interaction.deferUpdate(); }
     catch (deferError) { 
         logger.error(`[list.js] Failed to defer update: ${deferError.message}`); 
         try { await interaction.followUp({ content: 'Error processing request. Please try again.', flags: MessageFlags.Ephemeral }); }
