@@ -89,15 +89,17 @@ async function deployCommands(logger) { // Renamed and added logger as a paramet
     // Deploy Global Commands
     if (finalGlobalCommands.length > 0) {
         try {
-            logger.info(`[Deploy] Deploying ${finalGlobalCommands.length} global command(s)...`);
-            const globalData = await rest.put(
+            logger.info(`[Deploy] Attempting to deploy ${finalGlobalCommands.length} global commands...`);
+            const deployedGlobalPayload = await rest.put(
                 Routes.applicationCommands(clientId),
                 { body: finalGlobalCommands }
             );
-            logger.info(`[Deploy] Successfully deployed ${globalData.length} global command(s).`);
-            deployedGlobalCount = globalData.length;
+            deployedGlobalCount = deployedGlobalPayload.length;
+            logger.info(`[Deploy] Successfully deployed ${deployedGlobalCount} global command(s) according to Discord API response.`);
         } catch (error) {
-            logger.error('[Deploy] Error deploying global commands:', error);
+            logger.error('[Deploy] FAILED to deploy global commands:', error);
+            if (error.rawError) { logger.error('[Deploy] Raw error data from Discord:', error.rawError); }
+            if (error.stack) { logger.error('[Deploy] Stack trace:', error.stack); }
             // We might still want to return partial success if admin commands deployed
         }
     } else { // This means finalGlobalCommands is empty
