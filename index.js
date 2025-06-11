@@ -7,7 +7,7 @@ const db = require('./database.js'); // Knex instance from database.js
 const logger = require('./utils/logger.js');
 const { DateTime } = require('luxon');
 const reminderScheduler = require('./services/reminderScheduler.js');
-const { deployGlobalCommands } = require('./deploy-commands.js'); // Added for in-process deployment
+const { deployCommands } = require('./deploy-commands.js'); // Updated for renamed function
 
 // --- Client Setup ---
 const client = new Client({
@@ -104,7 +104,7 @@ client.once(Events.ClientReady, async c => {
         logger.info('[Startup] Database migrations complete.');
 
         logger.info('[Startup] Deploying slash commands in-process...');
-        await deployGlobalCommands(logger);
+        await deployCommands(logger); // Updated function call
         logger.info('[Startup] In-process slash command deployment complete.');
 
         setupScheduledTasks();
