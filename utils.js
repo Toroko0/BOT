@@ -1,135 +1,80 @@
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuOptionBuilder } = require('discord.js');
 const { formatDistance, addDays } = require('date-fns');
-const { table } = require('table');
+const { table, getBorderCharacters } = require('table');
 
 // Calculate days until expiration (180 - days_owned)
-function calculateDaysLeft(daysOwned) {
+// This function might be deprecated if days_left is directly calculated from expiry_date
+function calculateDaysLeft_old(daysOwned) {
   // Ensure daysOwned is treated as a number and use simple formula: 180 - daysOwned
   const owned = parseInt(daysOwned) || 0;
   return Math.max(0, 180 - owned);
 }
 
 // Calculate expiration date based on days owned
-function calculateExpiryDate(daysOwned) {
-  const daysLeft = calculateDaysLeft(daysOwned);
+// This function might be deprecated if expiry_date is directly stored
+function calculateExpiryDate_old(daysOwned) {
+  const daysLeft = calculateDaysLeft_old(daysOwned);
   return addDays(new Date(), daysLeft);
 }
 
-
-
 // Get the day of week for a date
 function getDayOfWeek(date) {
-  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  return days[date.getDay()];
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  return days[date.getUTCDay()]; // Use getUTCDay for consistency with UTC dates
 }
 
-// Format a world as a string for display
+// Format a world as a string for display (potentially deprecated by new table formatter)
 function formatWorld(world) {
-  const daysLeft = calculateDaysLeft(world.days_owned);
-  const expiryDate = calculateExpiryDate(world.days_owned);
+  const daysLeft = calculateDaysLeft_old(world.days_owned);
+  const expiryDate = calculateExpiryDate_old(world.days_owned);
   
   return {
     name: world.name,
     daysOwned: world.days_owned,
     daysLeft: daysLeft,
-    expiryDate: formatDate(expiryDate),
-    expiryDay: getDayOfWeek(expiryDate),
+    expiryDate: formatDate(expiryDate), // formatDate is still useful
+    expiryDay: getDayOfWeek(expiryDate), // getDayOfWeek is still useful
     lockType: world.lock_type || 'M',
     isPublic: world.is_public ? 'Public' : 'Private',
     addedBy: world.added_by
   };
 }
 
-// Format a list of worlds as a table
-function formatWorldsTable(worlds, includePublicStatus = false) {
-  if (worlds.length === 0) {
-    return 'No worlds found.';
-  }
-
-  // Define table headers
-  let headers = ['World', 'Days Owned', 'Days Left', 'Expires On', 'Lock Type'];
-  if (includePublicStatus) {
-    headers.push('Visibility');
-  }
-
-  // Format table data
-  const data = [headers];
-  worlds.forEach(world => {
-    const formatted = formatWorld(world);
-    let row = [
-      formatted.name,
-      formatted.daysOwned.toString(),
-      formatted.daysLeft.toString(),
-      `${formatted.expiryDate} (${formatted.expiryDay})`,
-      formatted.lockType
-    ];
-    if (includePublicStatus) {
-      row.push(formatted.isPublic);
-    }
-    data.push(row);
-  });
-
-  // Configure table options
-  const config = {
-    columns: {
-      0: { alignment: 'left' },
-      1: { alignment: 'right' },
-      2: { alignment: 'right' },
-      3: { alignment: 'left' },
-      4: { alignment: 'left' },
-    },
-    border: {
-      topBody: '─',
-      topJoin: '┬',
-      topLeft: '┌',
-      topRight: '┐',
-      bottomBody: '─',
-      bottomJoin: '┴',
-      bottomLeft: '└',
-      bottomRight: '┘',
-      bodyLeft: '│',
-      bodyRight: '│',
-      bodyJoin: '│',
-      joinBody: '─',
-      joinLeft: '├',
-      joinRight: '┤',
-      joinJoin: '┼'
-    },
-    header: {
-      alignment: 'center',
-      content: 'Growtopia Worlds Tracker',
-    }
-  };
-
-  if (includePublicStatus) {
-    config.columns[5] = { alignment: 'left' };
-  }
-
-  return '```\n' + table(data, config) + '\n```';
-}
-
-// Format world details for the info command
+// Format world details for the info command (review if this needs updates based on new date logic)
 function formatWorldDetails(world) {
   if (!world) {
     return 'World not found.';
   }
 
-  const formatted = formatWorld(world);
+  // Assuming world.expiry_date is available and is a UTC date string
+  const expiryDate = new Date(world.expiry_date);
+  const now = new Date();
+  const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const expiryDateUTC = new Date(Date.UTC(expiryDate.getUTCFullYear(), expiryDate.getUTCMonth(), expiryDate.getUTCDate()));
+  const daysLeft = Math.ceil((expiryDateUTC.getTime() - todayUTC.getTime()) / (1000 * 60 * 60 * 24));
+  const daysOwned = daysLeft > 0 ? 180 - daysLeft : 180;
+
+  // For display, adjust expiryDate by timezoneOffset if available, otherwise show as UTC
+  // This part depends on how timezoneOffset is passed or stored for info command.
+  // For simplicity, showing UTC here. Adapt if offset is available.
+  const displayExpiryDate = `${expiryDate.getUTCMonth() + 1}/${expiryDate.getUTCDate()}/${expiryDate.getUTCFullYear()} (${getDayOfWeek(expiryDate)})`;
 
   return `
-**World Information: ${formatted.name}**
+**World Information: ${world.name.toUpperCase()}**
 
 🌐 **Basic Details**
-• Days Owned: ${formatted.daysOwned}
-• Days Left: ${formatted.daysLeft}
-• Expires On: ${formatted.expiryDate} (${formatted.expiryDay})
-• Lock Type: ${formatted.lockType}
+• Days Owned: ${daysOwned}
+• Days Left: ${daysLeft > 0 ? daysLeft : 'EXPIRED'}
+• Expires On: ${displayExpiryDate}
+• Lock Type: ${(world.lock_type || 'MAIN').toUpperCase()}
 
 📊 **Tracking Info**
-• Added By: ${formatted.addedBy}
-• Visibility: ${formatted.isPublic}
+• Added By: ${world.added_by_username || 'Unknown'}
+• Visibility: ${world.is_public ? 'Public' : 'Private'}
 • ID: ${world.id}
   `;
 }
+
 
 // Format world statistics
 function formatWorldStats(stats) {
@@ -187,7 +132,7 @@ function checkCooldown(userId, command, cooldownTime = 3) {
   return { onCooldown: false };
 }
 
-// Format date as MM/DD/YYYY
+// Format date as MM/DD/YYYY (kept for other uses if any)
 function formatDate(date) {
   return date.toLocaleDateString('en-US', {
     month: '2-digit',
@@ -196,7 +141,7 @@ function formatDate(date) {
   });
 }
 
-// Calculate days remaining until expiry
+// Calculate days remaining until expiry (potentially deprecated by new logic in table func)
 function calculateDaysRemaining(expiryDate) {
   const today = new Date();
   const diff = expiryDate.getTime() - today.getTime();
@@ -216,7 +161,7 @@ function getDaysLeftStatus(daysLeft) {
   }
 }
 
-// Get the day name of a date
+// Get the day name of a date (kept for other uses if any)
 function getDayName(date) {
   return date.toLocaleDateString('en-US', { weekday: 'long' });
 }
@@ -249,7 +194,6 @@ function updateWorldsDaily(db) {
 }
 
 // Remove worlds older than 180 days
-// Remove worlds older than 180 days
 function removeExpiredWorlds(db) {
   try {
     console.log('[Cleanup] Starting expired worlds cleanup');
@@ -272,7 +216,7 @@ function removeExpiredWorlds(db) {
 const formatWorldData = (world) => {
   return {
     name: world.name.toUpperCase(),
-    daysOwned: world.days_owned || 0,
+    daysOwned: world.days_owned || 0, // This might need recalculation based on expiry_date
     expiryDate: world.expiry_date || new Date().toISOString(),
     lockType: world.lock_type || 'M',
     isPublic: world.is_public || false,
@@ -293,17 +237,121 @@ const formatStats = (stats) => {
 • Expired: ${stats.expired || 0}`;
 };
 
+function createPaginationRow(baseCustomId, currentPage, totalPages) {
+    const row = new ActionRowBuilder();
+    row.addComponents(
+        new ButtonBuilder()
+            .setCustomId(`${baseCustomId}_prev_${currentPage}`)
+            .setLabel('⬅️ Prev')
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(currentPage <= 1),
+        new ButtonBuilder()
+            .setCustomId(`${baseCustomId}_display_${currentPage}_${totalPages}`)
+            .setLabel(`Page ${currentPage}/${totalPages}`)
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true),
+        new ButtonBuilder()
+            .setCustomId(`${baseCustomId}_next_${currentPage}`)
+            .setLabel('Next ➡️')
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(currentPage >= totalPages)
+    );
+    return row;
+}
+
+function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset) {
+  const tableData = [];
+  const now = new Date(); // Current time in UTC
+  const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
+  if (viewMode === 'pc') {
+    tableData.push(['WORLD', 'OWNED', 'LEFT', 'EXPIRES ON', 'LOCK']);
+    for (const world of worlds) {
+      const expiryDate = new Date(world.expiry_date); // Assuming expiry_date is UTC
+      const expiryDateUTC = new Date(Date.UTC(expiryDate.getUTCFullYear(), expiryDate.getUTCMonth(), expiryDate.getUTCDate()));
+
+      const days_left = Math.ceil((expiryDateUTC.getTime() - todayUTC.getTime()) / (1000 * 60 * 60 * 24));
+      const days_owned = days_left > 0 ? Math.max(0, 180 - days_left) : 180;
+
+      const userLocalExpiry = new Date(expiryDate.getTime() + timezoneOffset * 3600000);
+      const displayExpiryDate = `${userLocalExpiry.getUTCMonth() + 1}/${userLocalExpiry.getUTCDate()}/${userLocalExpiry.getUTCFullYear()} (${getDayOfWeek(userLocalExpiry)})`;
+
+      let lockTypeDisplay = (world.lock_type || 'MAIN').toUpperCase();
+      if (lockTypeDisplay === 'MAINLOCK') lockTypeDisplay = 'MAIN';
+      if (lockTypeDisplay === 'OUTLOCK') lockTypeDisplay = 'OUT';
+
+      tableData.push([
+        world.name.toUpperCase(),
+        days_owned.toString(),
+        days_left > 0 ? days_left.toString() : 'EXP',
+        displayExpiryDate,
+        lockTypeDisplay
+      ]);
+    }
+  } else { // Mobile Mode
+    tableData.push(['WORLD', 'OWNED']);
+    for (const world of worlds) {
+      const expiryDate = new Date(world.expiry_date); // Assuming expiry_date is UTC
+      const expiryDateUTC = new Date(Date.UTC(expiryDate.getUTCFullYear(), expiryDate.getUTCMonth(), expiryDate.getUTCDate()));
+
+      const days_left = Math.ceil((expiryDateUTC.getTime() - todayUTC.getTime()) / (1000 * 60 * 60 * 24));
+      const days_owned = days_left > 0 ? Math.max(0, 180 - days_left) : 180;
+
+      let lockTypeChar = (world.lock_type || 'M').charAt(0).toUpperCase();
+      if (world.lock_type && world.lock_type.toLowerCase() === 'mainlock') lockTypeChar = 'M';
+      if (world.lock_type && world.lock_type.toLowerCase() === 'outlock') lockTypeChar = 'O';
+
+
+      tableData.push([
+        `(${lockTypeChar}) ${world.name.toUpperCase()}`,
+        days_owned.toString()
+      ]);
+    }
+  }
+
+  const baseTitle = listType === 'private' ? 'Your Worlds' : 'Public Worlds';
+  const tableConfig = {
+    border: getBorderCharacters('norc'),
+    header: {
+      alignment: 'center',
+      content: `${baseTitle} (View: ${viewMode === 'pc' ? 'PC' : 'Mobile'})`
+    },
+    columns: viewMode === 'pc' ?
+      { 0: { width: 15 }, 1: { width: 6, alignment: 'right'}, 2: { width: 5, alignment: 'right' }, 3: { width: 15 }, 4: { width: 6 } } :
+      { 0: { width: 20 }, 1: { width: 6, alignment: 'right' } }
+  };
+  return { data: tableData, config: tableConfig };
+}
+
+function createWorldSelectOption(world, timezoneOffset) {
+  const expiryDate = new Date(world.expiry_date); // Assuming expiry_date is UTC
+  const userLocalExpiry = new Date(expiryDate.getTime() + timezoneOffset * 3600000);
+
+  const now = new Date();
+  const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const expiryDateUTC = new Date(Date.UTC(expiryDate.getUTCFullYear(), expiryDate.getUTCMonth(), expiryDate.getUTCDate()));
+  const daysLeft = Math.ceil((expiryDateUTC.getTime() - todayUTC.getTime()) / (1000 * 60 * 60 * 24));
+
+  return new StringSelectMenuOptionBuilder()
+    .setLabel(`${world.name.substring(0, 25)} (${world.custom_id || 'No ID'})`)
+    .setValue(world.id.toString())
+    .setDescription(`Expires: ${userLocalExpiry.getUTCMonth() + 1}/${userLocalExpiry.getUTCDate()}/${userLocalExpiry.getUTCFullYear()} (${daysLeft > 0 ? daysLeft : 'EXP'}d left)`);
+}
+
 module.exports = {
-  calculateDaysLeft,
+  calculateDaysLeft: calculateDaysLeft_old, // Keep old one if other parts of code use it, or update them
   calculateDaysRemaining,
-  calculateExpiryDate,
+  calculateExpiryDate: calculateExpiryDate_old, // Keep old one if other parts of code use it
   formatDate,
   getDayOfWeek,
-  formatWorld,
-  formatWorldsTable,
+  formatWorld, // Might be deprecated by new table formatter
   formatWorldDetails,
   formatWorldStats,
   checkCooldown,
   updateWorldsDaily,
-  removeExpiredWorlds
+  removeExpiredWorlds,
+  createPaginationRow,
+  formatWorldsToTable,
+  createWorldSelectOption,
+  // Potentially export new date/day calculation if needed elsewhere, or keep them local to new functions
 };

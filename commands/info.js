@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
 const db = require('../database.js');
 const utils = require('../utils.js');
 const { invalidateSearchCache } = require('./search.js'); // Assuming search.js exports this
@@ -129,7 +129,7 @@ async function showWorldInfo(interaction, world) {
 
 
   const components = [];
-  const replyOpts = { flags: 1 << 6 }; // Ephemeral by default
+  const replyOpts = { flags: MessageFlags.Ephemeral }; // Ephemeral by default
 
   const generalButtonsRow = new ActionRowBuilder();
   generalButtonsRow.addComponents(
@@ -183,11 +183,12 @@ async function showWorldInfo(interaction, world) {
     try {
         // Use update for components, reply for initial command
         if (interaction.isMessageComponent() || interaction.isModalSubmit()) {
-             if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate(replyOpts);
+             if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate(); // deferUpdate doesn't take flags
              await interaction.editReply(replyOptions);
         } else {
+             // For initial slash command execution, defer and then edit.
              if (!interaction.deferred && !interaction.replied) await interaction.deferReply(replyOpts);
-             await interaction.editReply(replyOptions); // Edit the deferred reply
+             await interaction.editReply(replyOptions);
         }
     } catch (error) {
         logger.error("[info.js] Error showing world info / sending reply:", error?.stack || error);
@@ -208,7 +209,7 @@ module.exports = {
 
   async execute(interaction) {
     const worldIdentifier = interaction.options.getString('world');
-    const replyOpts = { flags: 1 << 6 };
+    const replyOpts = { flags: MessageFlags.Ephemeral };
     const cooldown = utils.checkCooldown(interaction.user.id, 'info_cmd', 3);
     if (cooldown.onCooldown) { await interaction.reply({ ...replyOpts, content: `⏱️ Wait ${cooldown.timeLeft}s.` }); return; }
 
@@ -232,14 +233,14 @@ module.exports = {
     // Structure: info_button_action_worldId
     const action = params[0];
     const worldId = params[1];
-    const replyOpts = { flags: 1 << 6 };
+    const replyOpts = { flags: MessageFlags.Ephemeral };
     const cooldown = utils.checkCooldown(interaction.user.id, `info_btn_${action}`, 2); // Shorter cooldown for buttons
     if (cooldown.onCooldown) { await interaction.reply({ ...replyOpts, content: `⏱️ Wait ${cooldown.timeLeft}s.` }); return; }
 
     if (!worldId) { await interaction.reply({ ...replyOpts, content: '❌ Invalid action: Missing world ID.' }); return; }
 
     const world = await db.getWorldById(worldId);
-    if (!world) { await interaction.update({ content: '❌ World not found.', embeds: [], components: [], flags: 1 << 6 }); return; }
+    if (!world) { await interaction.update({ content: '❌ World not found.', embeds: [], components: [], flags: MessageFlags.Ephemeral }); return; }
     if (world.user_id !== interaction.user.id) { await interaction.reply({ ...replyOpts, content: '❌ You do not own this world.' }); return; }
 
     let success = false;
@@ -283,7 +284,7 @@ module.exports = {
                 await interaction.update({ // Use update as we are responding to a button click
                     content: `⚠️ Are you sure you want to remove **${world.name.toUpperCase()}**?`,
                     components: [confirmRow],
-                    flags: 1 << 6, // Ephemeral
+                    flags: MessageFlags.Ephemeral, // Ephemeral
                     embeds: [] // Clear existing embed
                 });
                 return; // Return here to prevent falling through to generic feedback
@@ -319,7 +320,7 @@ module.exports = {
       // Structure: info_modal_action_worldId
       const action = params[0];
       const worldId = params[1];
-      const replyOpts = { flags: 1 << 6 }; // Ephemeral
+      const replyOpts = { flags: MessageFlags.Ephemeral }; // Ephemeral
 
       if (action === 'edit') {
            if (!worldId) { await interaction.reply({ ...replyOpts, content: "❌ Error: Missing world ID for edit." }); return; }
@@ -389,7 +390,7 @@ module.exports = {
            }
       } else {
            logger.warn(`[info.js] Received unknown modal action: ${action}`);
-           await interaction.reply({ content: 'Unknown form action.', flags: 1 << 6 });
+           await interaction.reply({ content: 'Unknown form action.', flags: MessageFlags.Ephemeral });
       }
   },
 

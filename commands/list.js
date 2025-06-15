@@ -108,7 +108,7 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
     } catch (error) {
         // CRITICAL: Retained the robust error handling from the original file
         logger.error(`[list.js] Error fetching worlds:`, error?.stack || error);
-        const errorContent = { content: '❌ Sorry, I couldn\'t fetch the worlds list.', components: [], ephemeral: true };
+        const errorContent = { content: '❌ Sorry, I couldn\'t fetch the worlds list.', components: [], flags: MessageFlags.Ephemeral };
         try {
             if (isUpdate) await interaction.editReply(errorContent); else await interaction.reply(errorContent);
         } catch (replyError) {
@@ -157,8 +157,8 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
             emptyRow.addComponents(new ButtonBuilder().setCustomId('list_button_viewteam').setLabel('🏢 View Team Worlds').setStyle(ButtonStyle.Secondary));
         }
 
-        const opts = { content: emptyMsg, components: emptyRow.components.length > 0 ? [emptyRow] : [], ephemeral: true };
-        if (isUpdate) await interaction.editReply(opts); else if (!interaction.replied) await interaction.reply(opts); else await interaction.followUp(opts);
+        const opts = { content: emptyMsg, components: emptyRow.components.length > 0 ? [emptyRow] : [], flags: MessageFlags.Ephemeral };
+        await interaction.editReply(opts);
         return;
     }
     
@@ -171,7 +171,7 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
 
     const components = [];
     // Navigation Row (using a utility for cleaner code)
-    components.push(utils.createPaginationRow(page, totalPages, `list_button_page_${type}`, !!currentFilters));
+    components.push(utils.createPaginationRow(`list_button_page_${type}`, page, totalPages));
     
     // Action Row 1
     const actionRow1 = new ActionRowBuilder();
@@ -202,10 +202,14 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
         new ButtonBuilder().setCustomId('list_button_settings').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('list_button_viewlocks').setLabel('🔐 View Locks').setStyle(ButtonStyle.Primary)
     );
-    if (userTeam && type === 'private') {
-        actionRow2.addComponents(new ButtonBuilder().setCustomId('list_button_viewteam').setLabel('🏢 Team Worlds').setStyle(ButtonStyle.Secondary));
-    }
     if (actionRow2.components.length > 0) components.push(actionRow2);
+
+    // Action Row 3
+    const actionRow3 = new ActionRowBuilder();
+    if (userTeam && type === 'private') {
+        actionRow3.addComponents(new ButtonBuilder().setCustomId('list_button_viewteam').setLabel('🏢 Team Worlds').setStyle(ButtonStyle.Secondary));
+    }
+    if (actionRow3.components.length > 0) components.push(actionRow3);
     
     // Select Menu
     if (viewMode === 'pc' && worlds.length > 0 && type === 'private') {
@@ -214,8 +218,8 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
     }
   
     const finalContent = `${tableOutput}\n📊 Total ${type} worlds: ${totalWorlds}`;
-    const finalOpts = { content: finalContent, components, ephemeral: true };
-    if (isUpdate) await interaction.editReply(finalOpts); else if (!interaction.replied) await interaction.reply(finalOpts); else await interaction.followUp(finalOpts);
+    const finalOpts = { content: finalContent, components, flags: MessageFlags.Ephemeral };
+    await interaction.editReply(finalOpts);
 }
 
 module.exports = {
@@ -223,12 +227,13 @@ module.exports = {
         .setName('list')
         .setDescription('View your tracked Growtopia worlds or public worlds in this server.'),
     async execute(interaction) {
-        await interaction.deferReply({ ephemeral: true });
+        logger.info(`[list.js] Entered execute function for /list, User: ${interaction.user.tag}, Interaction ID: ${interaction.id}`);
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         await showWorldsList(interaction, 'private', 1, null);
     },
     async handleButton(interaction, params) {
         const cooldown = utils.checkCooldown(interaction.user.id, 'list_button');
-        if (cooldown.onCooldown) { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, ephemeral: true }); return; }
+        if (cooldown.onCooldown) { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, flags: MessageFlags.Ephemeral }); return; }
 
         const [action, ...args] = params;
         const userActiveFilters = interaction.client.activeListFilters?.[interaction.user.id] || null;
@@ -254,7 +259,7 @@ module.exports = {
                 await showLockWorldModal(interaction);
                 break;
             case 'add':
-                await interaction.reply({ content: "Please use the `/addworld` command to add a new world.", ephemeral: true });
+                await interaction.reply({ content: "Please use the `/addworld` command to add a new world.", flags: MessageFlags.Ephemeral });
                 break;
             case 'filtershow': {
                 const [type] = args;
@@ -277,7 +282,7 @@ module.exports = {
                 break;
             }
             case 'export': {
-                await interaction.deferReply({ ephemeral: true });
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                 const [type, pageStr] = args;
                 const page = parseInt(pageStr) || 1;
                 const filtersForDb = { ...userActiveFilters, guildId: type === 'public' ? interaction.guildId : null };
@@ -303,7 +308,7 @@ module.exports = {
     },
     async handleSelectMenu(interaction, params) {
         const cooldown = utils.checkCooldown(interaction.user.id, 'list_select');
-        if (cooldown.onCooldown) { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, ephemeral: true }); return; }
+        if (cooldown.onCooldown) { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, flags: MessageFlags.Ephemeral }); return; }
 
         const [action] = params;
         if (action === 'info') {
@@ -311,7 +316,7 @@ module.exports = {
             const worldId = parseInt(interaction.values[0]);
             const world = await db.getWorldById(worldId);
             if (!world || (world.user_id !== interaction.user.id && !world.is_public)) {
-                return interaction.reply({ content: '❌ World not found or you lack permission.', ephemeral: true });
+                return interaction.reply({ content: '❌ World not found or you lack permission.', flags: MessageFlags.Ephemeral });
             }
             await showWorldInfo(interaction, world);
         }
@@ -331,11 +336,11 @@ module.exports = {
         const identifier = interaction.fields.getTextInputValue('identifier');
         if (!identifier) {
             logger.error(`[list.js] Modal action '${action}' submitted without an 'identifier' field.`);
-            return interaction.reply({ content: 'There was an error processing this form. The required field was missing.', ephemeral: true });
+            return interaction.reply({ content: 'There was an error processing this form. The required field was missing.', flags: MessageFlags.Ephemeral });
         }
 
         // Defer for actions that need DB lookups
-        if (action !== 'remove') await interaction.deferReply({ ephemeral: true });
+        if (action !== 'remove') await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         const world = await db.findWorldByIdentifier(interaction.user.id, identifier, interaction.guildId);
         
@@ -343,7 +348,7 @@ module.exports = {
             case 'remove': {
                 // CRITICAL: Retained the remove confirmation flow from the original file
                 if (!world || world.user_id !== interaction.user.id) {
-                    return interaction.reply({ content: `❌ World "**${identifier}**" not found in your list.`, ephemeral: true });
+                    return interaction.reply({ content: `❌ World "**${identifier}**" not found in your list.`, flags: MessageFlags.Ephemeral });
                 }
                 const confirmId = `remove_button_confirm_${world.id}`;
                 const cancelId = `remove_button_cancel`;
@@ -351,7 +356,7 @@ module.exports = {
                     new ButtonBuilder().setCustomId(confirmId).setLabel('Confirm Remove').setStyle(ButtonStyle.Danger),
                     new ButtonBuilder().setCustomId(cancelId).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
                 );
-                await interaction.reply({ content: `⚠️ Are you sure you want to remove **${world.name.toUpperCase()}** from your list?`, components: [row], ephemeral: true });
+                await interaction.reply({ content: `⚠️ Are you sure you want to remove **${world.name.toUpperCase()}** from your list?`, components: [row], flags: MessageFlags.Ephemeral });
                 break;
             }
             case 'share':
@@ -381,7 +386,7 @@ module.exports = {
                 break;
             }
             case 'lockworldsubmit': {
-                await interaction.deferReply({ ephemeral: true }); // Modal was submitted, need new reply
+                // await interaction.deferReply({ flags: MessageFlags.Ephemeral }); // Modal was submitted, need new reply
                 const lockType = interaction.fields.getTextInputValue('lock_type')?.trim().toLowerCase() || 'main';
                 const note = interaction.fields.getTextInputValue('note')?.trim() || null;
                 
@@ -397,7 +402,7 @@ module.exports = {
             }
             default:
                 logger.warn(`[list.js] Unhandled modal action: ${action}`);
-                await interaction.reply({ content: 'This action is not recognized.', ephemeral: true });
+                await interaction.reply({ content: 'This action is not recognized.', flags: MessageFlags.Ephemeral });
                 break;
         }
     },

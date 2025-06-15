@@ -163,12 +163,12 @@ module.exports = {
         .setDescription('Interact with the player marketplace.')
         .addSubcommand(sub => sub.setName('list').setDescription('List a world from your Locks for sale.').addStringOption(o => o.setName('worldname').setDescription('Name of the world.').setRequired(true)).addIntegerOption(o => o.setName('price').setDescription('Price in DLs.').setRequired(true).setMinValue(1)).addStringOption(o => o.setName('note').setDescription('Optional note.').setMaxLength(200)))
         .addSubcommand(sub => sub.setName('browse').setDescription('Browse worlds on the market.')
-            .addIntegerOption(o => o.setName('min_price').setMinValue(1).setDescription('Minimum price to filter by.'))
-            .addIntegerOption(o => o.setName('max_price').setMinValue(1).setDescription('Maximum price to filter by.'))
+            .addIntegerOption(o => o.setName('min_price').setMinValue(1).setDescription('Minimum price of listings to browse (DLs).'))
+            .addIntegerOption(o => o.setName('max_price').setMinValue(1).setDescription('Maximum price of listings to browse (DLs).'))
             .addUserOption(o => o.setName('seller').setDescription('Filter listings by a specific seller.'))
-            .addIntegerOption(o => o.setName('page').setMinValue(1)))
-        .addSubcommand(sub => sub.setName('mylistings').setDescription('View and manage your active listings.').addIntegerOption(o => o.setName('page').setMinValue(1)))
-        .addSubcommand(sub => sub.setName('buy').setDescription('Buy a world from the market.').addIntegerOption(o => o.setName('listing_id').setRequired(true))),
+            .addIntegerOption(o => o.setName('page').setMinValue(1).setDescription('Page number for browsing listings.')))
+        .addSubcommand(sub => sub.setName('mylistings').setDescription('View and manage your active listings.').addIntegerOption(o => o.setName('page').setMinValue(1).setDescription('Page number for your listings.')))
+        .addSubcommand(sub => sub.setName('buy').setDescription('Buy a world from the market.').addIntegerOption(o => o.setName('listing_id').setRequired(true).setDescription('The ID of the market listing to buy.'))),
     async execute(interaction) {
         await db.addUser(interaction.user.id, interaction.user.username);
         const subcommand = interaction.options.getSubcommand();
