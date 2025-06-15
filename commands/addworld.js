@@ -208,4 +208,5 @@ module.exports = {
          await interaction.reply({ content: 'Unknown form action.', flags: 1 << 6 });
      }
   },
+  showAddWorldModal, // Export the function
 };

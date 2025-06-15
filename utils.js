@@ -241,20 +241,34 @@ function createPaginationRow(baseCustomId, currentPage, totalPages) {
     const row = new ActionRowBuilder();
     row.addComponents(
         new ButtonBuilder()
-            .setCustomId(`${baseCustomId}_prev_${currentPage}`)
+            .setCustomId(`${baseCustomId}_${currentPage - 1}`)
             .setLabel('⬅️ Prev')
             .setStyle(ButtonStyle.Primary)
-            .setDisabled(currentPage <= 1),
+            .setDisabled(currentPage <= 1)
+    );
+    row.addComponents(
         new ButtonBuilder()
-            .setCustomId(`${baseCustomId}_display_${currentPage}_${totalPages}`)
+            .setCustomId(`${baseCustomId}_display_${currentPage}_${totalPages}`) // This ID is not meant to be parsed for action
             .setLabel(`Page ${currentPage}/${totalPages}`)
             .setStyle(ButtonStyle.Secondary)
-            .setDisabled(true),
+            .setDisabled(true)
+    );
+    row.addComponents(
         new ButtonBuilder()
-            .setCustomId(`${baseCustomId}_next_${currentPage}`)
+            .setCustomId(`${baseCustomId}_${currentPage + 1}`)
             .setLabel('Next ➡️')
             .setStyle(ButtonStyle.Primary)
             .setDisabled(currentPage >= totalPages)
+    );
+    // baseCustomId is like "list_button_page_private"
+    // We want gotoCustomId to be like "list_button_goto_private_TOTALPAGES"
+    const gotoCustomId = baseCustomId.replace('_page_', '_goto_') + `_${totalPages}`;
+    row.addComponents(
+        new ButtonBuilder()
+            .setCustomId(gotoCustomId)
+            .setLabel('↪️ Go To')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(totalPages <= 1)
     );
     return row;
 }
@@ -354,4 +368,89 @@ module.exports = {
   formatWorldsToTable,
   createWorldSelectOption,
   // Potentially export new date/day calculation if needed elsewhere, or keep them local to new functions
+  encodeFilters,
+  decodeFilters,
+  parseFilterModal,
 };
+
+// --- Filter Encoding/Decoding Functions ---
+// Import logger if not already: const logger = require('./logger.js'); // Assuming logger.js is in the same directory or accessible
+// For utils, it's often better to have a dedicated logger instance or pass it if needed.
+// For now, let's assume a logger is available or add a simple console log for errors.
+// Let's add a placeholder logger for now if not found.
+let logger;
+try {
+  logger = require('./logger.js'); // Adjust path as needed
+} catch (e) {
+  // console.warn("[utils.js] Logger module not found, using console for encode/decode errors.");
+  logger = { error: console.error, warn: console.warn }; // Basic fallback
+}
+const { Buffer } = require('buffer');
+
+function encodeFilters(filters) {
+  if (!filters || Object.keys(filters).length === 0) return 'e30'; // Corresponds to {}
+  try {
+    return Buffer.from(JSON.stringify(filters)).toString('base64url');
+  } catch (e) {
+    logger.error('[utils.js] Failed to encode filters:', { error: e, filters });
+    return 'e30'; // Fallback to empty filters on error
+  }
+}
+
+function decodeFilters(encodedString) {
+  if (!encodedString || encodedString === 'e30') return {};
+  try {
+    return JSON.parse(Buffer.from(encodedString, 'base64url').toString('utf8'));
+  } catch (e) {
+    logger.error('[utils.js] Failed to decode filters:', { error: e, encodedString });
+    return {}; // Fallback to empty filters on error
+  }
+}
+
+// --- Filter Modal Parsing Function ---
+function parseFilterModal(interaction) {
+    const filters = {};
+    try {
+        const prefix = interaction.fields.getTextInputValue('filter_prefix')?.trim();
+        if (prefix) filters.prefix = prefix;
+
+        const nameLengthMinStr = interaction.fields.getTextInputValue('filter_name_length_min')?.trim();
+        if (nameLengthMinStr) {
+            const minLen = parseInt(nameLengthMinStr);
+            if (!isNaN(minLen) && minLen > 0) filters.nameLengthMin = minLen;
+        }
+
+        const nameLengthMaxStr = interaction.fields.getTextInputValue('filter_name_length_max')?.trim();
+        if (nameLengthMaxStr) {
+            const maxLen = parseInt(nameLengthMaxStr);
+            if (!isNaN(maxLen) && maxLen > 0) filters.nameLengthMax = maxLen;
+        }
+
+        const expiryDay = interaction.fields.getTextInputValue('filter_expiry_day')?.trim().toLowerCase();
+        if (expiryDay) {
+            // Capitalize first letter for consistency if required by DB or for display
+            filters.expiryDay = expiryDay.charAt(0).toUpperCase() + expiryDay.slice(1);
+        }
+
+        const daysOwnedStr = interaction.fields.getTextInputValue('filter_days_owned')?.trim();
+        if (daysOwnedStr) {
+            const daysOwned = parseInt(daysOwnedStr);
+            // Assuming daysOwned is 0-180 as per placeholder.
+            if (!isNaN(daysOwned) && daysOwned >= 0 && daysOwned <= 180) filters.daysOwned = daysOwned;
+        }
+        // Use the existing logger (fallback or actual)
+        if (logger && logger.debug) {
+             logger.debug('[utils.js] Parsed filters from modal:', filters);
+        } else {
+            console.log('[utils.js] Debug: Parsed filters from modal:', filters); // Fallback if logger.debug is not there
+        }
+    } catch (error) {
+        if (logger && logger.error) {
+            logger.error('[utils.js] Error parsing filter modal:', error);
+        } else {
+            console.error('[utils.js] Error parsing filter modal:', error); // Fallback
+        }
+        // Return empty or partially parsed filters, or rethrow
+    }
+    return filters;
+}

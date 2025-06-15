@@ -783,50 +783,61 @@ async function validateAndUseTeamInvitation(teamName, invitationCode, joiningUse
   });
 }
 
-
 async function getTeamWorlds(teamId, page = 1, pageSize = 10, filters = {}) {
-  logger.debug(`[DB] Fetching worlds for team ID ${teamId}, page ${page}, filters:`, filters);
-  try {
-    const query = knexInstance('team_worlds as tw')
-      .leftJoin('users as u', 'tw.added_by_user_id', 'u.id')
-      .where('tw.team_id', teamId)
-      .select(
-        'tw.id as team_world_id',
-        'tw.world_name',
-        'tw.expiry_date',
-        'tw.note',
-        'tw.added_by_user_id',
-        'tw.added_date',
-        'u.username as added_by_discord_tag',
-        'u.bot_username as added_by_bot_username',
-        knexInstance.raw("CAST(JULIANDAY(tw.expiry_date) - JULIANDAY('now') AS INTEGER) as days_left")
-      );
+    logger.debug(`[DB] Fetching worlds for team ID ${teamId}, page ${page}, filters:`, filters);
 
-    const countQuery = knexInstance('team_worlds').where({ team_id: teamId });
-
-    if (filters.added_by_user_id) {
-      query.andWhere('tw.added_by_user_id', filters.added_by_user_id);
-      countQuery.andWhere('tw.added_by_user_id', filters.added_by_user_id);
+    if (typeof teamId === 'undefined' || teamId === null) { // Guard clause for teamId
+        logger.error('[DB] getTeamWorlds called with undefined or null teamId.');
+        return { worlds: [], total: 0 };
     }
 
-    const totalResult = await countQuery.count({ total: '*' }).first();
-    const total = totalResult ? Number(totalResult.total) : 0;
+    try {
+        const query = knexInstance('team_worlds as tw')
+            .leftJoin('users as u', 'tw.added_by_user_id', 'u.id')
+            .where('tw.team_id', teamId)
+            .select(
+                'tw.id as team_world_id',
+                'tw.world_name',
+                'tw.expiry_date',
+                'tw.note',
+                'tw.added_by_user_id',
+                'tw.added_date',
+                'u.username as added_by_discord_tag',
+                'u.bot_username as added_by_bot_username',
+                knexInstance.raw("CAST(JULIANDAY(tw.expiry_date) - JULIANDAY('now') AS INTEGER) as days_left")
+            );
 
-    query.orderBy('days_left', 'asc')
-         .limit(pageSize)
-         .offset((page - 1) * pageSize);
+        // Make sure countQuery also has the teamId filter applied correctly
+        const countQuery = knexInstance('team_worlds').where({ team_id: teamId });
 
-    const worlds = await query;
-    const processedWorlds = worlds.map(w => ({
-        ...w,
-        added_by_display_name: w.added_by_bot_username || w.added_by_discord_tag || 'Unknown'
-    }));
+        if (filters.added_by_user_id) {
+            query.andWhere('tw.added_by_user_id', filters.added_by_user_id);
+            countQuery.andWhere('added_by_user_id', filters.added_by_user_id); // This should be correct for team_worlds table
+        }
+        // Ensure no other filters are inadvertently causing issues with column names for the countQuery
 
-    return { worlds: processedWorlds, total };
-  } catch (error) {
-    logger.error(`[DB] Error fetching worlds for team ID ${teamId}:`, error);
-    return { worlds: [], total: 0 };
-  }
+        const totalResult = await countQuery.count({ total: '*' }).first();
+        const total = totalResult ? Number(totalResult.total) : 0;
+
+        query.orderBy('days_left', 'asc')
+             .limit(pageSize)
+             .offset((page - 1) * pageSize);
+
+        const worlds = await query;
+        const processedWorlds = worlds.map(w => ({
+            ...w,
+            added_by_display_name: w.added_by_bot_username || w.added_by_discord_tag || 'Unknown'
+        }));
+
+        return { worlds: processedWorlds, total };
+    } catch (error) {
+        logger.error(`[DB] Error fetching worlds for team ID ${teamId}:`, error);
+        // More detailed logging if Undefined binding error occurs
+        if (error.message && error.message.includes('Undefined binding')) {
+            logger.error(`[DB] Undefined binding error in getTeamWorlds. Current teamId: ${teamId}, filters: ${JSON.stringify(filters)}`);
+        }
+        return { worlds: [], total: 0 };
+    }
 }
 
 async function addWorldToTeam(teamId, worldName, daysOwned, note, addedByUserId) {
@@ -1921,6 +1932,27 @@ async function removeLockedWorldById(userId, worldId) {
   }
 }
 
+// --- Function to get worlds at the end of their lifecycle (expired) ---
+async function getWorldsAtLifecycleEnd(userId) {
+    // logger is globally available in this file
+    logger.debug(`[DB] Fetching worlds at lifecycle end (expired) for user ${userId}`);
+    try {
+        const todayUTCEnd = new Date();
+        todayUTCEnd.setUTCHours(23, 59, 59, 999); // Consider worlds expired up to the end of the current UTC day
+
+        const worlds = await knexInstance('worlds')
+            .where('user_id', userId)
+            .andWhere('expiry_date', '<=', todayUTCEnd.toISOString())
+            .select('name', 'custom_id', 'expiry_date') // Select fields needed by the reminder
+            .orderBy('expiry_date', 'asc'); // Optional: order them
+
+        logger.info(`[DB] Found ${worlds.length} worlds at lifecycle end for user ${userId}`);
+        return worlds;
+    } catch (error) {
+        logger.error(`[DB] Error fetching worlds at lifecycle end for user ${userId}:`, error);
+        return []; // Return empty array on error
+    }
+}
 
 // --- Module Exports ---
 module.exports = {
@@ -1989,7 +2021,7 @@ module.exports = {
   generateTeamInvitationCode,
   validateAndUseTeamInvitation,
   getUserTeam,
-  getTeamWorlds,
+  getTeamWorlds, // This is the function being modified
   addWorldToTeam,
   removeWorldFromTeam,
   getTeamDetails,
@@ -2015,4 +2047,5 @@ module.exports = {
   moveWorldToLocks,
   getLockedWorldById,
   removeLockedWorldById,
+  getWorldsAtLifecycleEnd,
 };

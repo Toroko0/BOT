@@ -12,6 +12,8 @@ const { showWorldInfo } = require('./info.js');
 const CONSTANTS = require('../utils/constants.js');
 const { showLockedWorldsList } = require('./lock.js');
 const { showTeamList } = require('./team.js'); // Added from new file for better team integration
+const { showAddWorldModal } = require('./addworld.js'); // Import for Add World button
+const { handleMarketBrowse } = require('./market.js'); // Import for Market Browse button
 
 // --- Refactored Modal Definitions ---
 
@@ -73,6 +75,26 @@ async function showListFilterModal(interaction, currentListType) {
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('filter_days_owned').setLabel('Days Owned (0-180, Optional)').setPlaceholder('0 = 180 days left, 179 = 1 day left').setStyle(TextInputStyle.Short).setRequired(false))
   );
   await interaction.showModal(modal);
+}
+
+// --- Function to show Modal for Go To Page ---
+// Ensure utils.encodeFilters is imported or defined
+async function showListPageGotoModal(interaction, type, totalPages, currentFilters) {
+    const encodedFilters = utils.encodeFilters(currentFilters || {});
+
+    const modal = new ModalBuilder()
+        // Example customId: list_modal_gotopage_private_10_e30
+        // e30 is base64url for {} (empty filters)
+        .setCustomId(`list_modal_gotopage_${type}_${totalPages}_${encodedFilters}`)
+        .setTitle('Go To Page');
+    const pageInput = new TextInputBuilder()
+        .setCustomId('page_number')
+        .setLabel(`Enter Page Number (1-${totalPages})`)
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setPlaceholder('Page number');
+    modal.addComponents(new ActionRowBuilder().addComponents(pageInput));
+    await interaction.showModal(modal);
 }
 
 // --- Core List Display Function ---
@@ -209,6 +231,13 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
     if (userTeam && type === 'private') {
         actionRow3.addComponents(new ButtonBuilder().setCustomId('list_button_viewteam').setLabel('🏢 Team Worlds').setStyle(ButtonStyle.Secondary));
     }
+    // Add Market button here
+    actionRow3.addComponents(
+        new ButtonBuilder()
+            .setCustomId('list_button_marketbrowse')
+            .setLabel('🛒 Market')
+            .setStyle(ButtonStyle.Success)
+    );
     if (actionRow3.components.length > 0) components.push(actionRow3);
     
     // Select Menu
@@ -240,8 +269,25 @@ module.exports = {
 
         switch (action) {
             case 'page': {
-                const [type, pageStr] = args;
+                // interaction.customId is like "list_button_page_private_1"
+                // params = customId.split('_').slice(2) = ["page", "private", "1"]
+                // action = params[0] = "page"
+                // args = params.slice(1) = ["private", "1"]
+                const type = args[0]; // "private"
+                const pageStr = args[1]; // "1" (target page)
                 await showWorldsList(interaction, type, parseInt(pageStr) || 1, userActiveFilters);
+                break;
+            }
+            case 'goto': {
+                // interaction.customId is like "list_button_goto_private_10" (10 is totalPages)
+                // params = customId.split('_').slice(2) = ["goto", "private", "10"]
+                // action = params[0] = "goto"
+                // args = params.slice(1) = ["private", "10"]
+                const type = args[0]; // "private"
+                const totalPagesStr = args[1]; // "10"
+                const totalPages = parseInt(totalPagesStr);
+                // userActiveFilters is already defined above
+                await showListPageGotoModal(interaction, type, totalPages, userActiveFilters);
                 break;
             }
             case 'switch': {
@@ -259,7 +305,8 @@ module.exports = {
                 await showLockWorldModal(interaction);
                 break;
             case 'add':
-                await interaction.reply({ content: "Please use the `/addworld` command to add a new world.", flags: MessageFlags.Ephemeral });
+                // await interaction.reply({ content: "Please use the `/addworld` command to add a new world.", flags: MessageFlags.Ephemeral }); // Old behavior
+                await showAddWorldModal(interaction); // New behavior
                 break;
             case 'filtershow': {
                 const [type] = args;
@@ -282,22 +329,87 @@ module.exports = {
                 break;
             }
             case 'export': {
-                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-                const [type, pageStr] = args;
-                const page = parseInt(pageStr) || 1;
-                const filtersForDb = { ...userActiveFilters, guildId: type === 'public' ? interaction.guildId : null };
-                const userIdForDb = type === 'private' ? interaction.user.id : null;
-                const { worlds } = await db.getFilteredWorlds(userIdForDb, filtersForDb, page, CONSTANTS.PAGE_SIZE);
-                if (worlds.length === 0) { await interaction.editReply({ content: 'No names to export on this page.' }); return; }
+                // const [type, pageStr] = args; // pageStr is no longer directly used here
+                const type = args[0];
+                // userActiveFilters is already defined above
+                const encodedFilters = utils.encodeFilters(userActiveFilters || {});
 
-                // CRITICAL: Retained the detailed export format from the original file
+                const row = new ActionRowBuilder()
+                    .addComponents(
+                        new ButtonBuilder()
+                            .setCustomId(`list_button_exportall_${type}_${encodedFilters}`)
+                            .setLabel('Export All (Matching Filters)')
+                            .setStyle(ButtonStyle.Primary),
+                        new ButtonBuilder()
+                            .setCustomId(`list_button_exportmature_${type}_${encodedFilters}`)
+                            .setLabel('Export Mature (180 Days, Filters)')
+                            .setStyle(ButtonStyle.Secondary)
+                    );
+                await interaction.reply({
+                    content: 'Choose what to export:',
+                    components: [row],
+                    flags: MessageFlags.Ephemeral
+                });
+                break;
+            }
+            case 'exportall': {
+                await interaction.deferUpdate(); // Acknowledge the button click, will edit reply later
+                const [type, encodedFilters] = args;
+                const currentFilters = utils.decodeFilters(encodedFilters);
+                const userIdForDb = type === 'private' ? interaction.user.id : null;
+                const filtersForDb = { ...currentFilters, guildId: type === 'public' ? interaction.guildId : null };
+
+                // Use getAllFilteredWorlds which fetches all, not paginated
+                const worlds = await db.getAllFilteredWorlds(userIdForDb, filtersForDb);
+
+                if (!worlds || worlds.length === 0) {
+                    await interaction.editReply({ content: 'No names to export with the current filters.', components: [] });
+                    return;
+                }
+
                 let exportText = "```\n" + worlds.map(world => {
-                    const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
+                    let lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
+                    if (world.lock_type === 'mainlock') lockChar = 'M'; else if (world.lock_type === 'outlock') lockChar = 'O';
                     const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
                     return `(${lockChar}) ${world.name.toUpperCase()}${customIdPart}`;
                 }).join('\n') + "\n```";
                 
-                await interaction.editReply({ content: exportText.substring(0, 2000) });
+                await interaction.editReply({ content: exportText.substring(0, 2000), components: [] });
+                break;
+            }
+            case 'exportmature': {
+                await interaction.deferUpdate();
+                const [type, encodedFilters] = args;
+                const currentFilters = utils.decodeFilters(encodedFilters);
+                const userIdForDb = type === 'private' ? interaction.user.id : null;
+
+                // Add daysOwned: 180 to existing filters to fetch only mature worlds
+                const filtersForDb = {
+                    ...currentFilters,
+                    guildId: type === 'public' ? interaction.guildId : null,
+                    daysOwned: 180 // This existing filter option in db.getAllFilteredWorlds should correctly fetch expired/mature worlds
+                };
+
+                const worlds = await db.getAllFilteredWorlds(userIdForDb, filtersForDb);
+
+                if (!worlds || worlds.length === 0) {
+                    await interaction.editReply({ content: 'No mature (180 days) names to export with the current filters.', components: [] });
+                    return;
+                }
+
+                let exportText = "```\n" + worlds.map(world => {
+                    let lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
+                    if (world.lock_type === 'mainlock') lockChar = 'M'; else if (world.lock_type === 'outlock') lockChar = 'O';
+                    const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
+                    return `(${lockChar}) ${world.name.toUpperCase()}${customIdPart}`;
+                }).join('\n') + "\n```";
+
+                await interaction.editReply({ content: exportText.substring(0, 2000), components: [] });
+                break;
+            }
+            case 'marketbrowse': {
+                // handleMarketBrowse in market.js does its own deferReply or deferUpdate for the initial call.
+                await handleMarketBrowse(interaction, 1, {}); // Show page 1, no filters/options
                 break;
             }
             default:
@@ -323,7 +435,10 @@ module.exports = {
     },
     async handleModal(interaction, params) {
         // Using original's robust modal handling logic, adapted for new modal structure
-        const [action, type] = params; // e.g., 'filterapply', 'private'
+        // params for list_modal_filterapply_private -> params = ["filterapply", "private"]
+        // params for list_modal_gotopage_private_10_e30 -> params = ["gotopage", "private", "10", "e30"]
+        const action = params[0];
+        const type = params[1];
 
         if (action === 'filterapply') {
             await interaction.deferUpdate();
@@ -331,19 +446,40 @@ module.exports = {
             logger.info(`[list.js] Applying filters: ${JSON.stringify(filters)} for list type ${type}`);
             await showWorldsList(interaction, type, 1, filters);
             return;
-        }
-        
-        const identifier = interaction.fields.getTextInputValue('identifier');
-        if (!identifier) {
-            logger.error(`[list.js] Modal action '${action}' submitted without an 'identifier' field.`);
-            return interaction.reply({ content: 'There was an error processing this form. The required field was missing.', flags: MessageFlags.Ephemeral });
+        } else if (action === 'gotopage') {
+            // type is params[1] (e.g. "private")
+            const totalPages = parseInt(params[2]);
+            const encodedFiltersFromModalId = params[3]; // Can be undefined if not in customId
+            const currentFilters = utils.decodeFilters(encodedFiltersFromModalId);
+
+            const pageNumberStr = interaction.fields.getTextInputValue('page_number');
+            const pageNumber = parseInt(pageNumberStr);
+
+            if (isNaN(pageNumber) || pageNumber < 1 || pageNumber > totalPages) {
+                await interaction.reply({ content: `Invalid page number. Please enter a number between 1 and ${totalPages}.`, ephemeral: true });
+                return;
+            }
+            await interaction.deferUpdate();
+            await showWorldsList(interaction, type, pageNumber, currentFilters);
+            return;
         }
 
-        // Defer for actions that need DB lookups
-        if (action !== 'remove') await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        // IMPORTANT: The following logic for 'identifier' is for other modals.
+        // It should only execute if the action is NOT 'filterapply' or 'gotopage'.
+        const identifier = interaction.fields.getTextInputValue('identifier');
+        if (!identifier) {
+            logger.error(`[list.js] Modal action '${action}' (type: ${type}) submitted without an 'identifier' field.`);
+            return interaction.reply({ content: 'There was an error processing this form. The required field was missing.', ephemeral: true });
+        }
+
+        // Defer for actions that need DB lookups (original logic)
+        // 'remove' does its own reply for confirmation, so it's not deferred here.
+        if (action !== 'remove') await interaction.deferReply({ ephemeral: true });
 
         const world = await db.findWorldByIdentifier(interaction.user.id, identifier, interaction.guildId);
         
+        // Switch for 'remove', 'share', 'unshare', 'info', 'lockworldsubmit' using 'action' and 'world'
+        // ... (rest of existing modal handling logic) ...
         switch (action) {
             case 'remove': {
                 // CRITICAL: Retained the remove confirmation flow from the original file

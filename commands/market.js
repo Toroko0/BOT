@@ -87,7 +87,10 @@ async function handleMarketBrowse(interaction, page = 1, browseOptions = {}) {
             const selectOptions = userListingsOnPage.map(l => new StringSelectMenuOptionBuilder().setLabel(`Remove My Listing: ${l.world_name}`).setValue(l.listing_id.toString()));
             actionRow.addComponents(new StringSelectMenuBuilder().setCustomId(`market_select_remove_${encodedOpts}`).setPlaceholder('🗑️ Remove one of your listings...').addOptions(selectOptions));
         }
-        components.push(actionRow);
+        // Only add the actionRow to components if it has actual components added to it
+        if (actionRow.components.length > 0) {
+            components.push(actionRow);
+        }
     }
     
     if (totalPages > 1) {
@@ -297,5 +300,6 @@ module.exports = {
                 }
             }
         }
-    }
+    },
+    handleMarketBrowse // Add this export
 };

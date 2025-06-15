@@ -262,17 +262,20 @@ module.exports = {
       await interaction.reply({ content: `⚠️ Are you sure you want to remove **${worldName}**?`, components: [row], flags: MessageFlags.Ephemeral });
     }
   },
-  async handleInteraction(interaction) {
-    const [context, componentType, ...params] = interaction.customId.split('_');
-    if (context !== 'lock') return;
+  // async handleInteraction(interaction) { // Commented out as per subtask, assuming interactionHandler.js routes to specific functions
+  //   const [context, componentType, ...params] = interaction.customId.split('_');
+  //   if (context !== 'lock') return;
 
-    if (interaction.isButton()) {
-      await handleButtonCommand(interaction, [componentType, ...params]);
-    } else if (interaction.isModalSubmit()) {
-      await handleModalSubmitCommand(interaction, [componentType, ...params]);
-    } else if (interaction.isStringSelectMenu()) {
-      await handleSelectMenuCommand(interaction, [componentType, ...params]);
-    }
-  },
+  //   if (interaction.isButton()) {
+  //     await handleButtonCommand(interaction, [componentType, ...params]);
+  //   } else if (interaction.isModalSubmit()) {
+  //     await handleModalSubmitCommand(interaction, [componentType, ...params]);
+  //   } else if (interaction.isStringSelectMenu()) {
+  //     await handleSelectMenuCommand(interaction, [componentType, ...params]);
+  //   }
+  // },
   showLockedWorldsList,
+  handleButtonCommand,        // Add this export
+  handleModalSubmitCommand,   // Add this export
+  handleSelectMenuCommand     // Add this export
 };
