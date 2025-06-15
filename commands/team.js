@@ -136,15 +136,18 @@ async function handleTeamTransfer(interaction, userId, userTeam) {
 // --- Main Export ---
 module.exports = {
     data: new SlashCommandBuilder().setName('team').setDescription('Manage your team.')
-        .addSubcommand(s => s.setName('create').setDescription('Create a team.').addStringOption(o => o.setName('team_name').setRequired(true).setMinLength(3).setMaxLength(25)))
+        .addSubcommand(s => s.setName('create').setDescription('Create a team.').addStringOption(o => o.setName('team_name').setRequired(true).setMinLength(3).setMaxLength(25).setDescription('The name for your new team.')))
         .addSubcommand(s => s.setName('join').setDescription('Join a team.').addStringOption(o => o.setName('team_name').setRequired(true)).addStringOption(o => o.setName('invitation_code').setRequired(true)))
         .addSubcommand(s => s.setName('list').setDescription("View team's worlds.").addIntegerOption(o => o.setName('page').setMinValue(1)))
-        .addSubcommand(s => s.setName('add').setDescription('Add a world.').addStringOption(o => o.setName('world_name').setRequired(true)).addIntegerOption(o => o.setName('days_owned').setMinValue(1).setMaxValue(180)).addStringOption(o => o.setName('note').setMaxLength(100)))
+        .addSubcommand(s => s.setName('add').setDescription('Add a world.')
+            .addStringOption(o => o.setName('world_name').setRequired(true).setDescription('The name of the world to add.'))
+            .addIntegerOption(o => o.setName('days_owned').setMinValue(1).setMaxValue(180).setDescription('How many days the world has been owned (approx).'))
+            .addStringOption(o => o.setName('note').setMaxLength(100).setDescription('A short note for this world.')))
         .addSubcommand(s => s.setName('remove').setDescription('Remove a world.').addStringOption(o => o.setName('world_name').setRequired(true)))
         .addSubcommand(s => s.setName('info').setDescription('View team info.'))
         .addSubcommand(s => s.setName('leave').setDescription('Leave your team.'))
         .addSubcommand(s => s.setName('invite').setDescription('Generate a new invite code (Owner only).'))
-        .addSubcommand(s => s.setName('kick').setDescription('Kick a member (Owner only).').addUserOption(o => o.setName('member').setRequired(true)))
+        .addSubcommand(s => s.setName('kick').setDescription('Kick a member (Owner only).').addUserOption(o => o.setName('member').setRequired(true).setDescription('The team member to kick.')))
         .addSubcommand(s => s.setName('transfer').setDescription('Transfer ownership (Owner only).').addUserOption(o => o.setName('new_owner').setRequired(true)))
         .addSubcommand(s => s.setName('disband').setDescription('Permanently disband your team (Owner only).')),
     async execute(interaction) {
