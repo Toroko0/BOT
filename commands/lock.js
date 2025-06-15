@@ -170,7 +170,7 @@ function decodeFilters(encodedString) {
 
 async function showLockFilterModal(interaction) {
   const modal = new ModalBuilder()
-    .setCustomId('lock_modal_main_filter_apply')
+    .setCustomId('lock_mod_main_filter_apply') // Changed 'modal' to 'mod' for consistency
     .setTitle('Filter Locked Worlds');
 
   modal.addComponents(
@@ -444,7 +444,7 @@ async function handleModalSubmitCommand(interaction, customIdParts) {
       await interaction.followUp({ content: 'Invalid page number provided.', ephemeral: true });
     }
     return;
-  } else if (modalType === 'main_filter_apply') {
+  } else if (modalType === 'main_filter_apply') { // This modalType comes from lock_mod_main_filter_apply
     await interaction.deferUpdate();
     const newFilters = {};
 

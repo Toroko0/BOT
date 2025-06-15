@@ -20,12 +20,12 @@ function createPaginationRow(currentPage, totalPages, baseCustomId) {
     return new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
-                .setCustomId(`${baseCustomId}:prev:${currentPage - 1}`)
+                .setCustomId(`${baseCustomId}_prev_${currentPage - 1}`)
                 .setLabel('⬅️ Previous')
                 .setStyle(ButtonStyle.Primary)
                 .setDisabled(currentPage === 1),
             new ButtonBuilder()
-                .setCustomId(`${baseCustomId}:next:${currentPage + 1}`)
+                .setCustomId(`${baseCustomId}_next_${currentPage + 1}`)
                 .setLabel('Next ➡️')
                 .setStyle(ButtonStyle.Primary)
                 .setDisabled(currentPage >= totalPages)
@@ -99,10 +99,10 @@ module.exports = {
 
     async execute(interaction) {
         if (interaction.options?.getSubcommand() === 'mylistings' ||
-            interaction.customId?.includes('mylisting') ||
+            interaction.customId?.includes('mylisting') || // This check might need adjustment if 'mylisting' is part of a longer string not at the start
             interaction.options?.getSubcommand() === 'buy' ||
-            interaction.customId?.startsWith('market:confirmbuy') ||
-            interaction.customId?.startsWith('market:cancelbuy')) {
+            interaction.customId?.startsWith('market_confirmbuy') || // Updated
+            interaction.customId?.startsWith('market_cancelbuy')) { // Updated
              await db.addUser(interaction.user.id, interaction.user.username);
         }
 
@@ -114,7 +114,7 @@ module.exports = {
             else if (subcommand === 'buy') await handleMarketBuy(interaction);
 
         } else if (interaction.isButton()) {
-            const [context, command, operation, value, pageStr] = interaction.customId.split(':');
+            const [context, command, operation, value, pageStr] = interaction.customId.split('_'); // Updated split character
 
             if (context !== 'market') return;
 
@@ -135,9 +135,9 @@ module.exports = {
                 await processMarketPurchaseButton(interaction, listingId);
             } else if (command === 'cancelbuy') {
                 await interaction.update({ content: 'Purchase cancelled.', embeds: [], components: [], ephemeral: true });
-            } else if (interaction.customId === 'market:messageSellerModalButton') { // Button to OPEN the modal
+            } else if (interaction.customId === 'market_messageSellerModalButton') { // Button to OPEN the modal - Updated
                 const modal = new ModalBuilder()
-                    .setCustomId('market:messageSellerSubmitModal')
+                    .setCustomId('market_messageSellerSubmitModal') // Updated
                     .setTitle('Message Seller');
                 const listingIdInput = new TextInputBuilder()
                     .setCustomId('listing_id_input')
@@ -160,10 +160,15 @@ module.exports = {
             }
 
         } else if (interaction.type === InteractionType.ModalSubmit) {
-            const [context, command, operation, listingIdStrFromCustomId] = interaction.customId.split(':'); // operation and listingIdStrFromCustomId might be undefined
+            const customIdParts = interaction.customId.split('_'); // Updated split character
+            const context = customIdParts[0];
+            const command = customIdParts[1];
+            const operation = customIdParts[2]; // Might be undefined if not present
+            const listingIdStrFromCustomId = customIdParts[3]; // Might be undefined
+
             if (context === 'market' && command === 'mylistingmodal' && operation === 'submitadjust') {
                 await handleAdjustPriceModalSubmit(interaction, parseInt(listingIdStrFromCustomId));
-            } else if (interaction.customId === 'market:messageSellerSubmitModal') {
+            } else if (interaction.customId === 'market_messageSellerSubmitModal') { // Updated
                 await interaction.deferReply({ ephemeral: true });
                 const listingIdStr = interaction.fields.getTextInputValue('listing_id_input');
                 const messageContent = interaction.fields.getTextInputValue('message_content_input');
@@ -226,11 +231,29 @@ module.exports = {
                 }
             }
         } else if (interaction.isStringSelectMenu()) {
-             if (interaction.customId === 'market:mylisting:selectaction') {
-                const [action, listingIdStr] = interaction.values[0].split(':'); // No page needed here from value
+             if (interaction.customId === 'market_mylisting_selectaction') { // Updated
+                const [action, listingIdStr] = interaction.values[0].split('_'); // Updated split character
                 const listingId = parseInt(listingIdStr);
-                if (action === 'cancel') await showCancelConfirmation(interaction, listingId);
+                if (action === 'cancel') await showCancelConfirmation(interaction, listingId, 1); // Default page 1 for mylistings, origin 'mylisting'
                 else if (action === 'adjust') await showAdjustPriceModal(interaction, listingId);
+             } else if (interaction.customId.startsWith('market_select_removeBrowseListing')) {
+                const currentPage = parseInt(interaction.customId.split('_')[4]); // market_select_removeBrowseListing_PAGE
+                const listingIdToRemove = parseInt(interaction.values[0]);
+
+                // It's good practice to defer update quickly for select menus
+                // await interaction.deferUpdate({ ephemeral: true }); // No, showCancelConfirmation will .reply
+
+                const listing = await db.getMarketListingById(listingIdToRemove);
+                if (!listing) {
+                    await interaction.reply({ content: '❌ Error: That listing could not be found. It might have been removed already.', ephemeral: true });
+                    return;
+                }
+                if (listing.seller_user_id !== interaction.user.id) {
+                    await interaction.reply({ content: '❌ Error: You are not the seller of this listing.', ephemeral: true });
+                    return;
+                }
+                // pageToRefresh for browse view is currentPage
+                await showCancelConfirmation(interaction, listingIdToRemove, currentPage, 'browse');
              }
         }
     },
@@ -353,22 +376,49 @@ async function handleMarketBrowse(interaction, page = 1, isButtonOrSelect = fals
         }
 
         const finalContent = `Page ${page}/${totalPages}\n${tableOutput}\nWorld Watcher Market`;
-        const components = [];
-         if (total > ITEMS_PER_PAGE_MARKET) {
-            components.push(createPaginationRow(page, totalPages, 'market:browse'));
-        }
-        // Add Message Seller button if there are listings
-        if (listings && listings.length > 0) {
-            const messageSellerRow = new ActionRowBuilder()
-                .addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('market:messageSellerModalButton')
-                        .setLabel('✉️ Message Seller about a Listing')
-                        .setStyle(ButtonStyle.Success) // Or Primary
-                );
-            components.push(messageSellerRow);
+        const components = []; // Initialize components array
+
+        // Pagination Row
+        if (total > ITEMS_PER_PAGE_MARKET) {
+            components.push(createPaginationRow(page, totalPages, 'market_browse'));
         }
 
+        // "Message Seller" Button & "Remove My Listing" Select Menu
+        if (listings && listings.length > 0) {
+            const actionRow = new ActionRowBuilder();
+            actionRow.addComponents(
+                new ButtonBuilder()
+                    .setCustomId('market_messageSellerModalButton')
+                    .setLabel('✉️ Message Seller')
+                    .setStyle(ButtonStyle.Success)
+            );
+
+            const userListingsOnPage = listings.filter(l => l.seller_user_id === interaction.user.id);
+            if (userListingsOnPage.length > 0) {
+                const selectOptions = userListingsOnPage.map(l => ({
+                    label: `ID: ${l.listing_id} - ${l.world_name.substring(0, 40)} (${l.price_dl} DLs)`,
+                    description: `Your listing. Note: ${l.listing_note ? l.listing_note.substring(0,30) : 'N/A'}`,
+                    value: l.listing_id.toString(),
+                }));
+
+                // Ensure select menu options don't exceed 25
+                if (selectOptions.length > 25) {
+                    selectOptions.splice(25); // Max 25 options
+                }
+
+                if (selectOptions.length > 0) { // Only add select menu if there are valid options
+                    const removeListingSelectMenu = new StringSelectMenuBuilder()
+                        .setCustomId(`market_select_removeBrowseListing_${page}`)
+                        .setPlaceholder('🗑️ Remove one of your listings on this page...')
+                        .addOptions(selectOptions);
+                    actionRow.addComponents(removeListingSelectMenu); // Add to the same row if space, or new row
+                }
+            }
+             // Add the actionRow to components if it has any components
+            if (actionRow.components.length > 0) {
+                components.push(actionRow);
+            }
+        }
 
         await replyMethod({ content: finalContent, components, ephemeral: false });
 
@@ -404,11 +454,11 @@ async function handleMyListings(interaction, page = 1, isButtonOrSelectOrModal =
                 value: `manage:${l.listing_id}` // Action decided by subsequent ephemeral message with buttons
             }));
             components.push(new ActionRowBuilder().addComponents(
-                new StringSelectMenuBuilder().setCustomId('market:mylisting:selectaction').setPlaceholder('Select a listing to manage...').addOptions(selectOptions)
+                new StringSelectMenuBuilder().setCustomId('market_mylisting_selectaction').setPlaceholder('Select a listing to manage...').addOptions(selectOptions) // Updated
             ));
         }
         if (total > ITEMS_PER_PAGE_MARKET) {
-            components.push(createPaginationRow(page, totalPages, 'market:mylistingpage'));
+            components.push(createPaginationRow(page, totalPages, 'market_mylistingpage')); // Updated
         }
         await replyMethod({ embeds: [embed], components, ephemeral: true });
     } catch (error) {
@@ -417,25 +467,52 @@ async function handleMyListings(interaction, page = 1, isButtonOrSelectOrModal =
     }
 }
 
-async function showCancelConfirmation(interaction, listingId) {
+async function showCancelConfirmation(interaction, listingId, pageToRefresh = 1, origin = 'mylisting') {
     // interaction here is StringSelectInteraction or ButtonInteraction
+    let yesCustomId, noCustomId;
+    if (origin === 'browse') {
+        yesCustomId = `market_confirmcancelbrowse_yes_${listingId}_${pageToRefresh}`;
+        noCustomId = `market_confirmcancelbrowse_no_${listingId}_${pageToRefresh}`;
+    } else { // Default for 'mylisting' or any other origin
+        yesCustomId = `market_confirmcancel_yes_${listingId}_${pageToRefresh}`;
+        noCustomId = `market_confirmcancel_no_${listingId}_${pageToRefresh}`;
+    }
+
     const confirmRow = new ActionRowBuilder()
         .addComponents(
-            new ButtonBuilder().setCustomId(`market:confirmcancel:yes:${listingId}:1`).setLabel('✅ Yes, Cancel It').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId(`market:confirmcancel:no:${listingId}:1`).setLabel('❌ No, Keep It').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(yesCustomId).setLabel('✅ Yes, Cancel It').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId(noCustomId).setLabel('❌ No, Keep It').setStyle(ButtonStyle.Secondary)
         );
-    // If from select menu, need to use .reply() for the first response to the select menu.
-    // If select menu itself was ephemeral, this needs to be a new message.
-    // Assuming select menu interaction is deferred or replied to, then followUp.
-    // For simplicity, let's assume we always reply to the select menu interaction first.
-    if (interaction.isStringSelectMenu()) {
-        await interaction.reply({ content: `Manage Listing ID **${listingId}**. Are you sure you want to cancel it?`, components: [confirmRow], ephemeral: true });
-    } else { // If triggered by another button (future)
-        await interaction.update({ content: `Are you sure you want to cancel listing ID **${listingId}**?`, components: [confirmRow], ephemeral: true });
+
+    const content = `Are you sure you want to cancel listing ID **${listingId}**? This action cannot be undone.`;
+
+    // For both select menu and button interactions that call this,
+    // if they haven't been replied to or deferred, they should be.
+    // showCancelConfirmation is now mostly called after a select menu choice, which needs a reply.
+    // Or by mylistingaction button which also needs a reply.
+    if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content, components: [confirmRow], ephemeral: true });
+    } else {
+        // If the interaction that led here was deferred (e.g. a button that called deferUpdate)
+        // or already replied (less likely for this flow now), use editReply or followUp.
+        // Since the select menu for browse will be the first interaction for this flow,
+        // and mylistingaction button also is usually a first reply.
+        // This path implies something already happened.
+        // To be safe, if it was deferred, edit the original deferred response.
+        // If it was replied (e.g. original select menu for mylistings which is ephemeral), use followUp.
+        // For browse select menu, it will use the if block above.
+        // For mylistings select menu, it will use the if block.
+        // For mylistings 'cancel' button (if it directly calls this), it will use the if block.
+        // This 'else' might be for more complex chained interactions not currently in use.
+        logger.warn(`[showCancelConfirmation] Interaction ${interaction.id} was already replied or deferred. Attempting followUp.`);
+        await interaction.followUp({ content, components: [confirmRow], ephemeral: true });
     }
 }
 
+
 async function processCancelListing(interaction, listingId, pageToRefresh) {
+    // This function is for cancelling from 'mylistings' view
+    await interaction.deferUpdate(); // Defer the button interaction that led here
     const result = await db.cancelMarketListing(listingId, interaction.user.id);
     if (result.success) {
         await interaction.update({ content: `✅ Listing ID **${listingId}** has been cancelled. Refreshing your listings...`, components: [] });
@@ -444,12 +521,30 @@ async function processCancelListing(interaction, listingId, pageToRefresh) {
         let errorMsg = '❌ Error cancelling listing.';
         if (result.error === 'not_found') errorMsg = '❌ Listing not found.';
         else if (result.error === 'not_owner') errorMsg = '❌ You do not own this listing.';
-        await interaction.update({ content: errorMsg, components: [] });
+        await interaction.editReply({ content: errorMsg, components: [] }); // Use editReply due to deferUpdate
     }
 }
 
+async function processCancelBrowseListing(interaction, listingId, pageToRefresh) {
+    // This function is for cancelling from 'browse' view
+    await interaction.deferUpdate(); // Defer the button interaction that led here
+    const result = await db.cancelMarketListing(listingId, interaction.user.id);
+    if (result.success) {
+        // Let handleMarketBrowse do the reply/update.
+        // Send a temporary confirmation before refreshing.
+        await interaction.editReply({ content: `✅ Listing ID **${listingId}** cancelled. Refreshing browse view...`, components: []});
+        await handleMarketBrowse(interaction, pageToRefresh, true);
+    } else {
+        let errorMsg = '❌ Error cancelling listing from browse view.';
+        if (result.error === 'not_found') errorMsg = '❌ Listing not found (already removed?).';
+        else if (result.error === 'not_owner') errorMsg = '❌ You do not own this listing (or rights changed).';
+        await interaction.editReply({ content: errorMsg, components: [] }); // Use editReply due to deferUpdate
+    }
+}
+
+
 async function showAdjustPriceModal(interaction, listingId) {
-    const modal = new ModalBuilder().setCustomId(`market:mylistingmodal:submitadjust:${listingId}`).setTitle('Adjust Listing Price');
+    const modal = new ModalBuilder().setCustomId(`market_mylistingmodal_submitadjust_${listingId}`).setTitle('Adjust Listing Price'); // Updated
     const newPriceInput = new TextInputBuilder().setCustomId('new_price_dl').setLabel("New Price in Diamond Locks (DLs)").setStyle(TextInputStyle.Short).setPlaceholder("Enter a positive number").setRequired(true).setMinLength(1);
     modal.addComponents(new ActionRowBuilder().addComponents(newPriceInput));
     await interaction.showModal(modal);
@@ -517,8 +612,8 @@ async function handleMarketBuy(interaction) {
 
         const row = new ActionRowBuilder()
             .addComponents(
-                new ButtonBuilder().setCustomId(`market:confirmbuy:yes:${listingId}`).setLabel('✅ Confirm Purchase').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId(`market:cancelbuy:no:${listingId}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Danger)
+                new ButtonBuilder().setCustomId(`market_confirmbuy_yes_${listingId}`).setLabel('✅ Confirm Purchase').setStyle(ButtonStyle.Success), // Updated
+                new ButtonBuilder().setCustomId(`market_cancelbuy_no_${listingId}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Danger) // Updated
             );
         await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
 
