@@ -62,6 +62,42 @@ async function addUser(userId, username) {
   } catch (error) { logger.error(`[DB] Error adding/updating user ${userId}:`, error); return false; }
 }
 
+// --- Admin Functions ---
+/**
+ * Fetches all worlds from all users, paginated. For Admin use.
+ * @param {object} options - Pagination options { page, pageSize }.
+ * @returns {Promise<{worlds: Array, total: number}>}
+ */
+async function getAllWorldsPaged(options = {}) {
+    const { page = 1, pageSize = 10 } = options;
+    logger.debug(`[DB] Fetching all worlds for admin, page ${page}, pageSize ${pageSize}`);
+    try {
+        const query = knexInstance('worlds as w')
+            .leftJoin('users as u', 'w.user_id', 'u.id')
+            .select(
+                'w.id',
+                'w.name',
+                'u.username as owner_username',
+                'w.user_id as owner_id',
+                'w.custom_id',
+                'w.expiry_date',
+                'w.lock_type'
+            );
+
+        const totalResult = await knexInstance('worlds').count({ total: '*' }).first();
+        const total = totalResult ? Number(totalResult.total) : 0;
+
+        query.orderBy('w.added_date', 'desc').limit(pageSize).offset((page - 1) * pageSize);
+        const worlds = await query;
+
+        return { worlds, total };
+    } catch (error) {
+        logger.error('[DB] Error fetching all paged worlds for admin:', error);
+        return { worlds: [], total: 0 };
+    }
+}
+
+
 // --- Bot Profile Functions ---
 
 async function setBotUsername(userId, newBotUsername) {
@@ -229,16 +265,8 @@ async function createMarketListing(sellerUserId, lockedWorldId, priceDl, listing
       logger.info(`[DB] Market listing created with ID: ${newListingId}`);
       return { success: true, listingId: newListingId };
     } else {
-      // This path might be taken if .returning('id') isn't fully supported or if insert fails silently (unlikely for errors)
-      // Fallback for SQLite if direct ID isn't returned by .returning('id') - though it usually is for autoIncrement.
-      // This part might be redundant if knex handles SQLite's `lastID` correctly with `.returning('id')`.
-      // A more robust way for SQLite specifically would be another query for `last_insert_rowid()` if needed,
-      // but knex tries to abstract this.
       logger.warn('[DB] Market listing possibly created, but ID not returned directly by insert. This might indicate an issue or specific DB driver behavior.');
-      // For now, assume success if no error, but log that ID retrieval was not direct.
-      // This case should be tested with the specific DB (SQLite).
-      // Knex documentation suggests .returning('id') should work for SQLite as well.
-      return { success: true, listingId: null }; // Or attempt a last_insert_rowid() if critical
+      return { success: true, listingId: null };
     }
   } catch (error) {
     logger.error(`[DB] Error creating market listing for locked_world_id ${lockedWorldId}:`, error);
@@ -313,21 +341,17 @@ async function getMarketListings(options = {}) {
       query.andWhereRaw('LOWER(u.bot_username) = LOWER(?)', [seller_bot_username]);
       countQuery.andWhereRaw('LOWER(u.bot_username) = LOWER(?)', [seller_bot_username]);
     }
-    // Add other filters like world_name_search here if implemented
 
-    // Get total count
     const totalResult = await countQuery.count({ total: '*' }).first();
     const total = totalResult ? Number(totalResult.total) : 0;
 
-    // Get paginated results
     query
-      .orderBy('ml.listed_on_date', 'desc') // Default sort: newest first
+      .orderBy('ml.listed_on_date', 'desc')
       .limit(pageSize)
       .offset((page - 1) * pageSize);
 
     const listings = await query;
 
-    // Post-process seller_bot_username to use seller_discord_tag if bot_username is null
     const processedListings = listings.map(listing => ({
         ...listing,
         seller_display_name: listing.seller_bot_username || listing.seller_discord_tag || 'Unknown Seller'
@@ -358,7 +382,6 @@ async function cancelMarketListing(listingId, sellerUserId) {
       return { success: true };
     } else {
       logger.warn(`[DB] Market listing ID ${listingId} not found or not owned by user ${sellerUserId}. No rows deleted.`);
-      // Check if listing exists at all to differentiate "not found" vs "not owner"
       const listingExists = await knexInstance('market_listings').where({ id: listingId }).first();
       if (!listingExists) {
           return { success: false, error: 'not_found' };
@@ -387,7 +410,6 @@ async function updateMarketListingPrice(listingId, sellerUserId, newPrice) {
       })
       .update({
         price_dl: newPrice,
-        // Potentially update listed_on_date here if desired, e.g., listed_on_date: knexInstance.fn.now()
       });
 
     if (updatedCount > 0) {
@@ -429,7 +451,6 @@ async function getMarketListingById(listingId) {
       .first();
 
     if (listing) {
-        // For consistency with getMarketListings display name logic
         listing.seller_display_name = listing.seller_bot_username || listing.seller_discord_tag || 'Unknown Seller';
     }
     return listing || null;
@@ -439,29 +460,26 @@ async function getMarketListingById(listingId) {
   }
 }
 
-// Renamed from addLockedWorld for clarity, and adapted for transfer.
-// oldUserId is used for verification if needed, but transaction implies seller owns it.
 async function transferLockedWorld(lockedWorldId, newUserId, oldUserId, buyerUsername, sellerUsername, trx) {
   logger.info(`[DB] Transferring locked world ID ${lockedWorldId} from user ${oldUserId} to ${newUserId} (Buyer: ${buyerUsername}, Seller: ${sellerUsername})`);
   try {
     const worldToTransfer = await (trx || knexInstance)('locked_worlds').where({ id: lockedWorldId, user_id: oldUserId }).first();
     if (!worldToTransfer) {
         logger.warn(`[DB] transferLockedWorld: World ID ${lockedWorldId} not found or not owned by seller ${oldUserId}.`);
-        return false; // World not found or not owned by seller
+        return false;
     }
 
     const updatedCount = await (trx || knexInstance)('locked_worlds')
-      .where({ id: lockedWorldId, user_id: oldUserId }) // Ensure it's still owned by seller
+      .where({ id: lockedWorldId, user_id: oldUserId })
       .update({
         user_id: newUserId,
         note: `Purchased from ${sellerUsername || oldUserId} by ${buyerUsername || newUserId}. Original note: ${worldToTransfer.note || ''}`.substring(0, 255), // Max length for notes
-        locked_on_date: knexInstance.fn.now(), // Reset locked_on_date for new owner
-        // world_name, lock_type remain the same
+        locked_on_date: knexInstance.fn.now(),
       });
     return updatedCount > 0;
   } catch (error) {
     logger.error(`[DB] Error transferring locked world ID ${lockedWorldId}:`, error);
-    throw error; // Re-throw to be caught by transaction
+    throw error;
   }
 }
 
@@ -470,53 +488,38 @@ async function processMarketPurchase(buyerUserId, sellerUserId, listingId, locke
 
   return knexInstance.transaction(async (trx) => {
     try {
-      // 1. Verify and decrement buyer's balance
       const buyer = await trx('users').where({ id: buyerUserId }).select('diamond_locks_balance').firstForUpdate(); // Lock row
       if (!buyer || buyer.diamond_locks_balance < priceDl) {
-        logger.warn(`[DB] Purchase failed: Buyer ${buyerUserId} has insufficient funds (${buyer ? buyer.diamond_locks_balance : 'N/A'}) for price ${priceDl}.`);
         throw new Error('insufficient_funds');
       }
       await trx('users').where({ id: buyerUserId }).decrement('diamond_locks_balance', priceDl);
-      logger.info(`[DB] Decremented ${priceDl} DLs from buyer ${buyerUserId}.`);
 
-      // 2. Increment seller's balance
       await trx('users').where({ id: sellerUserId }).increment('diamond_locks_balance', priceDl);
-      logger.info(`[DB] Incremented ${priceDl} DLs to seller ${sellerUserId}.`);
 
-      // 3. Transfer locked world ownership
       const transferred = await transferLockedWorld(lockedWorldId, buyerUserId, sellerUserId, buyerUsername, sellerUsername, trx);
       if (!transferred) {
-        logger.error(`[DB] Purchase failed: World transfer failed for locked_world_id ${lockedWorldId}.`);
         throw new Error('world_transfer_failed');
       }
-      logger.info(`[DB] Transferred locked_world_id ${lockedWorldId} to buyer ${buyerUserId}.`);
 
-      // 4. Delete the market listing
       const deletedListingCount = await trx('market_listings').where({ id: listingId }).del();
       if (deletedListingCount === 0) {
-        logger.warn(`[DB] Purchase issue: Listing ID ${listingId} not found during deletion (อาจถูกซื้อไปแล้วหรือถูกยกเลิก).`);
-        throw new Error('listing_not_found_during_delete'); // Listing vanished mid-transaction
+        throw new Error('listing_not_found_during_delete');
       }
-      logger.info(`[DB] Deleted market listing ID ${listingId}.`);
 
       return { success: true, worldName: worldName };
 
     } catch (error) {
       logger.error(`[DB] Market purchase transaction failed for listing ${listingId}:`, error.message);
-      // Convert specific errors or re-throw
       if (error.message === 'insufficient_funds' ||
           error.message === 'world_transfer_failed' ||
           error.message === 'listing_not_found_during_delete') {
-        // These are custom errors thrown above that we want to propagate with a specific code
-        // For Knex transaction, throwing an error automatically rolls back.
-        // The return { success: false, error: error.message } will be handled by the calling command.
-         throw error; // Let it be caught by the final catch block of this function
+         throw error;
       }
-      throw new Error('db_error'); // Generic DB error for other issues
+      throw new Error('db_error');
     }
   })
-  .then(result => result) // If transaction succeeds
-  .catch(err => { // If transaction fails (rollback)
+  .then(result => result)
+  .catch(err => {
     logger.error(`[DB] Transaction explicitly rolled back or failed for purchase of listing ${listingId}: ${err.message}`);
     return { success: false, error: err.message || 'db_error' };
   });
@@ -537,7 +540,7 @@ async function removeTeamMember(teamId, memberUserIdToRemove, currentOwnerUserId
       .where({ team_id: teamId, user_id: memberUserIdToRemove })
       .del();
 
-    return deletedCount > 0 ? { success: true } : { success: false, error: 'db_error' }; // Should be >0 if memberExists
+    return deletedCount > 0 ? { success: true } : { success: false, error: 'db_error' };
   } catch (error) {
     logger.error(`[DB] Error removing team member ${memberUserIdToRemove} from team ${teamId}:`, error);
     return { success: false, error: 'db_error' };
@@ -576,25 +579,14 @@ async function disbandTeam(teamId, currentOwnerUserId) {
       if (!team) throw new Error('team_not_found');
       if (team.owner_user_id !== currentOwnerUserId) throw new Error('not_owner');
 
-      // Cascading deletes are defined in schema, but explicit deletion is safer for clarity
-      // and ensures order if cascading isn't fully trusted or if specific logging per step is needed.
-      // However, for this implementation, we'll rely on schema's onDelete('CASCADE') for members, invites, worlds.
-      // If not using CASCADE, delete in this order:
-      // await trx('team_worlds').where({ team_id: teamId }).del();
-      // await trx('team_invitations').where({ team_id: teamId }).del();
-      // await trx('team_members').where({ team_id: teamId }).del();
-
-      // The 'teams' table deletion will trigger cascades for team_members, team_invitations, team_worlds
-      // if foreign keys are set up with ON DELETE CASCADE.
-      // The migration file does specify ON DELETE CASCADE for these.
       const deletedTeamCount = await trx('teams').where({ id: teamId }).del();
-      if (deletedTeamCount === 0) throw new Error('team_not_found_during_delete'); // Should not happen if first check passed
+      if (deletedTeamCount === 0) throw new Error('team_not_found_during_delete');
 
       return { success: true };
     } catch (error) {
       logger.error(`[DB] Error in disbandTeam transaction for team ${teamId}:`, error);
       if (error.message === 'not_owner' || error.message === 'team_not_found' || error.message === 'team_not_found_during_delete') {
-        throw error; // Propagate specific errors
+        throw error;
       }
       throw new Error('db_error');
     }
@@ -626,7 +618,7 @@ async function isUserInAnyTeam(userId) {
     return !!member;
   } catch (error) {
     logger.error(`[DB] Error checking if user ${userId} is in any team:`, error);
-    return false; // Default to false on error
+    return false;
   }
 }
 
@@ -635,7 +627,7 @@ async function getUserTeam(userId) {
     const teamMembership = await knexInstance('team_members as tm')
       .join('teams as t', 'tm.team_id', 't.id')
       .where('tm.user_id', userId)
-      .select('t.*') // Select all columns from the 'teams' table
+      .select('t.*')
       .first();
     return teamMembership || null;
   } catch (error) {
@@ -648,11 +640,11 @@ async function generateTeamInvitationCode(teamId, creatorUserId, trx = null) {
   const dbInstance = trx || knexInstance;
   let code;
   let isUnique = false;
-  const MAX_TRIES = 5; // Prevent infinite loop in rare cases
+  const MAX_TRIES = 5;
   let tries = 0;
 
   while (!isUnique && tries < MAX_TRIES) {
-    code = Math.random().toString(36).substring(2, 10).toUpperCase(); // 8 char alphanumeric
+    code = Math.random().toString(36).substring(2, 10).toUpperCase();
     const existing = await dbInstance('team_invitations').where({ code }).first();
     if (!existing) {
       isUnique = true;
@@ -661,10 +653,8 @@ async function generateTeamInvitationCode(teamId, creatorUserId, trx = null) {
   }
 
   if (!isUnique) {
-    // Fallback or error if unique code couldn't be generated
     logger.error(`[DB] Could not generate a unique invitation code for team ${teamId} after ${MAX_TRIES} tries.`);
-    // throw new Error('failed_to_generate_unique_code'); // Or use a timestamp based one as fallback
-    code = `FALLBACK${Date.now()}`.substring(0,10); // Highly unlikely to collide but not ideal
+    code = `FALLBACK${Date.now()}`.substring(0,10);
   }
 
   await dbInstance('team_invitations').insert({
@@ -682,10 +672,8 @@ async function createTeam(teamName, ownerUserId) {
     return { success: false, error: 'name_taken' };
   }
 
-  // Check if user is already in a team (should ideally be checked by command logic first)
   const userAlreadyInTeam = await isUserInAnyTeam(ownerUserId);
   if (userAlreadyInTeam) {
-      // This case should ideally be prevented by command logic calling getUserTeam first.
       logger.warn(`[DB] User ${ownerUserId} attempted to create team "${teamName}" but is already in a team.`);
       return { success: false, error: 'already_in_team' };
   }
@@ -700,13 +688,12 @@ async function createTeam(teamName, ownerUserId) {
       const teamId = (typeof teamIdObj === 'object') ? teamIdObj.id : teamIdObj;
 
 
-      if (!teamId) { // Fallback for SQLite if returning('id') is problematic
+      if (!teamId) {
           const teamQuery = await trx('teams').where({name: teamName, owner_user_id: ownerUserId}).first();
           if (!teamQuery || !teamQuery.id) {
             logger.error(`[DB] Failed to retrieve teamId after insert for team ${teamName}`);
             throw new Error('Team ID retrieval failed post-insert.');
           }
-          // teamId = teamQuery.id; // This line is problematic if teamId is const above
           const newTeamId = teamQuery.id;
           logger.warn(`[DB] createTeam used fallback for teamId retrieval for team ${teamName}, got ${newTeamId}`);
 
@@ -727,10 +714,10 @@ async function createTeam(teamName, ownerUserId) {
 
     } catch (error) {
       logger.error(`[DB] Error in createTeam transaction for "${teamName}":`, error);
-      if (error.message.includes('UNIQUE constraint failed: teams.name')) { // More specific check
-          throw new Error('name_taken'); // Re-throw to be caught by outer catch
+      if (error.message.includes('UNIQUE constraint failed: teams.name')) {
+          throw new Error('name_taken');
       }
-      throw error; // Re-throw other errors
+      throw error;
     }
   })
   .then(result => result)
@@ -743,7 +730,6 @@ async function createTeam(teamName, ownerUserId) {
 async function validateAndUseTeamInvitation(teamName, invitationCode, joiningUserId) {
   logger.info(`[DB] User ${joiningUserId} attempting to join team "${teamName}" with code "${invitationCode}"`);
 
-  // User should not be in any team already (this check is also in command logic)
   const userCurrentTeam = await getUserTeam(joiningUserId);
   if (userCurrentTeam) {
       return { success: false, error: 'already_in_team', teamName: userCurrentTeam.name };
@@ -767,13 +753,11 @@ async function validateAndUseTeamInvitation(teamName, invitationCode, joiningUse
         throw new Error('invitation_already_used');
       }
 
-      // Add user to team_members
       await trx('team_members').insert({
         team_id: team.id,
         user_id: joiningUserId,
       });
 
-      // Mark invitation as used
       await trx('team_invitations')
         .where({ id: invitation.id })
         .update({
@@ -787,9 +771,9 @@ async function validateAndUseTeamInvitation(teamName, invitationCode, joiningUse
     } catch (error) {
       logger.error(`[DB] Error in validateAndUseTeamInvitation for team "${teamName}", code "${invitationCode}":`, error);
       if (['invalid_code_or_team', 'invitation_already_used', 'already_in_team'].includes(error.message)) {
-        throw error; // Re-throw specific known errors
+        throw error;
       }
-      throw new Error('db_error'); // General DB error
+      throw new Error('db_error');
     }
   })
   .then(result => result)
@@ -815,7 +799,6 @@ async function getTeamWorlds(teamId, page = 1, pageSize = 10, filters = {}) {
         'tw.added_date',
         'u.username as added_by_discord_tag',
         'u.bot_username as added_by_bot_username',
-        // Calculate days_left: JULIANDAY(tw.expiry_date) - JULIANDAY('now')
         knexInstance.raw("CAST(JULIANDAY(tw.expiry_date) - JULIANDAY('now') AS INTEGER) as days_left")
       );
 
@@ -825,13 +808,11 @@ async function getTeamWorlds(teamId, page = 1, pageSize = 10, filters = {}) {
       query.andWhere('tw.added_by_user_id', filters.added_by_user_id);
       countQuery.andWhere('tw.added_by_user_id', filters.added_by_user_id);
     }
-    // TODO: searchTerm filter if needed: .andWhere(builder => builder.whereRaw('LOWER(tw.world_name) LIKE ?', [`%${filters.searchTerm.toLowerCase()}%`]).orWhereRaw('LOWER(tw.note) LIKE ?', [`%${filters.searchTerm.toLowerCase()}%`]))
-
 
     const totalResult = await countQuery.count({ total: '*' }).first();
     const total = totalResult ? Number(totalResult.total) : 0;
 
-    query.orderBy('days_left', 'asc') // Expiring soonest first
+    query.orderBy('days_left', 'asc')
          .limit(pageSize)
          .offset((page - 1) * pageSize);
 
@@ -879,7 +860,7 @@ async function addWorldToTeam(teamId, worldName, daysOwned, note, addedByUserId)
   } catch (error) {
     logger.error(`[DB] Error adding world "${worldName}" to team ID ${teamId}:`, error);
     if (error.message && error.message.includes('UNIQUE constraint failed: team_worlds.team_id, team_worlds.world_name')) {
-        return { success: false, error: 'already_exists' }; // Should be caught by explicit check above
+        return { success: false, error: 'already_exists' };
     }
     return { success: false, error: 'db_error' };
   }
@@ -891,7 +872,7 @@ async function removeWorldFromTeam(teamId, worldName, removerUserId) {
     try {
         const team = await knexInstance('teams').where({ id: teamId }).first();
         if (!team) {
-            return { success: false, error: 'team_not_found' }; // Should not happen if command logic is correct
+            return { success: false, error: 'team_not_found' };
         }
         const teamOwnerId = team.owner_user_id;
 
@@ -908,10 +889,10 @@ async function removeWorldFromTeam(teamId, worldName, removerUserId) {
         }
 
         const deletedCount = await knexInstance('team_worlds')
-            .where({ id: worldEntry.id }) // Delete by primary key for safety
+            .where({ id: worldEntry.id })
             .del();
 
-        return deletedCount > 0 ? { success: true } : { success: false, error: 'db_error' }; // Should be >0 if entry found
+        return deletedCount > 0 ? { success: true } : { success: false, error: 'db_error' };
     } catch (error) {
         logger.error(`[DB] Error removing world "${worldName}" from team ID ${teamId}:`, error);
         return { success: false, error: 'db_error' };
@@ -925,12 +906,9 @@ async function getAllFilteredWorlds(userId, filters = {}) {
             .leftJoin('users as u', 'w.user_id', 'u.id')
             .select('w.*', 'u.username as added_by_tag');
 
-        // Handle Private vs. Public Context
         if (filters.guildId) {
-            // Public worlds for a specific guild
             query.where('w.is_public', true).andWhere('w.guild_id', filters.guildId);
         } else if (userId) {
-            // Private worlds for a specific user
             query.where('w.user_id', userId)
                  .andWhere(function() {
                      this.where('w.is_public', false).orWhereNull('w.is_public');
@@ -940,18 +918,15 @@ async function getAllFilteredWorlds(userId, filters = {}) {
             return [];
         }
 
-        // Prefix filter
         if (filters.prefix) {
             const prefixLower = filters.prefix.toLowerCase();
             query.andWhereRaw('lower(w.name) LIKE ?', [`${prefixLower}%`]);
         }
 
-        // LockType filter
         if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') {
             query.andWhere('w.lock_type', filters.lockType);
         }
 
-        // ExpiryDay filter (day of week)
         if (filters.expiryDay) {
             const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
             const dayNum = dayMap[filters.expiryDay.toLowerCase()];
@@ -960,7 +935,6 @@ async function getAllFilteredWorlds(userId, filters = {}) {
             }
         }
 
-        // Days Owned filter
         if (filters.daysOwned !== undefined && filters.daysOwned !== null) {
             const daysOwnedInput = parseInt(filters.daysOwned);
             if (!isNaN(daysOwnedInput)) {
@@ -983,7 +957,6 @@ async function getAllFilteredWorlds(userId, filters = {}) {
             }
         }
 
-        // Name Length Filters
         if (filters.nameLengthMin !== undefined && filters.nameLengthMin !== null) {
             const minLength = parseInt(filters.nameLengthMin);
             if (!isNaN(minLength) && minLength > 0) {
@@ -997,7 +970,6 @@ async function getAllFilteredWorlds(userId, filters = {}) {
             }
         }
 
-        // Ordering
         query.orderBy('w.expiry_date', 'asc');
 
         const worlds = await query;
@@ -1008,7 +980,7 @@ async function getAllFilteredWorlds(userId, filters = {}) {
 
     } catch (error) {
         logger.error(`[DB] Error in getAllFilteredWorlds (User: ${userId}, Filters: ${JSON.stringify(filters)}):`, error);
-        return []; // Return empty array on error
+        return [];
     }
 }
 
@@ -1076,13 +1048,9 @@ async function leaveTeam(userId, teamId) {
     }
 }
 
-
-// --- End Team Database Functions ---
-
-
 // --- User Direct Messaging Functions ---
 
-async function getUserForNotification(userId) { // Simplified version of getUser for this specific need
+async function getUserForNotification(userId) {
   try {
     const user = await knexInstance('users')
       .where({ id: userId })
@@ -1103,7 +1071,6 @@ async function sendMessage(senderUserId, recipientUserId, content, parentMessage
       recipient_user_id: recipientUserId,
       message_content: content,
       parent_message_id: parentMessageId,
-      // sent_at and is_read have defaults
     }).returning('id');
 
     const messageId = (typeof messageIdObj === 'object') ? messageIdObj.id : messageIdObj;
@@ -1111,8 +1078,6 @@ async function sendMessage(senderUserId, recipientUserId, content, parentMessage
     if (messageId) {
       return { success: true, messageId };
     }
-    // Fallback for SQLite if .returning('id') is not fully reliable without specific driver config
-    // though knex generally handles this for auto-increment PKs.
     const result = await knexInstance.raw('SELECT last_insert_rowid() as id');
     if (result && result[0] && result[0].id) {
         logger.warn(`[DB] sendMessage: Used last_insert_rowid() for message ID for user ${senderUserId}`);
@@ -1179,7 +1144,7 @@ async function getMessageById(messageId, recipientUserId) {
     const message = await knexInstance('direct_messages as dm')
       .leftJoin('users as sender', 'dm.sender_user_id', 'sender.id')
       .where('dm.id', messageId)
-      .andWhere('dm.recipient_user_id', recipientUserId) // Security: user can only fetch their own received messages by ID
+      .andWhere('dm.recipient_user_id', recipientUserId)
       .select(
         'dm.*',
         'sender.username as sender_discord_tag',
@@ -1222,49 +1187,32 @@ async function markMessageAsUnread(messageId, recipientUserId) {
 }
 
 async function deleteMessage(messageId, userId) {
-  // User can delete messages they received or messages they sent.
   logger.info(`[DB] User ${userId} attempting to delete message ID ${messageId}`);
   try {
-    // Check if user is recipient
     const message = await knexInstance('direct_messages').where({ id: messageId }).first();
     if (!message) return { success: false, error: 'not_found' };
 
     if (message.recipient_user_id !== userId && message.sender_user_id !== userId) {
-        return { success: false, error: 'not_owner' }; // Not sender or recipient
+        return { success: false, error: 'not_owner' };
     }
 
-    // If user is recipient, they can delete it.
-    // If user is sender, they can also delete it (optional: implement different logic if sender deletion is not allowed or should 'hide' it)
-    // Current logic: if user is involved as sender or recipient, they can delete.
-    // For simplicity, this example allows deletion if user is the recipient.
-    // To allow sender to delete, the condition would be:
-    // .where({ id: messageId }).andWhere(function() { this.where('recipient_user_id', userId).orWhere('sender_user_id', userId)})
-
     const deletedCount = await knexInstance('direct_messages')
-      .where({ id: messageId, recipient_user_id: userId }) // Only recipient can delete for now
+      .where({ id: messageId, recipient_user_id: userId })
       .del();
 
     if (deletedCount > 0) {
       return { success: true };
     }
-    // If not deleted because not recipient (and sender deletion not implemented this way)
     if (message.recipient_user_id !== userId) {
          return { success: false, error: 'not_recipient_for_delete' };
     }
-    return { success: false, error: 'not_found_or_already_deleted' }; // Or generic db_error
+    return { success: false, error: 'not_found_or_already_deleted' };
 
   } catch (error) {
     logger.error(`[DB] Error deleting message ID ${messageId} by user ${userId}:`, error);
     return { success: false, error: 'db_error' };
   }
 }
-
-// --- End User Direct Messaging Functions ---
-
-
-// --- End Marketplace Functions ---
-
-// --- End Bot Profile Functions ---
 
 async function addWorld(userId, worldName, daysOwned, lockType = 'mainlock', customId = null, username = null, guildId = null) {
     const worldNameUpper = worldName.toUpperCase();
@@ -1326,11 +1274,10 @@ async function getWorlds(userId, page = 1, pageSize = 10) {
   const offset = (page - 1) * pageSize;
   logger.debug(`[DB] Attempting to get worlds for user ${userId}, page ${page}`);
   try {
-    // Query for the current page's worlds
     const worlds = await knexInstance('worlds as w')
       .leftJoin('users as u', 'w.user_id', 'u.id')
       .where('w.user_id', userId)
-      .orderBy('w.expiry_date', 'asc') // Orders by expiry_date ascending (fewer days left first), which means days_owned descending (more days owned first)
+      .orderBy('w.expiry_date', 'asc')
       .limit(pageSize)
       .offset(offset)
       .select('w.*', 'u.username as added_by_tag');
@@ -1380,7 +1327,7 @@ async function getPublicWorldsByGuild(guildId, page = 1, pageSize = 10) {
             .leftJoin('users as u', 'w.user_id', 'u.id')
             .where('w.is_public', true)
             .andWhere('w.guild_id', guildId)
-            .orderBy('w.expiry_date', 'asc') // Orders by expiry_date ascending (fewer days left first), which means days_owned descending (more days owned first)
+            .orderBy('w.expiry_date', 'asc')
             .limit(pageSize)
             .offset(offset)
             .select('w.*', 'u.username as added_by_tag'); 
@@ -1420,13 +1367,10 @@ async function getFilteredWorlds(userId, filters = {}, page = 1, pageSize = 10) 
 
         let countQueryBase = knexInstance('worlds as w');
 
-        // Handle Private vs. Public Context
         if (filters.guildId) {
-            // Public worlds for a specific guild
             query.where('w.is_public', true).andWhere('w.guild_id', filters.guildId);
             countQueryBase.where('w.is_public', true).andWhere('w.guild_id', filters.guildId);
         } else if (userId) {
-            // Private worlds for a specific user
             query.where('w.user_id', userId)
                  .andWhere(function() {
                      this.where('w.is_public', false).orWhereNull('w.is_public');
@@ -1436,25 +1380,21 @@ async function getFilteredWorlds(userId, filters = {}, page = 1, pageSize = 10) 
                               this.where('w.is_public', false).orWhereNull('w.is_public');
                           });
         } else {
-            // No userId and no guildId signifies an invalid request context.
             logger.warn('[DB] getFilteredWorlds called without userId (for private) or guildId (for public). Returning empty.');
             return { worlds: [], total: 0 };
         }
 
-        // Prefix filter
         if (filters.prefix) {
             const prefixLower = filters.prefix.toLowerCase();
             query.andWhereRaw('lower(w.name) LIKE ?', [`${prefixLower}%`]);
             countQueryBase.andWhereRaw('lower(w.name) LIKE ?', [`${prefixLower}%`]);
         }
 
-        // LockType filter
         if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') {
             query.andWhere('w.lock_type', filters.lockType);
             countQueryBase.andWhere('w.lock_type', filters.lockType);
         }
 
-        // ExpiryDay filter (day of week)
         if (filters.expiryDay) {
             const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
             const dayNum = dayMap[filters.expiryDay.toLowerCase()];
@@ -1464,30 +1404,23 @@ async function getFilteredWorlds(userId, filters = {}, page = 1, pageSize = 10) 
             }
         }
 
-        // Days Owned filter (NEW)
-        // This filter is mutually exclusive with expiringDays (which was removed)
         if (filters.daysOwned !== undefined && filters.daysOwned !== null) {
             const daysOwnedInput = parseInt(filters.daysOwned);
             if (!isNaN(daysOwnedInput)) {
-                if (daysOwnedInput === 180) { // Worlds that are already expired (or will expire today)
-                    const todayEnd = new Date(); // Consider "today" up to its very end for this condition
+                if (daysOwnedInput === 180) {
+                    const todayEnd = new Date();
                     todayEnd.setUTCHours(23, 59, 59, 999);
                     query.andWhere('w.expiry_date', '<=', todayEnd.toISOString());
                     countQueryBase.andWhere('w.expiry_date', '<=', todayEnd.toISOString());
                 } else if (daysOwnedInput >= 0 && daysOwnedInput < 180) {
-                    // Calculate the exact day for days_left = 180 - daysOwnedInput
                     const targetDaysLeft = 180 - daysOwnedInput;
-
-                    const targetDate = new Date(); // Start with today
-                    targetDate.setUTCHours(0,0,0,0); // Start of today UTC
-                    targetDate.setUTCDate(targetDate.getUTCDate() + targetDaysLeft); // Add targetDaysLeft
-
+                    const targetDate = new Date();
+                    targetDate.setUTCHours(0,0,0,0);
+                    targetDate.setUTCDate(targetDate.getUTCDate() + targetDaysLeft);
                     const targetStartDateISO = targetDate.toISOString();
-
                     const targetEndDate = new Date(targetDate);
-                    targetEndDate.setUTCDate(targetDate.getUTCDate() + 1); // Start of the next day
+                    targetEndDate.setUTCDate(targetDate.getUTCDate() + 1);
                     const targetEndDateISO = targetEndDate.toISOString();
-
                     query.andWhere('w.expiry_date', '>=', targetStartDateISO)
                          .andWhere('w.expiry_date', '<', targetEndDateISO);
                     countQueryBase.andWhere('w.expiry_date', '>=', targetStartDateISO)
@@ -1496,24 +1429,22 @@ async function getFilteredWorlds(userId, filters = {}, page = 1, pageSize = 10) 
             }
         }
 
-        // Count query execution
         const totalResult = await countQueryBase.count({ total: '*' }).first();
         const totalCount = totalResult ? Number(totalResult.total) : 0;
 
-        // Main query execution with pagination and ordering
-        query.orderBy('w.expiry_date', 'asc') // Fewer days left = more days owned = higher in sort
+        query.orderBy('w.expiry_date', 'asc')
              .limit(pageSize)
              .offset((page - 1) * pageSize);
 
         const worlds = await query;
-        const formattedWorlds = worlds.map(w => ({ ...w, is_public: !!w.is_public })); // Ensure boolean
+        const formattedWorlds = worlds.map(w => ({ ...w, is_public: !!w.is_public }));
 
         logger.debug(`[DB] getFilteredWorlds returning ${formattedWorlds.length} worlds, total: ${totalCount}`);
         return { worlds: formattedWorlds, total: totalCount };
 
     } catch (error) {
         logger.error(`[DB] Error in getFilteredWorlds (User: ${userId}, Filters: ${JSON.stringify(filters)}, Page: ${page}):`, error);
-        return { worlds: [], total: 0 }; // Consistent return type on error
+        return { worlds: [], total: 0 };
     }
 }
 
@@ -1529,16 +1460,13 @@ async function getExpiringWorldCount(userId, days = 7) { try { const targetDate 
 
 async function getMostRecentWorld(userId) { try { const world = await knexInstance('worlds').where({ user_id: userId }).orderBy('added_date', 'desc').select('name', 'added_date').first(); return world || null; } catch (error) { logger.error(`[DB] Error getting most recent world for user ${userId}:`, error); return null; } }
 
-async function getMostRecentWorld(userId) { try { const world = await knexInstance('worlds').where({ user_id: userId }).orderBy('added_date', 'desc').select('name', 'added_date').first(); return world || null; } catch (error) { logger.error(`[DB] Error getting most recent world for user ${userId}:`, error); return null; } }
-
-// --- New function to get worlds expiring soon for a specific user ---
 async function getExpiringWorldsForUser(userId, daysUntilExpiry = 7) {
     logger.debug(`[DB] Fetching worlds expiring in ${daysUntilExpiry} days for user ${userId}`);
     try {
         const now = new Date();
         const targetDate = new Date();
         targetDate.setUTCDate(now.getUTCDate() + daysUntilExpiry);
-        targetDate.setUTCHours(23, 59, 59, 999); // End of the target day
+        targetDate.setUTCHours(23, 59, 59, 999);
 
         const nowISO = now.toISOString();
         const targetDateISO = targetDate.toISOString();
@@ -1548,13 +1476,13 @@ async function getExpiringWorldsForUser(userId, daysUntilExpiry = 7) {
             .andWhere('expiry_date', '>=', nowISO)
             .andWhere('expiry_date', '<=', targetDateISO)
             .orderBy('expiry_date', 'asc')
-            .select('name', 'expiry_date', 'custom_id'); // Added custom_id
+            .select('name', 'expiry_date', 'custom_id');
 
         logger.debug(`[DB] Found ${worlds.length} worlds expiring for user ${userId} by ${targetDateISO}`);
         return worlds;
     } catch (error) {
         logger.error(`[DB] Error getting expiring worlds for user ${userId}:`, error);
-        return []; // Return an empty array in case of an error
+        return [];
     }
 }
 
@@ -1566,12 +1494,10 @@ async function getUserPreferences(userId) {
             return {
                 timezone_offset: user.timezone_offset,
                 view_mode: user.view_mode,
-                reminder_enabled: !!user.reminder_enabled, // Ensure boolean
+                reminder_enabled: !!user.reminder_enabled,
                 reminder_time_utc: user.reminder_time_utc
             };
         }
-        // Return default preferences if user not found or preferences not set
-        // This ensures the bot always has some preference values to work with.
         logger.warn(`[DB] User ${userId} not found or preferences missing, returning defaults.`);
         return {
             timezone_offset: 0.0,
@@ -1581,7 +1507,6 @@ async function getUserPreferences(userId) {
         };
     } catch (error) {
         logger.error(`[DB] Error getting preferences for user ${userId}:`, error);
-        // Return default preferences on error as a fallback
         return {
             timezone_offset: 0.0,
             view_mode: 'pc',
@@ -1596,7 +1521,7 @@ async function updateUserTimezone(userId, timezoneOffset) {
         const offset = parseFloat(timezoneOffset);
         if (isNaN(offset) || offset < -12.0 || offset > 14.0) {
             logger.warn(`[DB] Invalid timezone offset value for user ${userId}: ${timezoneOffset}`);
-            return false; // Indicate failure due to invalid value
+            return false;
         }
         await knexInstance('users').where({ id: userId }).update({ timezone_offset: offset });
         logger.info(`[DB] Updated timezone for user ${userId} to ${offset}`);
@@ -1611,7 +1536,7 @@ async function updateUserViewMode(userId, viewMode) {
     try {
         if (viewMode !== 'pc' && viewMode !== 'phone') {
             logger.warn(`[DB] Invalid view mode value for user ${userId}: ${viewMode}`);
-            return false; // Indicate failure due to invalid value
+            return false;
         }
         await knexInstance('users').where({ id: userId }).update({ view_mode: viewMode });
         logger.info(`[DB] Updated view mode for user ${userId} to ${viewMode}`);
@@ -1624,17 +1549,16 @@ async function updateUserViewMode(userId, viewMode) {
 
 async function updateUserReminderSettings(userId, reminderEnabled, reminderTimeUtc) {
     try {
-        // Basic validation for reminderTimeUtc if reminderEnabled is true
         if (reminderEnabled && reminderTimeUtc) {
             if (!/^\d{2}:\d{2}$/.test(reminderTimeUtc)) {
                  logger.warn(`[DB] Invalid reminder_time_utc format for user ${userId}: ${reminderTimeUtc}`);
-                 return false; // Indicate failure
+                 return false;
             }
         }
         const effectiveReminderTimeUtc = reminderEnabled ? reminderTimeUtc : null;
 
         await knexInstance('users').where({ id: userId }).update({
-            reminder_enabled: !!reminderEnabled, // Ensure boolean
+            reminder_enabled: !!reminderEnabled,
             reminder_time_utc: effectiveReminderTimeUtc 
         });
         logger.info(`[DB] Updated reminder settings for user ${userId} to enabled: ${!!reminderEnabled}, time: ${effectiveReminderTimeUtc}`);
@@ -1645,7 +1569,6 @@ async function updateUserReminderSettings(userId, reminderEnabled, reminderTimeU
     }
 }
 
-// Function to get worlds by days left, without pagination (for export)
 async function getAllWorldsByDaysLeft(userId, daysLeft, guildId = null) {
     logger.debug(`[DB] getAllWorldsByDaysLeft called - User: ${userId}, DaysLeft: ${daysLeft}, Guild: ${guildId}`);
     
@@ -1683,7 +1606,7 @@ async function getAllWorldsByDaysLeft(userId, daysLeft, guildId = null) {
 
         const worlds = await queryBase
             .leftJoin('users as u', 'w.user_id', 'u.id') 
-            .orderBy('w.name', 'asc') // This ordering is primarily for DB consistency, JS sort will refine
+            .orderBy('w.name', 'asc')
             .select('w.*', 'u.username as added_by_tag');
         
         logger.debug(`[DB] getAllWorldsByDaysLeft: Worlds query returned ${worlds.length} rows.`);
@@ -1697,8 +1620,7 @@ async function getAllWorldsByDaysLeft(userId, daysLeft, guildId = null) {
     }
 }
 
-// Add this function definition within database.js
-async function getWorldsByDaysLeft(userId, daysLeft, guildId = null, page = 1, pageSize = 10 /* Default, calling code should pass CONSTANTS.PAGE_SIZE */) {
+async function getWorldsByDaysLeft(userId, daysLeft, guildId = null, page = 1, pageSize = 10) {
     logger.debug(`[DB] getWorldsByDaysLeft called - User: ${userId}, DaysLeft: ${daysLeft}, Guild: ${guildId}, Page: ${page}, PageSize: ${pageSize}`);
     
     if (typeof daysLeft !== 'number' || daysLeft < 0) {
@@ -1764,8 +1686,243 @@ async function getWorldsByDaysLeft(userId, daysLeft, guildId = null, page = 1, p
     }
 }
 
+// --- Bio Function Implementation ---
+async function setBio(userId, bio) {
+  logger.info(`[DB] Setting bio for user ${userId}. Bio length: ${bio ? bio.length : 'null'}`);
+  try {
+    const bioToSet = (bio && bio.trim().length > 0) ? bio.trim() : null;
+    await knexInstance('users')
+      .where({ id: userId })
+      .update({ bio: bioToSet });
+    logger.info(`[DB] Successfully set bio for user ${userId}.`);
+    return { success: true };
+  } catch (error) {
+    logger.error(`[DB] Error setting bio for user ${userId}:`, error);
+    return { success: false, error: 'db_error' };
+  }
+}
+
+
+// --- Locked Worlds Functions Implementation ---
+
+async function addLockedWorld(userId, worldName, lockType = 'main', note = null) {
+  const worldNameUpper = worldName.toUpperCase();
+  const normalizedLockType = ['main', 'out'].includes(String(lockType).toLowerCase()) ? String(lockType).toLowerCase() : 'main';
+
+  try {
+    await knexInstance('locked_worlds').insert({
+      user_id: userId,
+      world_name: worldNameUpper,
+      lock_type: normalizedLockType,
+      note: note
+    });
+    logger.info(`[DB] Added world ${worldNameUpper} to locked_worlds for user ${userId} with lock_type ${normalizedLockType}`);
+    return { success: true, message: 'World added to locks.' };
+  } catch (error) {
+    logger.error(`[DB] Error adding world ${worldNameUpper} to locked_worlds for user ${userId}:`, error);
+    if (error.code === 'SQLITE_CONSTRAINT' && error.message.includes('UNIQUE constraint failed: locked_worlds.user_id, locked_worlds.world_name')) {
+      return { success: false, message: `World ${worldNameUpper} is already in your locked list.` };
+    }
+    if (error.code === 'SQLITE_CONSTRAINT' && error.message.includes('FOREIGN KEY constraint failed')) {
+        logger.error(`[DB] Foreign key constraint failed for user ${userId} when adding ${worldNameUpper} to locks. User might not exist.`);
+        return { success: false, message: 'Failed to add world to locks due to a user reference error.' };
+    }
+    return { success: false, message: 'Failed to add world to locks due to a database error.' };
+  }
+}
+
+async function getLockedWorlds(userId, page = 1, pageSize = 10, filters = {}) {
+  logger.debug(`[DB] Getting locked worlds for user ${userId}, page ${page}, pageSize ${pageSize}, filters: ${JSON.stringify(filters)}`);
+  try {
+    const query = knexInstance('locked_worlds').where({ user_id: userId });
+    const countQuery = knexInstance('locked_worlds').where({ user_id: userId });
+
+    if (filters.nameLength) {
+      if (filters.nameLength.min) {
+        query.andWhereRaw('LENGTH(world_name) >= ?', [filters.nameLength.min]);
+        countQuery.andWhereRaw('LENGTH(world_name) >= ?', [filters.nameLength.min]);
+      }
+      if (filters.nameLength.max) {
+        query.andWhereRaw('LENGTH(world_name) <= ?', [filters.nameLength.max]);
+        countQuery.andWhereRaw('LENGTH(world_name) <= ?', [filters.nameLength.max]);
+      }
+    }
+    if (filters.prefix) {
+      query.andWhereRaw('UPPER(world_name) LIKE ?', [filters.prefix.toUpperCase() + '%']);
+      countQuery.andWhereRaw('UPPER(world_name) LIKE ?', [filters.prefix.toUpperCase() + '%']);
+    }
+    if (filters.lockType && ['main', 'out'].includes(filters.lockType.toLowerCase())) {
+      query.where('lock_type', filters.lockType.toLowerCase());
+      countQuery.where('lock_type', filters.lockType.toLowerCase());
+    }
+    if (filters.note) {
+      query.andWhereRaw('UPPER(note) LIKE ?', ['%' + filters.note.toUpperCase() + '%']);
+      countQuery.andWhereRaw('UPPER(note) LIKE ?', ['%' + filters.note.toUpperCase() + '%']);
+    }
+
+    const totalResult = await countQuery.count({ total: '*' }).first();
+    const totalCount = totalResult ? Number(totalResult.total) : 0;
+
+    query.limit(pageSize).offset((page - 1) * pageSize)
+         .orderByRaw('LENGTH(world_name) ASC')
+         .orderBy('world_name', 'ASC');
+
+    const worlds = await query;
+
+    logger.info(`[DB] Fetched ${worlds.length} locked worlds for user ${userId} (total: ${totalCount})`);
+    return { worlds, total: totalCount };
+
+  } catch (error) {
+    logger.error(`[DB] Error getting locked worlds for user ${userId}:`, error);
+    return { worlds: [], total: 0 };
+  }
+}
+
+async function removeLockedWorld(userId, worldName) {
+  const worldNameUpper = worldName.toUpperCase();
+  logger.debug(`[DB] Attempting to remove locked world ${worldNameUpper} for user ${userId}`);
+  try {
+    const deletedCount = await knexInstance('locked_worlds')
+      .where({ user_id: userId })
+      .andWhereRaw('world_name = ?', [worldNameUpper])
+      .del();
+
+    if (deletedCount > 0) {
+      logger.info(`[DB] Removed locked world ${worldNameUpper} for user ${userId}`);
+      return true;
+    } else {
+      logger.warn(`[DB] Locked world ${worldNameUpper} not found for user ${userId} or already removed.`);
+      return false;
+    }
+  } catch (error) {
+    logger.error(`[DB] Error removing locked world ${worldNameUpper} for user ${userId}:`, error);
+    return false;
+  }
+}
+
+async function findLockedWorldByName(userId, worldName) {
+  const worldNameUpper = worldName.toUpperCase();
+  logger.debug(`[DB] Searching for locked world ${worldNameUpper} for user ${userId}`);
+  try {
+    const world = await knexInstance('locked_worlds')
+      .where({ user_id: userId })
+      .andWhereRaw('world_name = ?', [worldNameUpper])
+      .first();
+
+    if (world) {
+      logger.info(`[DB] Found locked world ${worldNameUpper} for user ${userId}`);
+    } else {
+      logger.debug(`[DB] Locked world ${worldNameUpper} not found for user ${userId}`);
+    }
+    return world || null;
+  } catch (error) {
+    logger.error(`[DB] Error finding locked world ${worldNameUpper} for user ${userId}:`, error);
+    return null;
+  }
+}
+
+async function moveWorldToLocks(userId, worldIdToRemove, targetLockType, targetNote) {
+  logger.info(`[DB] Attempting to move world ID ${worldIdToRemove} to locks for user ${userId} with type ${targetLockType}`);
+
+  const normalizedTargetLockType = ['main', 'out'].includes(String(targetLockType).toLowerCase())
+                                   ? String(targetLockType).toLowerCase()
+                                   : 'main';
+  try {
+    return await knexInstance.transaction(async (trx) => {
+      const worldToMove = await trx('worlds')
+        .where({ id: worldIdToRemove, user_id: userId })
+        .first();
+
+      if (!worldToMove) {
+        logger.warn(`[DB] World ID ${worldIdToRemove} not found in active worlds for user ${userId} during move operation.`);
+        throw new Error('ACTIVE_WORLD_NOT_FOUND');
+      }
+
+      const worldNameUpper = worldToMove.name.toUpperCase();
+
+      const existingLockedWorld = await trx('locked_worlds')
+        .where({ user_id: userId, world_name: worldNameUpper })
+        .first();
+
+      if (existingLockedWorld) {
+        logger.warn(`[DB] World ${worldNameUpper} (from active world ID ${worldIdToRemove}) already exists in locked_worlds for user ${userId}.`);
+        throw new Error('ALREADY_IN_LOCKED_LIST');
+      }
+
+      const deletedFromActive = await trx('worlds')
+        .where({ id: worldIdToRemove, user_id: userId })
+        .del();
+
+      if (deletedFromActive === 0) {
+        logger.error(`[DB] Failed to delete world ID ${worldIdToRemove} from active worlds for user ${userId} during move. It might have been deleted concurrently.`);
+        throw new Error('ACTIVE_WORLD_DELETE_FAILED');
+      }
+      logger.info(`[DB] Deleted world ${worldNameUpper} (ID: ${worldIdToRemove}) from active list for user ${userId}`);
+
+      await trx('locked_worlds').insert({
+        user_id: userId,
+        world_name: worldNameUpper,
+        lock_type: normalizedTargetLockType,
+        note: targetNote,
+      });
+      logger.info(`[DB] Inserted ${worldNameUpper} into locked_worlds for user ${userId} with type ${normalizedTargetLockType}`);
+
+      return { success: true, message: `World **${worldNameUpper}** moved to your locked list.` };
+    });
+  } catch (error) {
+    logger.error(`[DB] Error moving world ID ${worldIdToRemove} to locks for user ${userId}:`, error);
+    if (error.message === 'ACTIVE_WORLD_NOT_FOUND') {
+      return { success: false, message: 'The world to move was not found in your active list.' };
+    } else if (error.message === 'ALREADY_IN_LOCKED_LIST') {
+      return { success: false, message: 'This world is already in your locked list.' };
+    } else if (error.message === 'ACTIVE_WORLD_DELETE_FAILED') {
+        return { success: false, message: 'Failed to remove the world from your active list during the move. Please try again.' };
+    }
+    if (error.code === 'SQLITE_CONSTRAINT' && error.message.includes('UNIQUE constraint failed: locked_worlds.user_id, locked_worlds.world_name')) {
+        return { success: false, message: 'This world is already in your locked list (detected during final insert).' };
+    }
+    return { success: false, message: 'Failed to move world to locks due to a database error.' };
+  }
+}
+
+/**
+ * Gets a locked world by its primary key ID, ensuring it belongs to the specified user.
+ * @param {string} userId The user's Discord ID.
+ * @param {number} worldId The primary key ID of the locked world.
+ * @returns {Promise<Object|null>}
+ */
+async function getLockedWorldById(userId, worldId) {
+    try {
+        const world = await knexInstance('locked_worlds').where({ id: worldId, user_id: userId }).first();
+        return world || null;
+    } catch (error) {
+        logger.error(`[DB] Error getting locked world by ID ${worldId} for user ${userId}:`, error);
+        return null;
+    }
+}
+
+/**
+ * Removes a locked world by its primary key ID, ensuring it belongs to the specified user.
+ * @param {string} userId The user's Discord ID.
+ * @param {number} worldId The primary key ID of the locked world to remove.
+ * @returns {Promise<boolean>}
+ */
+async function removeLockedWorldById(userId, worldId) {
+  try {
+    const deletedCount = await knexInstance('locked_worlds').where({ id: worldId, user_id: userId }).del();
+    if (deletedCount > 0) {
+        logger.info(`[DB] Removed locked world by ID ${worldId} for user ${userId}.`);
+        return true;
+    }
+    return false;
+  } catch (error) {
+    logger.error(`[DB] Error removing locked world by ID ${worldId} for user ${userId}:`, error);
+    return false;
+  }
+}
+
+
 // --- Module Exports ---
-// Assign all defined functions to the exports object
 module.exports = {
   knex: knexInstance,
   initializeDatabase,
@@ -1783,29 +1940,32 @@ module.exports = {
   getPublicWorldByCustomId,
   findWorldByIdentifier,
   getFilteredWorlds,
-  getAllFilteredWorlds, // Added new function
-  searchWorlds: getFilteredWorlds, // Alias
+  getAllFilteredWorlds,
+  searchWorlds: getFilteredWorlds,
   updateAllWorldDays,
   removeExpiredWorlds,
   getWorldCount,
   getWorldLockStats,
   getExpiringWorldCount,
   getMostRecentWorld,
-  getExpiringWorldsForUser, // Added the new function to exports
+  getExpiringWorldsForUser,
   // User Preferences
   getUserPreferences,
   updateUserTimezone,
   updateUserViewMode,
   updateUserReminderSettings,
-  getWorldsByDaysLeft, // Add the new function here
-  getAllWorldsByDaysLeft, // NEW: Added function to export
+  getWorldsByDaysLeft,
+  getAllWorldsByDaysLeft,
+
+  // Admin Functions
+  getAllWorldsPaged,
 
   // Bot Profile Functions
   setBotUsername,
   getBotUsername,
   getUserByBotUsername,
-  getUser, // Added
-  getUserProfileStats, // Added
+  getUser,
+  getUserProfileStats,
 
   // Bio function
   setBio,
@@ -1844,7 +2004,7 @@ module.exports = {
   getReceivedMessages,
   getMessageById,
   markMessageAsRead,
-  markMessageAsUnread, // Added
+  markMessageAsUnread,
   deleteMessage,
 
   // --- Locked Worlds Functions ---
@@ -1852,220 +2012,7 @@ module.exports = {
   getLockedWorlds,
   removeLockedWorld,
   findLockedWorldByName,
-  moveWorldToLocks
+  moveWorldToLocks,
+  getLockedWorldById,
+  removeLockedWorldById,
 };
-
-
-// --- Bio Function Implementation ---
-async function setBio(userId, bio) {
-  logger.info(`[DB] Setting bio for user ${userId}. Bio length: ${bio ? bio.length : 'null'}`);
-  try {
-    const bioToSet = (bio && bio.trim().length > 0) ? bio.trim() : null;
-    await knexInstance('users')
-      .where({ id: userId })
-      .update({ bio: bioToSet });
-    logger.info(`[DB] Successfully set bio for user ${userId}.`);
-    return { success: true };
-  } catch (error) {
-    logger.error(`[DB] Error setting bio for user ${userId}:`, error);
-    return { success: false, error: 'db_error' };
-  }
-}
-
-
-// --- Locked Worlds Functions Implementation ---
-
-async function addLockedWorld(userId, worldName, lockType = 'main', note = null) {
-  const worldNameUpper = worldName.toUpperCase();
-  // Normalize lockType: 'main' or 'out'. Default to 'main' if invalid.
-  const normalizedLockType = ['main', 'out'].includes(String(lockType).toLowerCase()) ? String(lockType).toLowerCase() : 'main';
-
-  try {
-    await knexInstance('locked_worlds').insert({
-      user_id: userId,
-      world_name: worldNameUpper,
-      lock_type: normalizedLockType,
-      note: note
-    });
-    logger.info(`[DB] Added world ${worldNameUpper} to locked_worlds for user ${userId} with lock_type ${normalizedLockType}`);
-    return { success: true, message: 'World added to locks.' };
-  } catch (error) {
-    logger.error(`[DB] Error adding world ${worldNameUpper} to locked_worlds for user ${userId}:`, error);
-    if (error.code === 'SQLITE_CONSTRAINT' && error.message.includes('UNIQUE constraint failed: locked_worlds.user_id, locked_worlds.world_name')) {
-      return { success: false, message: `World ${worldNameUpper} is already in your locked list.` };
-    }
-    // Check for foreign key constraint if users table is involved, though users table FK was on user_id
-    if (error.code === 'SQLITE_CONSTRAINT' && error.message.includes('FOREIGN KEY constraint failed')) {
-        logger.error(`[DB] Foreign key constraint failed for user ${userId} when adding ${worldNameUpper} to locks. User might not exist.`);
-        return { success: false, message: 'Failed to add world to locks due to a user reference error.' };
-    }
-    return { success: false, message: 'Failed to add world to locks due to a database error.' };
-  }
-}
-
-async function getLockedWorlds(userId, page = 1, pageSize = 10, filters = {}) {
-  logger.debug(`[DB] Getting locked worlds for user ${userId}, page ${page}, pageSize ${pageSize}, filters: ${JSON.stringify(filters)}`);
-  try {
-    const query = knexInstance('locked_worlds').where({ user_id: userId });
-    const countQuery = knexInstance('locked_worlds').where({ user_id: userId });
-
-    // Apply filters
-    if (filters.nameLength) {
-      if (filters.nameLength.min) {
-        query.andWhereRaw('LENGTH(world_name) >= ?', [filters.nameLength.min]);
-        countQuery.andWhereRaw('LENGTH(world_name) >= ?', [filters.nameLength.min]);
-      }
-      if (filters.nameLength.max) {
-        query.andWhereRaw('LENGTH(world_name) <= ?', [filters.nameLength.max]);
-        countQuery.andWhereRaw('LENGTH(world_name) <= ?', [filters.nameLength.max]);
-      }
-    }
-    if (filters.prefix) {
-      query.andWhereRaw('UPPER(world_name) LIKE ?', [filters.prefix.toUpperCase() + '%']);
-      countQuery.andWhereRaw('UPPER(world_name) LIKE ?', [filters.prefix.toUpperCase() + '%']);
-    }
-    if (filters.lockType && ['main', 'out'].includes(filters.lockType.toLowerCase())) {
-      query.where('lock_type', filters.lockType.toLowerCase());
-      countQuery.where('lock_type', filters.lockType.toLowerCase());
-    }
-    if (filters.note) {
-      query.andWhereRaw('UPPER(note) LIKE ?', ['%' + filters.note.toUpperCase() + '%']);
-      countQuery.andWhereRaw('UPPER(note) LIKE ?', ['%' + filters.note.toUpperCase() + '%']);
-    }
-
-    // Get total count
-    const totalResult = await countQuery.count({ total: '*' }).first();
-    const totalCount = totalResult ? Number(totalResult.total) : 0;
-
-    // Get paginated results
-    query.limit(pageSize).offset((page - 1) * pageSize)
-         .orderByRaw('LENGTH(world_name) ASC')
-         .orderBy('world_name', 'ASC');
-
-    const worlds = await query;
-
-    logger.info(`[DB] Fetched ${worlds.length} locked worlds for user ${userId} (total: ${totalCount})`);
-    return { worlds, total: totalCount };
-
-  } catch (error) {
-    logger.error(`[DB] Error getting locked worlds for user ${userId}:`, error);
-    return { worlds: [], total: 0 };
-  }
-}
-
-async function removeLockedWorld(userId, worldName) {
-  const worldNameUpper = worldName.toUpperCase();
-  logger.debug(`[DB] Attempting to remove locked world ${worldNameUpper} for user ${userId}`);
-  try {
-    const deletedCount = await knexInstance('locked_worlds')
-      .where({ user_id: userId })
-      .andWhereRaw('world_name = ?', [worldNameUpper]) // Ensure case-sensitive match after uppercasing input
-      .del();
-
-    if (deletedCount > 0) {
-      logger.info(`[DB] Removed locked world ${worldNameUpper} for user ${userId}`);
-      return true;
-    } else {
-      logger.warn(`[DB] Locked world ${worldNameUpper} not found for user ${userId} or already removed.`);
-      return false;
-    }
-  } catch (error) {
-    logger.error(`[DB] Error removing locked world ${worldNameUpper} for user ${userId}:`, error);
-    return false;
-  }
-}
-
-async function findLockedWorldByName(userId, worldName) {
-  const worldNameUpper = worldName.toUpperCase();
-  logger.debug(`[DB] Searching for locked world ${worldNameUpper} for user ${userId}`);
-  try {
-    const world = await knexInstance('locked_worlds')
-      .where({ user_id: userId })
-      .andWhereRaw('world_name = ?', [worldNameUpper]) // Ensure case-sensitive match
-      .first();
-
-    if (world) {
-      logger.info(`[DB] Found locked world ${worldNameUpper} for user ${userId}`);
-    } else {
-      logger.debug(`[DB] Locked world ${worldNameUpper} not found for user ${userId}`);
-    }
-    return world || null;
-  } catch (error) {
-    logger.error(`[DB] Error finding locked world ${worldNameUpper} for user ${userId}:`, error);
-    return null;
-  }
-}
-
-async function moveWorldToLocks(userId, worldIdToRemove, targetLockType, targetNote) {
-  logger.info(`[DB] Attempting to move world ID ${worldIdToRemove} to locks for user ${userId} with type ${targetLockType}`);
-
-  // Normalize lockType: 'main' or 'out'. Default to 'main' if invalid.
-  const normalizedTargetLockType = ['main', 'out'].includes(String(targetLockType).toLowerCase())
-                                   ? String(targetLockType).toLowerCase()
-                                   : 'main';
-  try {
-    return await knexInstance.transaction(async (trx) => {
-      // 1. Fetch the world from `worlds` table
-      const worldToMove = await trx('worlds')
-        .where({ id: worldIdToRemove, user_id: userId })
-        .first();
-
-      if (!worldToMove) {
-        logger.warn(`[DB] World ID ${worldIdToRemove} not found in active worlds for user ${userId} during move operation.`);
-        // Throw an error to rollback and be caught by the outer catch block
-        throw new Error('ACTIVE_WORLD_NOT_FOUND');
-      }
-
-      const worldNameUpper = worldToMove.name.toUpperCase(); // Name is already uppercase in `worlds` table based on `addWorld`
-
-      // 2. Check if the world (by name) already exists in `locked_worlds` for that user
-      const existingLockedWorld = await trx('locked_worlds')
-        .where({ user_id: userId, world_name: worldNameUpper })
-        .first();
-
-      if (existingLockedWorld) {
-        logger.warn(`[DB] World ${worldNameUpper} (from active world ID ${worldIdToRemove}) already exists in locked_worlds for user ${userId}.`);
-        throw new Error('ALREADY_IN_LOCKED_LIST');
-      }
-
-      // 3. Delete the world from `worlds` table
-      const deletedFromActive = await trx('worlds')
-        .where({ id: worldIdToRemove, user_id: userId })
-        .del();
-
-      if (deletedFromActive === 0) {
-        // This should theoretically be caught by the first check, but as a safeguard:
-        logger.error(`[DB] Failed to delete world ID ${worldIdToRemove} from active worlds for user ${userId} during move. It might have been deleted concurrently.`);
-        throw new Error('ACTIVE_WORLD_DELETE_FAILED');
-      }
-      logger.info(`[DB] Deleted world ${worldNameUpper} (ID: ${worldIdToRemove}) from active list for user ${userId}`);
-
-      // 4. Insert the world into `locked_worlds`
-      await trx('locked_worlds').insert({
-        user_id: userId,
-        world_name: worldNameUpper,
-        lock_type: normalizedTargetLockType,
-        note: targetNote,
-        // locked_on_date will default to knex.fn.now() via table schema
-      });
-      logger.info(`[DB] Inserted ${worldNameUpper} into locked_worlds for user ${userId} with type ${normalizedTargetLockType}`);
-
-      return { success: true, message: `World **${worldNameUpper}** moved to your locked list.` };
-    });
-  } catch (error) {
-    logger.error(`[DB] Error moving world ID ${worldIdToRemove} to locks for user ${userId}:`, error);
-    if (error.message === 'ACTIVE_WORLD_NOT_FOUND') {
-      return { success: false, message: 'The world to move was not found in your active list.' };
-    } else if (error.message === 'ALREADY_IN_LOCKED_LIST') {
-      return { success: false, message: 'This world is already in your locked list.' };
-    } else if (error.message === 'ACTIVE_WORLD_DELETE_FAILED') {
-        return { success: false, message: 'Failed to remove the world from your active list during the move. Please try again.' };
-    }
-    // Check for unique constraint on locked_worlds again, in case of race conditions if transaction isolation is not perfect
-    // or if the ALREADY_IN_LOCKED_LIST check above was bypassed due to complex scenarios.
-    if (error.code === 'SQLITE_CONSTRAINT' && error.message.includes('UNIQUE constraint failed: locked_worlds.user_id, locked_worlds.world_name')) {
-        return { success: false, message: 'This world is already in your locked list (detected during final insert).' };
-    }
-    return { success: false, message: 'Failed to move world to locks due to a database error.' };
-  }
-}
