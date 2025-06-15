@@ -270,6 +270,17 @@ async function handleMarketList(interaction) {
 
 // --- BROWSE SUBCOMMAND ---
 async function handleMarketBrowse(interaction, page = 1, isButtonOrSelect = false) {
+    let viewMode = 'pc'; // Default view mode
+    try {
+        const userPrefs = await db.getUserPreferences(interaction.user.id);
+        if (userPrefs && userPrefs.view_mode) {
+            viewMode = userPrefs.view_mode;
+        }
+    } catch (e) {
+        logger.warn(`[MarketCmd] Failed to get user preferences for ${interaction.user.id}: ${e.message}`);
+        // Keep default viewMode if error
+    }
+
     // Retrieve options. If from button, options might not be available directly in interaction.
     // This simplified version assumes options are re-evaluated or not needed for simple page navigation.
     // For robust filter preservation with pagination, options would need to be passed in customId or stored.
@@ -309,43 +320,80 @@ async function handleMarketBrowse(interaction, page = 1, isButtonOrSelect = fals
 
         if (!listings || listings.length === 0) {
             const emptyContent = `Page ${page}/${totalPages}\nNo listings found on the market.\nWorld Watcher Market`;
-            await replyMethod({ content: emptyContent, components: [], ephemeral: false });
+            await replyMethod({ content: emptyContent, components: [], ephemeral: true });
             return;
         }
 
-        const headers = ['ID', 'WORLD', 'PRICE (DLs)', 'SELLER', 'NOTE', 'LOCK TYPE', 'LISTED'];
-        const data = [headers];
+        let headers;
+        let tableData;
+        let tableConfig;
+        const data = []; // Ensure data is an array
 
-        listings.forEach(l => {
-            data.push([
-                l.listing_id.toString(),
-                l.world_name,
-                l.price_dl.toString(),
-                l.seller_display_name || 'Unknown',
-                l.listing_note || '-',
-                l.lock_type || 'N/A',
-                new Date(l.listed_on_date).toLocaleDateString()
-            ]);
-        });
-
-        const config = {
-            columns: [
-                { alignment: 'right', width: 5 }, // ID
-                { alignment: 'left', width: 15, wrapWord: true }, // WORLD
-                { alignment: 'right', width: 10 }, // PRICE (DLs)
-                { alignment: 'left', width: 15, wrapWord: true }, // SELLER
-                { alignment: 'left', width: 20, wrapWord: true }, // NOTE
-                { alignment: 'center', width: 10 }, // LOCK TYPE
-                { alignment: 'left', width: 10 }  // LISTED
-            ],
-            border: getBorderCharacters('norc'),
-            header: {
-                alignment: 'center',
-                content: 'Marketplace Listings',
-            }
+        const truncateString = (str, num) => {
+            if (!str) return '';
+            if (str.length <= num) return str;
+            return str.slice(0, num) + '...';
         };
 
-        let tableOutput = '```\n' + table(data, config) + '\n```';
+        if (viewMode === 'phone') {
+            headers = ['ID', 'WRLD', 'PRICE', 'SELLR', 'NOTE'];
+            tableData = [headers];
+            listings.forEach(l => {
+                tableData.push([
+                    l.listing_id.toString(),
+                    truncateString(l.world_name, 10),
+                    l.price_dl.toString(),
+                    truncateString(l.seller_display_name || 'Unknown', 8),
+                    truncateString(l.listing_note || '-', 10),
+                ]);
+            });
+            tableConfig = {
+                columns: [
+                    { alignment: 'right', width: 4 }, // ID
+                    { alignment: 'left', width: 10, wrapWord: true }, // WORLD
+                    { alignment: 'right', width: 6 }, // PRICE
+                    { alignment: 'left', width: 8, wrapWord: true }, // SELLER
+                    { alignment: 'left', width: 10, wrapWord: true }, // NOTE
+                ],
+                border: getBorderCharacters('compact'),
+                header: {
+                    alignment: 'center',
+                    content: 'Market (Phone)',
+                }
+            };
+        } else { // PC mode (default)
+            headers = ['ID', 'WORLD', 'PRICE (DLs)', 'SELLER', 'NOTE', 'LOCK TYPE', 'LISTED'];
+            tableData = [headers];
+            listings.forEach(l => {
+                tableData.push([
+                    l.listing_id.toString(),
+                    l.world_name,
+                    l.price_dl.toString(),
+                    l.seller_display_name || 'Unknown',
+                    l.listing_note || '-',
+                    l.lock_type || 'N/A',
+                    new Date(l.listed_on_date).toLocaleDateString()
+                ]);
+            });
+            tableConfig = {
+                columns: [
+                    { alignment: 'right', width: 5 }, // ID
+                    { alignment: 'left', width: 15, wrapWord: true }, // WORLD
+                    { alignment: 'right', width: 10 }, // PRICE (DLs)
+                    { alignment: 'left', width: 15, wrapWord: true }, // SELLER
+                    { alignment: 'left', width: 20, wrapWord: true }, // NOTE
+                    { alignment: 'center', width: 10 }, // LOCK TYPE
+                    { alignment: 'left', width: 10 }  // LISTED
+                ],
+                border: getBorderCharacters('norc'),
+                header: {
+                    alignment: 'center',
+                    content: 'Marketplace Listings',
+                }
+            };
+        }
+
+        let tableOutput = '```\n' + table(tableData, tableConfig) + '\n```';
         if (tableOutput.length > 1900) { // Check if too long for Discord message, leave room for page info
             let cutOff = tableOutput.lastIndexOf('\n', 1850);
             if (cutOff === -1) cutOff = 1850;
@@ -370,7 +418,7 @@ async function handleMarketBrowse(interaction, page = 1, isButtonOrSelect = fals
         }
 
 
-        await replyMethod({ content: finalContent, components, ephemeral: false });
+        await replyMethod({ content: finalContent, components, ephemeral: true });
 
     } catch (error) {
         logger.error('[MarketCmd] Error browsing market:', error);
