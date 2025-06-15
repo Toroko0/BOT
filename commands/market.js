@@ -1,625 +1,297 @@
+// market.js
+
 const {
-    SlashCommandBuilder,
-    EmbedBuilder,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
-    ModalBuilder,
-    TextInputBuilder,
-    TextInputStyle,
-    StringSelectMenuBuilder,
-    InteractionType,
+    SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, InteractionType, StringSelectMenuOptionBuilder
 } = require('discord.js');
 const { table, getBorderCharacters } = require('table');
 const db = require('../database.js');
 const logger = require('../utils/logger.js');
+const utils = require('../utils.js');
+const CONSTANTS = require('../utils/constants.js');
 
-const ITEMS_PER_PAGE_MARKET = 5;
+const ITEMS_PER_PAGE = CONSTANTS.PAGE_SIZE_MARKET || 5;
 
-function createPaginationRow(currentPage, totalPages, baseCustomId) {
-    return new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId(`${baseCustomId}:prev:${currentPage - 1}`)
-                .setLabel('⬅️ Previous')
-                .setStyle(ButtonStyle.Primary)
-                .setDisabled(currentPage === 1),
-            new ButtonBuilder()
-                .setCustomId(`${baseCustomId}:next:${currentPage + 1}`)
-                .setLabel('Next ➡️')
-                .setStyle(ButtonStyle.Primary)
-                .setDisabled(currentPage >= totalPages)
-        );
+// --- Helper Functions ---
+function encodeMarketOptions(options) {
+    if (!options || Object.keys(options).length === 0) return 'e30';
+    return Buffer.from(JSON.stringify(options)).toString('base64url');
 }
 
-function formatListingsForEmbed(listings, title, currentPage, totalPages, client) {
-    const embed = new EmbedBuilder()
-        .setTitle(title)
-        .setColor(0xDAA520);
+function decodeMarketOptions(encodedString) {
+    if (!encodedString || encodedString === 'e30') return {};
+    try {
+        return JSON.parse(Buffer.from(encodedString, 'base64url').toString('utf8'));
+    } catch (e) {
+        logger.error('[market.js] Failed to decode market options:', e);
+        return {};
+    }
+}
 
-    if (!listings || listings.length === 0) {
+// --- Subcommand Handlers ---
+async function handleMarketList(interaction) {
+    await interaction.deferReply({ ephemeral: true });
+    const worldName = interaction.options.getString('worldname');
+    const priceDl = interaction.options.getInteger('price');
+    const note = interaction.options.getString('note') || null;
+
+    const lockedWorld = await db.getLockedWorldForListing(interaction.user.id, worldName.toUpperCase());
+    if (!lockedWorld) {
+        return interaction.editReply({ content: `❌ World "**${worldName}**" not found in your Locks list.` });
+    }
+
+    const alreadyListed = await db.isWorldListed(lockedWorld.id);
+    if (alreadyListed) {
+        return interaction.editReply({ content: `❌ World **${lockedWorld.world_name}** is already listed.` });
+    }
+
+    const result = await db.createMarketListing(interaction.user.id, lockedWorld.id, priceDl, note);
+    if (result.success) {
+        return interaction.editReply({ content: `✅ **${lockedWorld.world_name}** listed for **${priceDl}** DL(s). Listing ID: **${result.listingId}**` });
+    } else {
+        logger.error(`[market.js] Failed to create listing: ${result.error}`);
+        return interaction.editReply({ content: `❌ Error listing world: ${result.error === 'already_listed' ? 'Already listed.' : 'Database error.'}` });
+    }
+}
+
+async function handleMarketBrowse(interaction, page = 1, browseOptions = {}) {
+    const isUpdate = interaction.isMessageComponent() || interaction.isModalSubmit();
+    if (isUpdate) {
+        if (!interaction.deferred) await interaction.deferUpdate();
+    } else {
+        await interaction.deferReply(); // Browse is public
+    }
+
+    const dbOptions = { ...browseOptions, page, pageSize: ITEMS_PER_PAGE };
+    let { listings, total } = await db.getMarketListings(dbOptions);
+    const totalPages = Math.ceil(total / ITEMS_PER_PAGE) || 1;
+    page = Math.max(1, Math.min(page, totalPages));
+
+    const embed = new EmbedBuilder().setColor(0xDAA520).setTitle('🛒 World Watcher Marketplace');
+    const components = [];
+    const encodedOpts = encodeMarketOptions(browseOptions);
+
+    if (total === 0) {
         embed.setDescription('No listings found.');
     } else {
         listings.forEach(l => {
-            const sellerName = l.seller_display_name || 'Unknown Seller';
-            let fieldName = `🏷️ ID: ${l.listing_id} | 🔒 ${l.world_name} - ${l.price_dl} DLs`;
-            if (l.lock_type) fieldName += ` [${l.lock_type.toUpperCase()}]`;
-
-            let fieldValue = `Seller: ${sellerName}`;
-            if (l.listing_note) fieldValue += `\nNote: ${l.listing_note}`;
-            fieldValue += `\nListed: <t:${Math.floor(new Date(l.listed_on_date).getTime() / 1000)}:R>`;
-
-            embed.addFields({ name: fieldName, value: fieldValue });
+            embed.addFields({
+                name: `ID: ${l.listing_id} | ${l.world_name} - ${l.price_dl} DLs`,
+                value: `Seller: ${l.seller_display_name}\nNote: *${l.listing_note || 'None'}*\nListed: <t:${Math.floor(new Date(l.listed_on_date).getTime() / 1000)}:R>`
+            });
         });
+        embed.setFooter({ text: `Page ${page} of ${totalPages}` });
+        
+        const actionRow = new ActionRowBuilder();
+        const userListingsOnPage = listings.filter(l => l.seller_user_id === interaction.user.id);
+        if(userListingsOnPage.length > 0) {
+            const selectOptions = userListingsOnPage.map(l => new StringSelectMenuOptionBuilder().setLabel(`Remove My Listing: ${l.world_name}`).setValue(l.listing_id.toString()));
+            actionRow.addComponents(new StringSelectMenuBuilder().setCustomId(`market_select_remove_${encodedOpts}`).setPlaceholder('🗑️ Remove one of your listings...').addOptions(selectOptions));
+        }
+        components.push(actionRow);
+    }
+    
+    if (totalPages > 1) {
+        components.unshift(utils.createPaginationRow(page, totalPages, `market_button_browse_${encodedOpts}`));
+    }
+    
+    // Add "Message Seller" button regardless of listings
+    const msgSellerRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('market_button_messageseller').setLabel('✉️ Message a Seller').setStyle(ButtonStyle.Success));
+    components.push(msgSellerRow);
+
+    await interaction.editReply({ embeds: [embed], components });
+}
+
+async function handleMyListings(interaction, page = 1) {
+    const isUpdate = interaction.isMessageComponent() || interaction.isModalSubmit();
+    if (isUpdate) {
+        if (!interaction.deferred) await interaction.deferUpdate();
+    } else {
+        await interaction.deferReply({ ephemeral: true });
     }
 
-    const iconURL = client.user?.displayAvatarURL();
-    if (totalPages > 0) {
-        embed.setFooter({ text: `Page ${currentPage} of ${totalPages} • World Watcher Market`, iconURL });
+    const { listings, total } = await db.getMarketListings({ seller_user_id: interaction.user.id, page, pageSize: ITEMS_PER_PAGE });
+    const totalPages = Math.ceil(total / ITEMS_PER_PAGE) || 1;
+
+    const embed = new EmbedBuilder().setTitle('Your Marketplace Listings').setColor(0xDAA520);
+    const components = [];
+
+    if (total === 0) {
+        embed.setDescription('You have no active listings.');
     } else {
-         embed.setFooter({ text: `World Watcher Market`, iconURL });
+        listings.forEach(l => {
+            embed.addFields({ name: `ID: ${l.listing_id} | ${l.world_name} - ${l.price_dl} DLs`, value: `Listed: <t:${Math.floor(new Date(l.listed_on_date).getTime() / 1000)}:R>` });
+        });
+        embed.setFooter({ text: `Page ${page} of ${totalPages}` });
+
+        const selectOptions = listings.map(l => new StringSelectMenuOptionBuilder().setLabel(`Manage: ${l.world_name}`).setValue(l.listing_id.toString()));
+        components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('market_select_manage').setPlaceholder('Select a listing to manage...').addOptions(selectOptions)));
     }
-    return embed;
+    if (totalPages > 1) {
+        components.push(utils.createPaginationRow(page, totalPages, 'market_button_mylistings'));
+    }
+
+    await interaction.editReply({ embeds: [embed], components, ephemeral: true });
+}
+
+async function handleMarketBuy(interaction) {
+    await interaction.deferReply({ ephemeral: true });
+    const listingId = interaction.options.getInteger('listing_id');
+    const listing = await db.getMarketListingById(listingId);
+
+    if (!listing) return interaction.editReply({ content: '❌ Listing not found.' });
+    if (listing.seller_user_id === interaction.user.id) return interaction.editReply({ content: '❌ You cannot buy your own listing.' });
+
+    const buyerBalance = await db.getUserDiamondLocksBalance(interaction.user.id);
+    if (buyerBalance < listing.price_dl) {
+        return interaction.editReply({ content: `❌ Insufficient funds. You need ${listing.price_dl} DLs, but you have ${buyerBalance} DLs.` });
+    }
+
+    const embed = new EmbedBuilder().setTitle('🛒 Confirm Purchase').setColor(0x00FF00)
+        .setDescription(`Buy **${listing.world_name}** for **${listing.price_dl}** DLs from **${listing.seller_display_name}**?`);
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`market_button_confirmbuy_yes_${listingId}`).setLabel('✅ Confirm').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`market_button_confirmbuy_no_${listingId}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Danger)
+    );
+    await interaction.editReply({ embeds: [embed], components: [row] });
 }
 
 
+// --- Interaction Handlers ---
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('market')
         .setDescription('Interact with the player marketplace.')
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('list')
-                .setDescription('List a world from your Locks for sale.')
-                .addStringOption(o => o.setName('worldname').setDescription('Name of the world from your Locks. Case-insensitive.').setRequired(true))
-                .addIntegerOption(o => o.setName('price').setDescription('Price in Diamond Locks (DLs).').setRequired(true).setMinValue(1))
-                .addStringOption(o => o.setName('note').setDescription('Optional note for the listing (max 200 chars).').setRequired(false).setMaxLength(200))
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('browse')
-                .setDescription('Browse worlds on the marketplace.')
-                .addIntegerOption(o => o.setName('min_price').setDescription('Minimum price in DLs.').setRequired(false).setMinValue(1))
-                .addIntegerOption(o => o.setName('max_price').setDescription('Maximum price in DLs.').setRequired(false).setMinValue(1))
-                .addStringOption(o => o.setName('seller').setDescription('Filter by seller (Discord ID or Bot Username).').setRequired(false))
-                .addIntegerOption(o => o.setName('page').setDescription('Page number to view.').setRequired(false).setMinValue(1))
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('mylistings')
-                .setDescription('View and manage your active marketplace listings.')
-                .addIntegerOption(o => o.setName('page').setDescription('Page number to view.').setRequired(false).setMinValue(1))
-        )
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('buy')
-                .setDescription('Buy a world from the marketplace.')
-                .addIntegerOption(o => o.setName('listing_id').setDescription('The ID of the listing you want to buy.').setRequired(true))
-        ),
-
+        .addSubcommand(sub => sub.setName('list').setDescription('List a world from your Locks for sale.').addStringOption(o => o.setName('worldname').setDescription('Name of the world.').setRequired(true)).addIntegerOption(o => o.setName('price').setDescription('Price in DLs.').setRequired(true).setMinValue(1)).addStringOption(o => o.setName('note').setDescription('Optional note.').setMaxLength(200)))
+        .addSubcommand(sub => sub.setName('browse').setDescription('Browse worlds on the market.').addIntegerOption(o => o.setName('min_price').setMinValue(1)).addIntegerOption(o => o.setName('max_price').setMinValue(1)).addUserOption(o => o.setName('seller').setDescription('Filter by seller.')).addIntegerOption(o => o.setName('page').setMinValue(1)))
+        .addSubcommand(sub => sub.setName('mylistings').setDescription('View and manage your active listings.').addIntegerOption(o => o.setName('page').setMinValue(1)))
+        .addSubcommand(sub => sub.setName('buy').setDescription('Buy a world from the market.').addIntegerOption(o => o.setName('listing_id').setRequired(true))),
     async execute(interaction) {
-        if (interaction.options?.getSubcommand() === 'mylistings' ||
-            interaction.customId?.includes('mylisting') ||
-            interaction.options?.getSubcommand() === 'buy' ||
-            interaction.customId?.startsWith('market:confirmbuy') ||
-            interaction.customId?.startsWith('market:cancelbuy')) {
-             await db.addUser(interaction.user.id, interaction.user.username);
+        await db.addUser(interaction.user.id, interaction.user.username);
+        const subcommand = interaction.options.getSubcommand();
+
+        if (subcommand === 'list') await handleMarketList(interaction);
+        else if (subcommand === 'browse') {
+            const browseOptions = {
+                min_price: interaction.options.getInteger('min_price'),
+                max_price: interaction.options.getInteger('max_price'),
+                seller_user_id: interaction.options.getUser('seller')?.id,
+            };
+            Object.keys(browseOptions).forEach(key => browseOptions[key] == null && delete browseOptions[key]);
+            await handleMarketBrowse(interaction, interaction.options.getInteger('page') || 1, browseOptions);
         }
+        else if (subcommand === 'mylistings') await handleMyListings(interaction, interaction.options.getInteger('page') || 1);
+        else if (subcommand === 'buy') await handleMarketBuy(interaction);
+    },
+    async handleInteraction(interaction) {
+        const [context, command, ...args] = interaction.customId.split('_');
+        if (context !== 'market') return;
 
-        if (interaction.isChatInputCommand()) {
-            const subcommand = interaction.options.getSubcommand();
-            if (subcommand === 'list') await handleMarketList(interaction);
-            else if (subcommand === 'browse') await handleMarketBrowse(interaction, interaction.options.getInteger('page') || 1);
-            else if (subcommand === 'mylistings') await handleMyListings(interaction, interaction.options.getInteger('page') || 1);
-            else if (subcommand === 'buy') await handleMarketBuy(interaction);
-
-        } else if (interaction.isButton()) {
-            const [context, command, operation, value, pageStr] = interaction.customId.split(':');
-
-            if (context !== 'market') return;
-
-            const page = parseInt(pageStr) || 1;
-            const listingId = parseInt(value) || parseInt(operation);
-
-            if (command === 'browse') {
-                await handleMarketBrowse(interaction, parseInt(operation), true);
-            } else if (command === 'mylistingpage') {
-                await handleMyListings(interaction, parseInt(operation), true);
-            } else if (command === 'mylistingaction') {
-                if (operation === 'cancel') await showCancelConfirmation(interaction, value);
-                else if (operation === 'adjust') await showAdjustPriceModal(interaction, value);
-            } else if (command === 'confirmcancel') {
-                 if (operation === 'yes') await processCancelListing(interaction, listingId, page);
-                 else await interaction.update({ content: 'Cancellation aborted.', components: [], ephemeral: true });
-            } else if (command === 'confirmbuy') {
-                await processMarketPurchaseButton(interaction, listingId);
-            } else if (command === 'cancelbuy') {
-                await interaction.update({ content: 'Purchase cancelled.', embeds: [], components: [], ephemeral: true });
-            } else if (interaction.customId === 'market:messageSellerModalButton') { // Button to OPEN the modal
-                const modal = new ModalBuilder()
-                    .setCustomId('market:messageSellerSubmitModal')
-                    .setTitle('Message Seller');
-                const listingIdInput = new TextInputBuilder()
-                    .setCustomId('listing_id_input')
-                    .setLabel('Listing ID to Message About')
-                    .setStyle(TextInputStyle.Short)
-                    .setRequired(true)
-                    .setPlaceholder('Enter the numeric ID of the listing');
-                const messageContentInput = new TextInputBuilder()
-                    .setCustomId('message_content_input')
-                    .setLabel('Your Message to the Seller')
-                    .setStyle(TextInputStyle.Paragraph)
-                    .setRequired(true)
-                    .setPlaceholder('Type your message here...');
-
-                modal.addComponents(
-                    new ActionRowBuilder().addComponents(listingIdInput),
-                    new ActionRowBuilder().addComponents(messageContentInput)
-                );
-                await interaction.showModal(modal);
-            }
-
-        } else if (interaction.type === InteractionType.ModalSubmit) {
-            const [context, command, operation, listingIdStrFromCustomId] = interaction.customId.split(':'); // operation and listingIdStrFromCustomId might be undefined
-            if (context === 'market' && command === 'mylistingmodal' && operation === 'submitadjust') {
-                await handleAdjustPriceModalSubmit(interaction, parseInt(listingIdStrFromCustomId));
-            } else if (interaction.customId === 'market:messageSellerSubmitModal') {
-                await interaction.deferReply({ ephemeral: true });
-                const listingIdStr = interaction.fields.getTextInputValue('listing_id_input');
-                const messageContent = interaction.fields.getTextInputValue('message_content_input');
-                const listingId = parseInt(listingIdStr);
-
-                if (isNaN(listingId)) {
-                    await interaction.editReply({ content: '❌ Invalid Listing ID. Please enter a numeric ID.', ephemeral: true });
-                    return;
+        if (interaction.isButton()) {
+            const operation = command;
+            switch(operation) {
+                case 'button': {
+                    const [subCommand, ...btnArgs] = args;
+                    if (subCommand === 'browse') await handleMarketBrowse(interaction, parseInt(btnArgs[1]), decodeMarketOptions(btnArgs[0]));
+                    else if (subCommand === 'mylistings') await handleMyListings(interaction, parseInt(btnArgs[0]));
+                    else if (subCommand === 'confirmbuy') {
+                        const [confirm, listingId] = btnArgs;
+                        if(confirm === 'no') return interaction.update({ content: 'Purchase cancelled.', components: [], embeds: [] });
+                        
+                        await interaction.deferUpdate();
+                        const listing = await db.getMarketListingById(parseInt(listingId));
+                        if (!listing) return interaction.editReply({ content: '❌ This listing is no longer available.', components:[], embeds:[] });
+                        const result = await db.processMarketPurchase(interaction.user.id, listing.seller_user_id, listing.listing_id, listing.locked_world_id, listing.price_dl, interaction.user.username, listing.seller_display_name, listing.world_name);
+                        if (result.success) {
+                            await interaction.editReply({ content: `✅ Congratulations! You have purchased **${result.worldName}**.`, components:[], embeds:[] });
+                            const sellerUser = await interaction.client.users.fetch(listing.seller_user_id).catch(() => null);
+                            if (sellerUser) sellerUser.send(`🔔 Your listing for **${result.worldName}** has been sold to **${interaction.user.username}** for **${listing.price_dl}** DLs!`).catch(e => logger.warn('Failed to DM seller', e));
+                        } else {
+                            await interaction.editReply({ content: `❌ Purchase Failed: ${result.error}`, components:[], embeds:[] });
+                        }
+                    }
+                    else if (subCommand === 'messageseller') {
+                        const modal = new ModalBuilder().setCustomId('market_modal_sendmessage').setTitle('Message a Seller');
+                        modal.addComponents(
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('listing_id').setLabel('Listing ID').setStyle(TextInputStyle.Short).setRequired(true)),
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('message_content').setLabel('Your Message').setStyle(TextInputStyle.Paragraph).setRequired(true))
+                        );
+                        await interaction.showModal(modal);
+                    }
+                    break;
                 }
-
-                try {
-                    const listing = await db.getMarketListingById(listingId);
-                    if (!listing) {
-                        await interaction.editReply({ content: `❌ Listing with ID **${listingId}** not found.`, ephemeral: true });
-                        return;
+                case 'confirmcancel': {
+                    const [confirm, listingId, origin, page, encodedOptions] = args;
+                    if(confirm === 'no') return interaction.update({ content: 'Cancellation aborted.', components: [] });
+                    await interaction.deferUpdate();
+                    const result = await db.cancelMarketListing(parseInt(listingId), interaction.user.id);
+                    if(result.success) {
+                        await interaction.editReply({ content: `✅ Listing ${listingId} cancelled. Refreshing list...`, components: [] });
+                        if(origin === 'browse') await handleMarketBrowse(interaction, parseInt(page), decodeMarketOptions(encodedOptions));
+                        else await handleMyListings(interaction, parseInt(page));
+                    } else {
+                        await interaction.editReply({ content: `❌ Failed to cancel: ${result.error}`, components: [] });
                     }
-
-                    if (listing.seller_user_id === interaction.user.id) {
-                        await interaction.editReply({ content: '❌ You cannot message yourself about your own listing.', ephemeral: true });
-                        return;
-                    }
-
-                    const buyerDisplayName = interaction.user.displayName || interaction.user.username;
-                    const buyerDiscordTag = interaction.user.tag;
-                    // Use seller_display_name from listing if available, otherwise try to fetch tag (though less reliable without direct user object)
-                    const sellerGreetingName = listing.seller_display_name || `Seller (ID: ${listing.seller_user_id})`;
-
-
-                    const dmMessageContent = `Hello, ${sellerGreetingName}!\n\nUser **${buyerDisplayName}** (*${buyerDiscordTag}*) is interested in your marketplace listing:\nWorld: **${listing.world_name}**\nPrice: **${listing.price_dl}** DL(s)\nNote: ${listing.listing_note || 'N/A'}\nListing ID: **${listing.listing_id}**\n\nTheir message:\n>>> ${messageContent}`;
-
-                    const sellerDiscordUser = await interaction.client.users.fetch(listing.seller_user_id).catch(() => null);
-
-                    if (!sellerDiscordUser) {
-                        await interaction.editReply({ content: '⚠️ Could not find the seller\'s Discord account. They might have left shared servers or their account was deleted. Your message was not sent.', ephemeral: true });
-                        return;
-                    }
-
-                    let dmFailed = false;
-                    await sellerDiscordUser.send(dmMessageContent).catch(async (dmError) => {
-                        logger.warn(`[MarketCmd] Failed to DM seller ${listing.seller_user_id} for listing ${listingId}: ${dmError.message}`);
-                        dmFailed = true;
-                        let replyMessage = '⚠️ Your message could not be directly DMed to the seller. They might have DMs disabled or have blocked the bot.';
-                        // Optionally, log the message to a channel if DMs fail, as a fallback.
-                        // For now, just inform the buyer.
-                        // const fallbackChannel = interaction.client.channels.cache.get('YOUR_FALLBACK_CHANNEL_ID');
-                        // if (fallbackChannel) {
-                        //    fallbackChannel.send(`Market Message (DM Failed for Listing ${listingId}):\nFrom: ${buyerDiscordTag} (${interaction.user.id})\nTo Seller: ${sellerDiscordUser.tag} (${listing.seller_user_id})\nMessage: ${messageContent}`);
-                        //    replyMessage += "\nThe message has been forwarded to bot staff."
-                        // }
-                        await interaction.editReply({ content: replyMessage, ephemeral: true });
-                    });
-
-                    if (!dmFailed) {
-                        await interaction.editReply({ content: '✅ Your message has been sent to the seller!', ephemeral: true });
-                    }
-
-                } catch (error) {
-                    logger.error(`[MarketCmd] Error processing message seller modal for listing ${listingId}:`, error);
-                    await interaction.editReply({ content: '❌ An unexpected error occurred while trying to send your message.', ephemeral: true });
+                    break;
                 }
             }
         } else if (interaction.isStringSelectMenu()) {
-             if (interaction.customId === 'market:mylisting:selectaction') {
-                const [action, listingIdStr] = interaction.values[0].split(':'); // No page needed here from value
-                const listingId = parseInt(listingIdStr);
-                if (action === 'cancel') await showCancelConfirmation(interaction, listingId);
-                else if (action === 'adjust') await showAdjustPriceModal(interaction, listingId);
-             }
+            const [operation, ...selectArgs] = args;
+            const listingId = parseInt(interaction.values[0]);
+            switch(operation) {
+                case 'select': {
+                    const [subCommand, ...selectSubArgs] = selectArgs;
+                    if(subCommand === 'manage') {
+                        const row = new ActionRowBuilder().addComponents(
+                            new ButtonBuilder().setCustomId(`market_button_confirmcancel_yes_${listingId}_mylistings_1`).setLabel('🗑️ Cancel Listing').setStyle(ButtonStyle.Danger),
+                            new ButtonBuilder().setCustomId(`market_modal_adjustprice_${listingId}`).setLabel('✏️ Adjust Price').setStyle(ButtonStyle.Primary),
+                            new ButtonBuilder().setCustomId(`market_button_confirmcancel_no_${listingId}`).setLabel('Back').setStyle(ButtonStyle.Secondary)
+                        );
+                        await interaction.reply({ content: `Managing Listing ID **${listingId}**.`, components: [row], ephemeral: true });
+                    } else if (subCommand === 'remove') {
+                        const [encodedOptions] = selectSubArgs;
+                        const row = new ActionRowBuilder().addComponents(
+                            new ButtonBuilder().setCustomId(`market_button_confirmcancel_yes_${listingId}_browse_1_${encodedOptions}`).setLabel('✅ Yes, Cancel It').setStyle(ButtonStyle.Danger),
+                            new ButtonBuilder().setCustomId(`market_button_confirmcancel_no_${listingId}`).setLabel('❌ No, Keep It').setStyle(ButtonStyle.Secondary)
+                        );
+                        await interaction.reply({ content: `Are you sure you want to cancel your listing **ID ${listingId}**?`, components: [row], ephemeral: true });
+                    }
+                    break;
+                }
+            }
+        } else if (interaction.isModalSubmit()) {
+            const [operation, subCommand, ...modalArgs] = args;
+             if (operation === 'modal') {
+                if (subCommand === 'sendmessage') {
+                    await interaction.deferReply({ ephemeral: true });
+                    const listingId = parseInt(interaction.fields.getTextInputValue('listing_id'));
+                    const content = interaction.fields.getTextInputValue('message_content');
+                    if(isNaN(listingId)) return interaction.editReply('Invalid listing ID.');
+                    const listing = await db.getMarketListingById(listingId);
+                    if(!listing) return interaction.editReply('Listing not found.');
+                    if(listing.seller_user_id === interaction.user.id) return interaction.editReply('You cannot message yourself.');
+                    
+                    const seller = await interaction.client.users.fetch(listing.seller_user_id).catch(() => null);
+                    if(!seller) return interaction.editReply('Could not find seller.');
+
+                    const dmContent = `Message from ${interaction.user.tag} regarding your listing for **${listing.world_name}** (ID: ${listingId}):\n\n>>> ${content}`;
+                    await seller.send(dmContent).then(() => {
+                        interaction.editReply('✅ Message sent!');
+                    }).catch(() => {
+                        interaction.editReply('⚠️ Could not DM the seller. They may have DMs disabled.');
+                    });
+                } else if (subCommand === 'adjustprice') {
+                    const listingId = parseInt(modalArgs[0]);
+                    const newPrice = parseInt(interaction.fields.getTextInputValue('new_price'));
+                    if(isNaN(newPrice) || newPrice <= 0) return interaction.reply({ content: 'Invalid price.', ephemeral: true });
+                    const result = await db.updateMarketListingPrice(listingId, interaction.user.id, newPrice);
+                    if(result.success) {
+                        await interaction.reply({ content: `✅ Price for listing ${listingId} updated to ${newPrice} DLs.`, ephemeral: true });
+                        // Could follow-up with a refreshed mylistings view here.
+                    } else {
+                        await interaction.reply({ content: `❌ Failed to update price: ${result.error}`, ephemeral: true });
+                    }
+                }
+            }
         }
-    },
+    }
 };
-
-// --- LIST SUBCOMMAND ---
-async function handleMarketList(interaction) {
-    const userId = interaction.user.id;
-    await db.addUser(userId, interaction.user.username);
-
-    const worldNameInput = interaction.options.getString('worldname');
-    const priceDl = interaction.options.getInteger('price');
-    const note = interaction.options.getString('note') || null;
-    const worldNameUpper = worldNameInput.toUpperCase();
-
-    try {
-        const lockedWorld = await db.getLockedWorldForListing(userId, worldNameUpper);
-        if (!lockedWorld) {
-            return interaction.reply({ content: `❌ World **${worldNameInput}** (case-insensitive) not found in your Locks list.`, ephemeral: true });
-        }
-        const alreadyListed = await db.isWorldListed(lockedWorld.id);
-        if (alreadyListed) {
-            return interaction.reply({ content: `❌ World **${lockedWorld.world_name}** is already listed.`, ephemeral: true });
-        }
-        const result = await db.createMarketListing(userId, lockedWorld.id, priceDl, note);
-        if (result.success) {
-            return interaction.reply({ content: `✅ **${lockedWorld.world_name}** listed for **${priceDl}** DL(s). ${result.listingId ? `Listing ID: **${result.listingId}**` : ''}`, ephemeral: true });
-        } else {
-            logger.error(`[MarketCmd] Failed to create listing for ${userId}, world ${lockedWorld.id}: ${result.error}`);
-            return interaction.reply({ content: `❌ Error listing world: ${result.error === 'already_listed' ? 'Already listed (concurrently?).' : 'Database error.'}`, ephemeral: true });
-        }
-    } catch (error) {
-        logger.error(`[MarketCmd] Exception listing world for ${userId}:`, error);
-        return interaction.reply({ content: '❌ Unexpected error listing world.', ephemeral: true });
-    }
-}
-
-// --- BROWSE SUBCOMMAND ---
-async function handleMarketBrowse(interaction, page = 1, isButtonOrSelect = false) {
-    let viewMode = 'pc'; // Default view mode
-    try {
-        const userPrefs = await db.getUserPreferences(interaction.user.id);
-        if (userPrefs && userPrefs.view_mode) {
-            viewMode = userPrefs.view_mode;
-        }
-    } catch (e) {
-        logger.warn(`[MarketCmd] Failed to get user preferences for ${interaction.user.id}: ${e.message}`);
-        // Keep default viewMode if error
-    }
-
-    // Retrieve options. If from button, options might not be available directly in interaction.
-    // This simplified version assumes options are re-evaluated or not needed for simple page navigation.
-    // For robust filter preservation with pagination, options would need to be passed in customId or stored.
-    const minPrice = interaction.isChatInputCommand() ? interaction.options.getInteger('min_price') : null;
-    const maxPrice = interaction.isChatInputCommand() ? interaction.options.getInteger('max_price') : null;
-    const sellerArg = interaction.isChatInputCommand() ? interaction.options.getString('seller') : null;
-
-    const dbOptions = { page, pageSize: ITEMS_PER_PAGE_MARKET };
-    if (minPrice !== null) dbOptions.min_price = minPrice;
-    if (maxPrice !== null) dbOptions.max_price = maxPrice;
-
-    const replyMethod = isButtonOrSelect ? interaction.update.bind(interaction) : interaction.reply.bind(interaction);
-
-    if (sellerArg) {
-        const isDiscordId = /^\d{17,19}$/.test(sellerArg);
-        if (isDiscordId) {
-            dbOptions.seller_user_id = sellerArg;
-        } else {
-            const sellerUser = await db.getUserByBotUsername(sellerArg);
-            if (sellerUser) {
-                dbOptions.seller_user_id = sellerUser.id;
-            } else {
-                return replyMethod({ content: `❌ Seller with bot username "${sellerArg}" not found.`, ephemeral: true, embeds: [], components: [] });
-            }
-        }
-    }
-
-    try {
-        let { listings, total } = await db.getMarketListings(dbOptions);
-        const totalPages = Math.ceil(total / ITEMS_PER_PAGE_MARKET) || 1;
-
-        if (page > totalPages && totalPages > 0) {
-            dbOptions.page = totalPages; page = totalPages;
-            const result = await db.getMarketListings(dbOptions);
-            listings = result.listings; total = result.total;
-        }
-
-        if (!listings || listings.length === 0) {
-            const emptyContent = `Page ${page}/${totalPages}\nNo listings found on the market.\nWorld Watcher Market`;
-            await replyMethod({ content: emptyContent, components: [], ephemeral: true });
-            return;
-        }
-
-        let headers;
-        let tableData;
-        let tableConfig;
-        const data = []; // Ensure data is an array
-
-        const truncateString = (str, num) => {
-            if (!str) return '';
-            if (str.length <= num) return str;
-            return str.slice(0, num) + '...';
-        };
-
-        if (viewMode === 'phone') {
-            headers = ['ID', 'WRLD', 'PRICE', 'SELLR', 'NOTE'];
-            tableData = [headers];
-            listings.forEach(l => {
-                tableData.push([
-                    l.listing_id.toString(),
-                    truncateString(l.world_name, 10),
-                    l.price_dl.toString(),
-                    truncateString(l.seller_display_name || 'Unknown', 8),
-                    truncateString(l.listing_note || '-', 10),
-                ]);
-            });
-            tableConfig = {
-                columns: [
-                    { alignment: 'right', width: 4 }, // ID
-                    { alignment: 'left', width: 10, wrapWord: true }, // WORLD
-                    { alignment: 'right', width: 6 }, // PRICE
-                    { alignment: 'left', width: 8, wrapWord: true }, // SELLER
-                    { alignment: 'left', width: 10, wrapWord: true }, // NOTE
-                ],
-                border: getBorderCharacters('compact'),
-                header: {
-                    alignment: 'center',
-                    content: 'Market (Phone)',
-                }
-            };
-        } else { // PC mode (default)
-            headers = ['ID', 'WORLD', 'PRICE (DLs)', 'SELLER', 'NOTE', 'LOCK TYPE', 'LISTED'];
-            tableData = [headers];
-            listings.forEach(l => {
-                tableData.push([
-                    l.listing_id.toString(),
-                    l.world_name,
-                    l.price_dl.toString(),
-                    l.seller_display_name || 'Unknown',
-                    l.listing_note || '-',
-                    l.lock_type || 'N/A',
-                    new Date(l.listed_on_date).toLocaleDateString()
-                ]);
-            });
-            tableConfig = {
-                columns: [
-                    { alignment: 'right', width: 5 }, // ID
-                    { alignment: 'left', width: 15, wrapWord: true }, // WORLD
-                    { alignment: 'right', width: 10 }, // PRICE (DLs)
-                    { alignment: 'left', width: 15, wrapWord: true }, // SELLER
-                    { alignment: 'left', width: 20, wrapWord: true }, // NOTE
-                    { alignment: 'center', width: 10 }, // LOCK TYPE
-                    { alignment: 'left', width: 10 }  // LISTED
-                ],
-                border: getBorderCharacters('norc'),
-                header: {
-                    alignment: 'center',
-                    content: 'Marketplace Listings',
-                }
-            };
-        }
-
-        let tableOutput = '```\n' + table(tableData, tableConfig) + '\n```';
-        if (tableOutput.length > 1900) { // Check if too long for Discord message, leave room for page info
-            let cutOff = tableOutput.lastIndexOf('\n', 1850);
-            if (cutOff === -1) cutOff = 1850;
-            tableOutput = tableOutput.substring(0, cutOff) + '\n... (Table truncated) ...```';
-        }
-
-        const finalContent = `Page ${page}/${totalPages}\n${tableOutput}\nWorld Watcher Market`;
-        const components = [];
-         if (total > ITEMS_PER_PAGE_MARKET) {
-            components.push(createPaginationRow(page, totalPages, 'market:browse'));
-        }
-        // Add Message Seller button if there are listings
-        if (listings && listings.length > 0) {
-            const messageSellerRow = new ActionRowBuilder()
-                .addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('market:messageSellerModalButton')
-                        .setLabel('✉️ Message Seller about a Listing')
-                        .setStyle(ButtonStyle.Success) // Or Primary
-                );
-            components.push(messageSellerRow);
-        }
-
-
-        await replyMethod({ content: finalContent, components, ephemeral: true });
-
-    } catch (error) {
-        logger.error('[MarketCmd] Error browsing market:', error);
-        await replyMethod({ content: '❌ Error fetching market listings.', ephemeral: true, components: [] });
-    }
-}
-
-// --- MYLISTINGS SUBCOMMAND & MANAGEMENT ---
-async function handleMyListings(interaction, page = 1, isButtonOrSelectOrModal = false) {
-    const userId = interaction.user.id;
-    const options = { seller_user_id: userId, page, pageSize: ITEMS_PER_PAGE_MARKET };
-    const replyMethod = isButtonOrSelectOrModal ? interaction.update.bind(interaction) : interaction.reply.bind(interaction);
-
-    try {
-        let { listings, total } = await db.getMarketListings(options);
-        const totalPages = Math.ceil(total / ITEMS_PER_PAGE_MARKET) || 1;
-
-        if (page > totalPages && totalPages > 0) {
-            options.page = totalPages; page = totalPages;
-            const result = await db.getMarketListings(options);
-            listings = result.listings; total = result.total;
-        }
-
-        const embed = formatListingsForEmbed(listings, 'Your Marketplace Listings', page, totalPages, interaction.client);
-        const components = [];
-
-        if (listings.length > 0) {
-            const selectOptions = listings.map(l => ({
-                label: `ID: ${l.listing_id} - ${l.world_name} (${l.price_dl} DLs)`,
-                description: l.listing_note ? `Note: ${l.listing_note.substring(0,40)}` : `Listed: ${new Date(l.listed_on_date).toLocaleDateString()}`,
-                value: `manage:${l.listing_id}` // Action decided by subsequent ephemeral message with buttons
-            }));
-            components.push(new ActionRowBuilder().addComponents(
-                new StringSelectMenuBuilder().setCustomId('market:mylisting:selectaction').setPlaceholder('Select a listing to manage...').addOptions(selectOptions)
-            ));
-        }
-        if (total > ITEMS_PER_PAGE_MARKET) {
-            components.push(createPaginationRow(page, totalPages, 'market:mylistingpage'));
-        }
-        await replyMethod({ embeds: [embed], components, ephemeral: true });
-    } catch (error) {
-        logger.error(`[MarketCmd] Error fetching my listings for ${userId}:`, error);
-        await replyMethod({ content: '❌ Error fetching your listings.', ephemeral: true, embeds:[], components:[] });
-    }
-}
-
-async function showCancelConfirmation(interaction, listingId) {
-    // interaction here is StringSelectInteraction or ButtonInteraction
-    const confirmRow = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder().setCustomId(`market:confirmcancel:yes:${listingId}:1`).setLabel('✅ Yes, Cancel It').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId(`market:confirmcancel:no:${listingId}:1`).setLabel('❌ No, Keep It').setStyle(ButtonStyle.Secondary)
-        );
-    // If from select menu, need to use .reply() for the first response to the select menu.
-    // If select menu itself was ephemeral, this needs to be a new message.
-    // Assuming select menu interaction is deferred or replied to, then followUp.
-    // For simplicity, let's assume we always reply to the select menu interaction first.
-    if (interaction.isStringSelectMenu()) {
-        await interaction.reply({ content: `Manage Listing ID **${listingId}**. Are you sure you want to cancel it?`, components: [confirmRow], ephemeral: true });
-    } else { // If triggered by another button (future)
-        await interaction.update({ content: `Are you sure you want to cancel listing ID **${listingId}**?`, components: [confirmRow], ephemeral: true });
-    }
-}
-
-async function processCancelListing(interaction, listingId, pageToRefresh) {
-    const result = await db.cancelMarketListing(listingId, interaction.user.id);
-    if (result.success) {
-        await interaction.update({ content: `✅ Listing ID **${listingId}** has been cancelled. Refreshing your listings...`, components: [] });
-        await handleMyListings(interaction, pageToRefresh, true);
-    } else {
-        let errorMsg = '❌ Error cancelling listing.';
-        if (result.error === 'not_found') errorMsg = '❌ Listing not found.';
-        else if (result.error === 'not_owner') errorMsg = '❌ You do not own this listing.';
-        await interaction.update({ content: errorMsg, components: [] });
-    }
-}
-
-async function showAdjustPriceModal(interaction, listingId) {
-    const modal = new ModalBuilder().setCustomId(`market:mylistingmodal:submitadjust:${listingId}`).setTitle('Adjust Listing Price');
-    const newPriceInput = new TextInputBuilder().setCustomId('new_price_dl').setLabel("New Price in Diamond Locks (DLs)").setStyle(TextInputStyle.Short).setPlaceholder("Enter a positive number").setRequired(true).setMinLength(1);
-    modal.addComponents(new ActionRowBuilder().addComponents(newPriceInput));
-    await interaction.showModal(modal);
-}
-
-async function handleAdjustPriceModalSubmit(interaction, listingId) {
-    const newPriceStr = interaction.fields.getTextInputValue('new_price_dl');
-    const newPrice = parseInt(newPriceStr);
-
-    if (isNaN(newPrice) || newPrice <= 0 || !Number.isInteger(newPrice)) {
-        return interaction.reply({ content: '❌ Invalid price. Must be a positive whole number.', ephemeral: true });
-    }
-    try {
-        const result = await db.updateMarketListingPrice(listingId, interaction.user.id, newPrice);
-        let replyOptions = { ephemeral: true };
-        if (result.success) {
-            replyOptions.content = `✅ Price for listing ID **${listingId}** updated to **${newPrice}** DLs.`;
-        } else {
-            if (result.error === 'invalid_price') replyOptions.content = '❌ Invalid price format.';
-            else if (result.error === 'not_found') replyOptions.content = '❌ Listing not found.';
-            else if (result.error === 'not_owner') replyOptions.content = '❌ You do not own this listing.';
-            else replyOptions.content = '❌ Error updating price.';
-        }
-        await interaction.reply(replyOptions);
-        // To refresh mylistings, we can't directly call handleMyListings as it needs the original interaction context.
-        // A follow-up is better.
-        if (result.success) {
-             await interaction.followUp({ content: "Your listings view will update next time you run `/market mylistings`.", ephemeral: true });
-        }
-    } catch (error) {
-        logger.error(`[MarketCmd] Exception updating price for listing ${listingId}:`, error);
-        await interaction.reply({ content: '❌ Unexpected error updating price.', ephemeral: true });
-    }
-}
-
-// --- BUY SUBCOMMAND ---
-async function handleMarketBuy(interaction) {
-    const buyerUserId = interaction.user.id;
-    await db.addUser(buyerUserId, interaction.user.username); // Ensure buyer exists
-
-    const listingId = interaction.options.getInteger('listing_id');
-
-    try {
-        const listing = await db.getMarketListingById(listingId);
-        if (!listing) {
-            return interaction.reply({ content: '❌ Listing not found.', ephemeral: true });
-        }
-        if (listing.seller_user_id === buyerUserId) {
-            return interaction.reply({ content: '❌ You cannot buy your own listing.', ephemeral: true });
-        }
-
-        const buyerBalance = await db.getUserDiamondLocksBalance(buyerUserId);
-        if (buyerBalance < listing.price_dl) {
-            return interaction.reply({ content: `❌ You have insufficient Diamond Locks. You need ${listing.price_dl} DLs, but you have ${buyerBalance} DLs.`, ephemeral: true });
-        }
-
-        const embed = new EmbedBuilder()
-            .setTitle('🛒 Confirm Purchase')
-            .setColor(0x00FF00) // Green
-            .setDescription(`Are you sure you want to buy **${listing.world_name}** for **${listing.price_dl}** DLs from **${listing.seller_display_name}**?`)
-            .addFields({ name: 'World Name', value: listing.world_name, inline: true }, { name: 'Price', value: `${listing.price_dl} DLs`, inline: true }, { name: 'Seller', value: listing.seller_display_name, inline: true });
-        if (listing.listing_note) {
-            embed.addFields({ name: 'Listing Note', value: listing.listing_note });
-        }
-
-        const row = new ActionRowBuilder()
-            .addComponents(
-                new ButtonBuilder().setCustomId(`market:confirmbuy:yes:${listingId}`).setLabel('✅ Confirm Purchase').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId(`market:cancelbuy:no:${listingId}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Danger)
-            );
-        await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
-
-    } catch (error) {
-        logger.error(`[MarketCmd] Error preparing to buy listing ${listingId}:`, error);
-        await interaction.reply({ content: '❌ Error fetching listing details for purchase.', ephemeral: true });
-    }
-}
-
-async function processMarketPurchaseButton(interaction, listingId) {
-    // Re-fetch listing to ensure it's still available at the same price, etc.
-    const listing = await db.getMarketListingById(listingId);
-    const buyerUserId = interaction.user.id;
-    const buyerUsername = interaction.user.username;
-
-
-    if (!listing) {
-        return interaction.update({ content: '❌ This listing is no longer available.', embeds: [], components: [], ephemeral: true });
-    }
-    if (listing.seller_user_id === buyerUserId) {
-        return interaction.update({ content: '❌ You cannot buy your own listing.', embeds: [], components: [], ephemeral: true });
-    }
-    const buyerBalance = await db.getUserDiamondLocksBalance(buyerUserId);
-    if (buyerBalance < listing.price_dl) {
-        return interaction.update({ content: `❌ Your DL balance is too low. You need ${listing.price_dl} DLs, but have ${buyerBalance}.`, embeds: [], components: [], ephemeral: true });
-    }
-
-    try {
-        // seller_display_name contains bot username or discord tag
-        const result = await db.processMarketPurchase(buyerUserId, listing.seller_user_id, listing.listing_id, listing.locked_world_id, listing.price_dl, buyerUsername, listing.seller_display_name, listing.world_name);
-
-        if (result.success) {
-            await interaction.update({ content: `✅ Congratulations! You have purchased **${result.worldName}** for **${listing.price_dl}** DLs.`, embeds: [], components: [], ephemeral: true });
-
-            // DM Seller (best effort)
-            try {
-                const sellerUser = await interaction.client.users.fetch(listing.seller_user_id);
-                if (sellerUser) {
-                    await sellerUser.send(`🔔 Your marketplace listing for **${result.worldName}** has been sold to **${buyerUsername}** for **${listing.price_dl}** DLs!`);
-                }
-            } catch (dmError) {
-                logger.warn(`[MarketCmd] Failed to DM seller ${listing.seller_user_id} about purchase of listing ${listingId}:`, dmError.message);
-            }
-        } else {
-            let errorMsg = '❌ Purchase failed.';
-            if (result.error === 'insufficient_funds') errorMsg = '❌ You do not have enough Diamond Locks for this purchase.';
-            else if (result.error === 'listing_not_found' || result.error === 'listing_not_found_during_delete') errorMsg = '❌ This listing is no longer available.';
-            else if (result.error === 'world_transfer_failed') errorMsg = '❌ Failed to transfer world ownership. Please contact support.';
-            else errorMsg = '❌ An unexpected database error occurred during purchase.';
-            await interaction.update({ content: errorMsg, embeds: [], components: [], ephemeral: true });
-        }
-    } catch (error) { // Catch errors from processMarketPurchase if it throws directly
-        logger.error(`[MarketCmd] Exception processing purchase for listing ${listingId}:`, error);
-        await interaction.update({ content: '❌ An critical error occurred while processing your purchase.', embeds: [], components: [], ephemeral: true });
-    }
-}
