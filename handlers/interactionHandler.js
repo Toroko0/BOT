@@ -64,6 +64,7 @@ async function setupInteractionHandler(client) {
     }
 
     client.on(Events.InteractionCreate, async interaction => {
+        logger.info(`[Interaction Handler] Raw interaction received. Type: ${interaction.type}, ID: ${interaction.id}, CommandName: ${interaction.commandName || 'N/A'}, CustomID: ${interaction.customId || 'N/A'}, User: ${interaction.user.tag}`);
         // Ignore interactions from bots
         if (interaction.user.bot) return;
 
@@ -133,6 +134,7 @@ async function setupInteractionHandler(client) {
             }
             // --- Slash Command Handling ---
             else if (interaction.type === InteractionType.ApplicationCommand) {
+                logger.info(`[Interaction Handler] Received ApplicationCommand: ${interaction.commandName}, User: ${interaction.user.tag}`);
                 const command = client.commands.get(interaction.commandName);
                 if (!command) {
                     logger.error(`[Interaction Handler] Command not found: ${interaction.commandName}`);

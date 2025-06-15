@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
 const logger = require('../utils/logger.js');
 const db = require('../database.js');
 const { table, getBorderCharacters } = require('table');
@@ -34,10 +34,10 @@ async function showUserStatsView(interaction, targetUserId, targetUser) {
             .setTimestamp();
         const viewListButton = new ButtonBuilder().setCustomId(`admin_button_viewuserworlds_${targetUserId}`).setLabel("View User's World List").setStyle(ButtonStyle.Primary);
         const row = new ActionRowBuilder().addComponents(viewListButton);
-        await interaction.editReply({ embeds: [embed], components: [row], ephemeral: true });
+        await interaction.editReply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
     } catch (dbError) {
         logger.error(`[Admin User Stats] Error fetching data for user ${targetUserId}:`, dbError);
-        await interaction.editReply({ content: 'An error occurred while fetching user data from the database.', components: [], ephemeral: true });
+        await interaction.editReply({ content: 'An error occurred while fetching user data from the database.', components: [], flags: MessageFlags.Ephemeral });
     }
 }
 
@@ -58,7 +58,7 @@ async function showAdminOwnListView(interaction, page) {
         page = Math.max(1, Math.min(page, totalPages));
 
         if (totalWorlds === 0) {
-            await interaction.editReply({ content: 'You have no worlds in your list.', components: [], ephemeral: true });
+            await interaction.editReply({ content: 'You have no worlds in your list.', components: [], flags: MessageFlags.Ephemeral });
             return;
         }
         if (worlds.length === 0 && page > 1 && totalWorlds > 0) {
@@ -67,7 +67,7 @@ async function showAdminOwnListView(interaction, page) {
             worlds = newDbResult.worlds || [];
         }
         if (worlds.length === 0 && totalWorlds > 0) {
-            await interaction.editReply({ content: 'No worlds on this page.', components: [], ephemeral: true });
+            await interaction.editReply({ content: 'No worlds on this page.', components: [], flags: MessageFlags.Ephemeral });
             return;
         }
 
@@ -93,10 +93,10 @@ async function showAdminOwnListView(interaction, page) {
             logger.warn(`[Admin Own List] Table output for page ${page} was truncated.`);
         }
         const components = [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`admin_button_adminownlistprev_${page}`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Primary).setDisabled(page <= 1), new ButtonBuilder().setCustomId(`admin_adminownlistpage_${page}_${totalPages}`).setLabel(`Page ${page}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true), new ButtonBuilder().setCustomId(`admin_button_adminownlistnext_${page}`).setLabel('Next ➡️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages))];
-        await interaction.editReply({ content: `Displaying your worlds (Page ${page}/${totalPages}):\n\`\`\`\n${tableOutput}\n\`\`\`\n📊 Total worlds: ${totalWorlds}`, components, ephemeral: true });
+        await interaction.editReply({ content: `Displaying your worlds (Page ${page}/${totalPages}):\n\`\`\`\n${tableOutput}\n\`\`\`\n📊 Total worlds: ${totalWorlds}`, components, flags: MessageFlags.Ephemeral });
     } catch (error) {
         logger.error(`[Admin Own List] Error displaying admin's own worlds list (page ${page}):`, error);
-        await interaction.editReply({ content: "An error occurred while displaying your world list.", components: [], ephemeral: true });
+        await interaction.editReply({ content: "An error occurred while displaying your world list.", components: [], flags: MessageFlags.Ephemeral });
     }
 }
 
@@ -110,61 +110,130 @@ async function showLeaderboardView(interaction, page) {
         const totalPages = totalEntries > 0 ? Math.ceil(totalEntries / leaderboardPageSize) : 1;
         page = Math.max(1, Math.min(page, totalPages));
         if (totalEntries === 0) {
-            await interaction.editReply({ content: 'No users with worlds found for the leaderboard.', components: [], ephemeral: true });
+            await interaction.editReply({ content: 'No users with worlds found for the leaderboard.', components: [], flags: MessageFlags.Ephemeral });
             return;
         }
         const embed = new EmbedBuilder().setTitle('🏆 Worlds Leaderboard').setColor(0xFFD700).setFooter({ text: `Page ${page}/${totalPages} - Admin View` });
         if (entries.length === 0 && totalEntries > 0) { embed.setDescription('No entries on this page.'); }
         else { let description = ''; entries.forEach((entry, index) => { const rank = (page - 1) * leaderboardPageSize + index + 1; description += `${rank}. ${entry.username} (ID: ${entry.user_id})\n   Worlds: ${entry.world_count}\n`; }); embed.setDescription(description.trim() || 'No users found.');}
         const components = [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`admin_button_leaderboardprev_${page}`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Primary).setDisabled(page <= 1), new ButtonBuilder().setCustomId(`admin_leaderboardpage_${page}_${totalPages}`).setLabel(`Page ${page}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true), new ButtonBuilder().setCustomId(`admin_button_leaderboardnext_${page}`).setLabel('Next ➡️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages)), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_button_backtoallworlds_1').setLabel('⬅️ Back to All Worlds').setStyle(ButtonStyle.Secondary))];
-        await interaction.editReply({ embeds: [embed], components, ephemeral: true });
+        await interaction.editReply({ embeds: [embed], components, flags: MessageFlags.Ephemeral });
     } catch (error) {
         logger.error(`[Admin Leaderboard] Error displaying leaderboard (page ${page}):`, error);
-        await interaction.editReply({ content: 'An error occurred while displaying the leaderboard.', components: [], ephemeral: true });
+        await interaction.editReply({ content: 'An error occurred while displaying the leaderboard.', components: [], flags: MessageFlags.Ephemeral });
     }
 }
 
 async function showAllWorldsAdminView(interaction, page) {
     logger.info(`[Admin All Worlds List] Admin ${interaction.user.tag} viewing all worlds, page ${page}`);
     try {
-        const adminListPageSize = 5;
+        const adminListPageSize = CONSTANTS.PAGE_SIZE_ADMIN_LIST || 5; // Use constant or default
         const adminPrefs = await db.getUserPreferences(interaction.user.id);
         const viewMode = adminPrefs.view_mode || 'pc';
         const timezoneOffset = adminPrefs.timezone_offset || 0.0;
+
         const dbResult = await db.getAllWorldsPaged({ page: page, pageSize: adminListPageSize });
         const worlds = dbResult.worlds || [];
         const totalWorlds = dbResult.total || 0;
         const totalPages = totalWorlds > 0 ? Math.ceil(totalWorlds / adminListPageSize) : 1;
         page = Math.max(1, Math.min(page, totalPages));
-        if (totalWorlds === 0) { await interaction.editReply({ content: 'No worlds found in the database.', components: [], ephemeral: true }); return; }
-        if (worlds.length === 0 && totalWorlds > 0) { await interaction.editReply({ content: 'No worlds on this page.', components: [], ephemeral: true}); return; }
-        const headers = viewMode === 'pc' ? ['WORLD', 'OWNER', 'CUSTOM ID', 'DAYS OWNED', 'EXPIRES ON', 'LOCK'] : ['WORLD (Owner)', 'ID', 'OWNED', 'EXPIRES', 'LCK'];
-        const tableData = [headers];
-        for (const world of worlds) {
-            const expiryDateUTC = new Date(world.expiry_date);
-            const nowAdminLocal = new Date(Date.now() + timezoneOffset * 3600000);
-            const expiryAdminLocal = new Date(expiryDateUTC.getTime() + timezoneOffset * 3600000);
-            const expiryDatePart = new Date(Date.UTC(expiryAdminLocal.getUTCFullYear(), expiryAdminLocal.getUTCMonth(), expiryAdminLocal.getUTCDate()));
-            const nowDatePart = new Date(Date.UTC(nowAdminLocal.getUTCFullYear(), nowAdminLocal.getUTCMonth(), nowAdminLocal.getUTCDate()));
-            const daysLeft = Math.ceil((expiryDatePart.getTime() - nowDatePart.getTime()) / (1000 * 60 * 60 * 24));
-            const dynamicDaysOwned = (daysLeft <= 0) ? 180 : Math.max(0, 180 - daysLeft);
-            const displayAdminLocalExpiry = DateTime.fromISO(world.expiry_date, { zone: 'utc' }).plus({ hours: timezoneOffset });
-            if (viewMode === 'pc') {
-                tableData.push([world.name, world.owner_username.substring(0, 15), world.custom_id || '-', dynamicDaysOwned.toString(), displayAdminLocalExpiry.toFormat('dd MMM yyyy'), world.lock_type]);
-            } else {
-                tableData.push([`${world.name.substring(0,10)}(${world.owner_username.substring(0,5)})`, world.custom_id || '-', dynamicDaysOwned.toString(), displayAdminLocalExpiry.toFormat('ddMMMyy'), world.lock_type.substring(0,1).toUpperCase()]);
+
+        if (totalWorlds === 0) {
+            await interaction.editReply({ content: 'No worlds found in the database.', components: [], flags: MessageFlags.Ephemeral });
+            return;
+        }
+        if (worlds.length === 0 && totalWorlds > 0 && page > 1) { // If current page is empty but worlds exist, go to last page
+            page = totalPages;
+            const newDbResult = await db.getAllWorldsPaged({ page: page, pageSize: adminListPageSize });
+            worlds = newDbResult.worlds || [];
+        }
+         if (worlds.length === 0 && totalWorlds > 0) { // Still no worlds (e.g. page 1 is empty but total > 0 somehow)
+            await interaction.editReply({ content: 'No worlds on this page.', components: [], flags: MessageFlags.Ephemeral });
+            return;
+         }
+
+
+        const tableData = [];
+        const now = DateTime.utc(); // Use Luxon for current UTC time
+
+        if (viewMode === 'pc') {
+            tableData.push(['WORLD', 'OWNER', 'OWNED', 'LEFT', 'EXPIRES ON', 'LOCK']);
+            for (const world of worlds) {
+                const expiryDate = DateTime.fromISO(world.expiry_date, { zone: 'utc' });
+                const days_left = Math.ceil(expiryDate.diff(now, 'days').days);
+                const days_owned = days_left > 0 ? Math.max(0, 180 - days_left) : 180;
+                const userLocalExpiry = expiryDate.plus({ hours: timezoneOffset });
+                const displayExpiryDate = `${userLocalExpiry.month}/${userLocalExpiry.day}/${userLocalExpiry.year} (${userLocalExpiry.toFormat('ccc')})`;
+
+                let lockTypeDisplay = (world.lock_type || 'MAIN').toUpperCase();
+                if (lockTypeDisplay === 'MAINLOCK') lockTypeDisplay = 'MAIN';
+                if (lockTypeDisplay === 'OUTLOCK') lockTypeDisplay = 'OUT';
+
+                tableData.push([
+                    world.name, // Already uppercase from DB or should be
+                    world.owner_username.substring(0, 15),
+                    days_owned.toString(),
+                    days_left > 0 ? days_left.toString() : 'EXP',
+                    displayExpiryDate,
+                    lockTypeDisplay
+                ]);
+            }
+        } else { // Mobile Mode
+            tableData.push(['WORLD (OWNER)', 'OWNED', 'LEFT']);
+            for (const world of worlds) {
+                const expiryDate = DateTime.fromISO(world.expiry_date, { zone: 'utc' });
+                const days_left = Math.ceil(expiryDate.diff(now, 'days').days);
+                const days_owned = days_left > 0 ? Math.max(0, 180 - days_left) : 180;
+
+                let lockTypeChar = (world.lock_type || 'M').charAt(0).toUpperCase();
+                if (world.lock_type && world.lock_type.toLowerCase() === 'mainlock') lockTypeChar = 'M';
+                if (world.lock_type && world.lock_type.toLowerCase() === 'outlock') lockTypeChar = 'O';
+
+                tableData.push([
+                    `(${lockTypeChar}) ${world.name} (${world.owner_username.substring(0,5)})`,
+                    days_owned.toString(),
+                    days_left > 0 ? days_left.toString() : 'EXP'
+                ]);
             }
         }
-        const tableConfig = { border: getBorderCharacters('ramac'), header: { alignment: 'center', content: `All Worlds (Admin View - Page ${page}/${totalPages})` }, columns: viewMode === 'pc' ? { 0: { width: 15 }, 1: { width: 15 }, 2: { width: 10 }, 3: { width: 10, alignment: 'right' }, 4: { width: 12 }, 5: {width: 9} } : { 0: { width: 18 }, 1: { width: 8 }, 2: { width: 6, alignment: 'right' }, 3: { width: 9 }, 4: { width: 3 } } };
+
+        const tableConfig = {
+            border: getBorderCharacters('norc'), // Ensure this is norc
+            header: {
+                alignment: 'center',
+                content: `All Worlds (Admin View - Page ${page}/${totalPages})`
+            },
+            columns: viewMode === 'pc' ?
+              { 0: { width: 15 }, 1: { width: 15 }, 2: { width: 6, alignment: 'right' }, 3: { width: 5, alignment: 'right' }, 4: { width: 16 }, 5: {width: 6} } :
+              { 0: { width: 25 }, 1: { width: 6, alignment: 'right' }, 2: { width: 5, alignment: 'right' } }
+        };
+
         let tableOutput = table(tableData, tableConfig);
-        if (tableOutput.length > 1900) { let cutOff = tableOutput.lastIndexOf('\n', 1870); if (cutOff === -1) cutOff = 1870; tableOutput = tableOutput.substring(0, cutOff) + '\n... (Table truncated) ...'; logger.warn(`[Admin All Worlds List] Table output for page ${page} was truncated.`);}
-        const components = [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`admin_button_allworldsprev_${page}`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Primary).setDisabled(page <= 1), new ButtonBuilder().setCustomId(`admin_page_display_all_${page}_${totalPages}`).setLabel(`Page ${page}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true), new ButtonBuilder().setCustomId(`admin_button_allworldsnext_${page}`).setLabel('Next ➡️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages))];
-        const actionRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('admin_button_dbstats').setLabel('📊 DB Stats').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('admin_button_leaderboard_1').setLabel('🏆 Leaderboard').setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId('admin_button_filteruserinput').setLabel('🔍 View User Worlds').setStyle(ButtonStyle.Primary));
+        if (tableOutput.length > 1900) {
+            let cutOff = tableOutput.lastIndexOf('\n', 1870);
+            if (cutOff === -1) cutOff = 1870; // Fallback if no newline found
+            tableOutput = tableOutput.substring(0, cutOff) + '\n... (Table truncated) ...';
+            logger.warn(`[Admin All Worlds List] Table output for page ${page} was truncated.`);
+        }
+
+        const components = [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`admin_button_allworldsprev_${page}`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Primary).setDisabled(page <= 1),
+                new ButtonBuilder().setCustomId(`admin_page_display_all_${page}_${totalPages}`).setLabel(`Page ${page}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
+                new ButtonBuilder().setCustomId(`admin_button_allworldsnext_${page}`).setLabel('Next ➡️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages)
+            )
+        ];
+        const actionRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('admin_button_dbstats').setLabel('📊 DB Stats').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('admin_button_leaderboard_1').setLabel('🏆 Leaderboard').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('admin_button_filteruserinput').setLabel('🔍 View User Worlds').setStyle(ButtonStyle.Primary)
+        );
         components.push(actionRow);
-        await interaction.editReply({ content: `Displaying all worlds (Page ${page}/${totalPages}):\n\`\`\`\n${tableOutput}\n\`\`\`\n📊 Total worlds in database: ${totalWorlds}`, components, ephemeral: true });
+
+        await interaction.editReply({ content: `Displaying all worlds (Page ${page}/${totalPages}):\n\`\`\`\n${tableOutput}\n\`\`\`\n📊 Total worlds in database: ${totalWorlds}`, components, flags: MessageFlags.Ephemeral });
     } catch (error) {
         logger.error(`[Admin All Worlds List] Error displaying all worlds list (page ${page}):`, error);
-        await interaction.editReply({ content: 'An error occurred while fetching or displaying the all worlds list.', components: [], ephemeral: true });
+        await interaction.editReply({ content: 'An error occurred while fetching or displaying the all worlds list.', components: [], flags: MessageFlags.Ephemeral });
     }
 }
 
@@ -191,7 +260,7 @@ async function showUserWorldsListAdminView(interaction, targetUserId, page) {
 
         if (totalWorlds === 0 || worlds.length === 0) {
             const row = new ActionRowBuilder().addComponents(backToUserStatsButton);
-            await interaction.editReply({ content: `User ID: ${targetUserId}\nThis user has no worlds.`, components: [row], ephemeral: true });
+            await interaction.editReply({ content: `User ID: ${targetUserId}\nThis user has no worlds.`, components: [row], flags: MessageFlags.Ephemeral });
             return;
         }
 
@@ -217,10 +286,10 @@ async function showUserWorldsListAdminView(interaction, targetUserId, page) {
         const bottomActionRow = new ActionRowBuilder().addComponents(backToUserStatsButton, backToAdminListButton);
         components.push(bottomActionRow);
 
-        await interaction.editReply({ content: `\`\`\`\n${tableOutput}\n\`\`\`\n📊 Total worlds for user: ${totalWorlds}`, components, ephemeral: true });
+        await interaction.editReply({ content: `\`\`\`\n${tableOutput}\n\`\`\`\n📊 Total worlds for user: ${totalWorlds}`, components, flags: MessageFlags.Ephemeral });
     } catch (error) {
         logger.error(`[Admin World List] Error displaying world list for user ${targetUserId}:`, error);
-        await interaction.editReply({ content: 'An error occurred while fetching or displaying the world list.', components: [], ephemeral: true });
+        await interaction.editReply({ content: 'An error occurred while fetching or displaying the world list.', components: [], flags: MessageFlags.Ephemeral });
     }
 }
 
@@ -291,7 +360,7 @@ module.exports = {
                     ).setTimestamp();
                 const viewListButton = new ButtonBuilder().setCustomId(`admin_button_viewuserworlds_${targetUserId}`).setLabel("View User's World List").setStyle(ButtonStyle.Primary);
                 const row = new ActionRowBuilder().addComponents(viewListButton);
-                await interaction.editReply({ embeds: [embed], components: [row], ephemeral: true });
+        await interaction.editReply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
             } catch (dbError) {
                 logger.error(`[Admin User] Error fetching data for user ${targetUser.id}:`, dbError);
                 const errReply = { content: 'An error occurred while fetching user data.', ephemeral: true };

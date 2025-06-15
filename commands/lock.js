@@ -1,6 +1,6 @@
 // lock.js
 
-const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuOptionBuilder } = require('discord.js');
+const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuOptionBuilder, MessageFlags } = require('discord.js');
 const db = require('../database.js');
 const logger = require('../utils/logger.js');
 const { table, getBorderCharacters } = require('table');
@@ -29,7 +29,7 @@ async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) 
   if (isUpdate && !interaction.deferred && !interaction.replied) {
       await interaction.deferUpdate();
   } else if (!isUpdate && !interaction.deferred && !interaction.replied) {
-      await interaction.deferReply({ ephemeral: true });
+       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   }
 
   const { worlds, total } = await db.getLockedWorlds(interaction.user.id, page, CONSTANTS.PAGE_SIZE, currentFilters);
@@ -46,7 +46,7 @@ async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) 
         new ButtonBuilder().setCustomId(`lock_button_clearfilter`).setLabel('Clear Filters').setStyle(ButtonStyle.Danger)
       ));
     }
-    const opts = { content, embeds: [], components, ephemeral: true };
+    const opts = { content, embeds: [], components, flags: MessageFlags.Ephemeral };
     // Use editReply for updates, reply for initial command
     if (interaction.deferred || interaction.replied) await interaction.editReply(opts); else await interaction.reply(opts);
     return;
@@ -100,7 +100,7 @@ async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) 
   }
   components.push(actionRow);
 
-  const opts = { content: finalContent, embeds: [], components, ephemeral: true };
+  const opts = { content: finalContent, embeds: [], components, flags: MessageFlags.Ephemeral };
   if (interaction.deferred || interaction.replied) await interaction.editReply(opts); else await interaction.reply(opts);
 }
 
@@ -138,7 +138,7 @@ async function handleButtonCommand(interaction, params) {
       break;
     }
     case 'export': {
-      await interaction.deferReply({ ephemeral: true });
+       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const [pageStr, encodedFilters] = args;
       const { worlds } = await db.getLockedWorlds(interaction.user.id, parseInt(pageStr), CONSTANTS.PAGE_SIZE, decodeFilters(encodedFilters));
       if (worlds.length === 0) { await interaction.editReply({ content: 'No names to export on this page.' }); return; }
@@ -179,7 +179,7 @@ async function handleModalSubmitCommand(interaction, params) {
     case 'goto': {
       const [encodedFilters] = args;
       const page = parseInt(interaction.fields.getTextInputValue('page_number'));
-      if (isNaN(page) || page < 1) return interaction.reply({ content: 'Invalid page number.', ephemeral: true });
+      if (isNaN(page) || page < 1) return interaction.reply({ content: 'Invalid page number.', flags: MessageFlags.Ephemeral });
       await showLockedWorldsList(interaction, page, decodeFilters(encodedFilters));
       break;
     }
@@ -204,7 +204,7 @@ async function handleModalSubmitCommand(interaction, params) {
         break;
     }
     case 'marketlist': {
-      await interaction.deferReply({ ephemeral: true });
+       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const [worldId] = args;
       const price = parseInt(interaction.fields.getTextInputValue('price_dl'));
       const note = interaction.fields.getTextInputValue('listing_note')?.trim() || null;
@@ -231,7 +231,7 @@ async function handleSelectMenuCommand(interaction, params) {
         new ButtonBuilder().setCustomId(`lock_button_marketlist_${worldId}`).setLabel('💰 List on Market').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId(`lock_button_confirmremove_no_0`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
     );
-    await interaction.reply({ content: `Managing Lock ID **${worldId}**. What would you like to do?`, components: [row], ephemeral: true });
+    await interaction.reply({ content: `Managing Lock ID **${worldId}**. What would you like to do?`, components: [row], flags: MessageFlags.Ephemeral });
 }
 
 // --- Main Export ---
@@ -248,18 +248,18 @@ module.exports = {
       await showLockedWorldsList(interaction, 1, {});
     } else if (subcommand === 'add') {
       const worldName = interaction.options.getString('worldname');
-      if (worldName.includes(' ')) return interaction.reply({ content: '❌ World names cannot contain spaces.', ephemeral: true });
+      if (worldName.includes(' ')) return interaction.reply({ content: '❌ World names cannot contain spaces.', flags: MessageFlags.Ephemeral });
       const result = await db.addLockedWorld(interaction.user.id, worldName.toUpperCase(), interaction.options.getString('lock_type') || 'main', interaction.options.getString('note'));
-      await interaction.reply({ content: result.success ? `✅ **${worldName.toUpperCase()}** added to locks.` : `❌ ${result.message}`, ephemeral: true });
+      await interaction.reply({ content: result.success ? `✅ **${worldName.toUpperCase()}** added to locks.` : `❌ ${result.message}`, flags: MessageFlags.Ephemeral });
     } else if (subcommand === 'remove') {
       const worldName = interaction.options.getString('worldname').toUpperCase();
       const world = await db.findLockedWorldByName(interaction.user.id, worldName);
-      if (!world) return interaction.reply({ content: `❌ World "${worldName}" not found in your locks.`, ephemeral: true });
+      if (!world) return interaction.reply({ content: `❌ World "${worldName}" not found in your locks.`, flags: MessageFlags.Ephemeral });
       const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`lock_button_confirmremove_yes_${world.id}`).setLabel('Confirm Remove').setStyle(ButtonStyle.Danger),
           new ButtonBuilder().setCustomId(`lock_button_confirmremove_no_0`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
       );
-      await interaction.reply({ content: `⚠️ Are you sure you want to remove **${worldName}**?`, components: [row], ephemeral: true });
+      await interaction.reply({ content: `⚠️ Are you sure you want to remove **${worldName}**?`, components: [row], flags: MessageFlags.Ephemeral });
     }
   },
   async handleInteraction(interaction) {
