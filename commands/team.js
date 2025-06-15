@@ -1,440 +1,241 @@
-const {
-    SlashCommandBuilder,
-    EmbedBuilder,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
-    ModalBuilder,
-    TextInputBuilder,
-    TextInputStyle,
-    UserSelectMenuBuilder, // For selecting users if needed, otherwise parse UserOption
-    InteractionType
-} = require('discord.js'); // Corrected import for v14
+// team.js
+
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, InteractionType } = require('discord.js');
 const { table, getBorderCharacters } = require('table');
 const db = require('../database.js');
 const logger = require('../utils/logger.js');
+const utils = require('../utils.js');
+const CONSTANTS = require('../utils/constants.js');
 
-const WORLDS_PER_PAGE_TEAM = 5;
+const WORLDS_PER_PAGE = CONSTANTS.PAGE_SIZE_TEAM || 5;
 
-// Helper to create pagination buttons
-function createTeamWorldPaginationRow(currentPage, totalPages, teamId) {
-    return new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId(`team_list_prev_${currentPage - 1}_${teamId}`)
-                .setLabel('⬅️ Previous')
-                .setStyle(ButtonStyle.Primary)
-                .setDisabled(currentPage === 1),
-            new ButtonBuilder()
-                .setCustomId(`team_list_next_${currentPage + 1}_${teamId}`)
-                .setLabel('Next ➡️')
-                .setStyle(ButtonStyle.Primary)
-                .setDisabled(currentPage >= totalPages)
-        );
+// --- Main Display Function ---
+async function showTeamList(interaction, team, page = 1) {
+    const isUpdate = interaction.isMessageComponent() || interaction.isModalSubmit();
+    if (isUpdate && !interaction.deferred) {
+        await interaction.deferUpdate();
+    } else if (!isUpdate && !interaction.deferred) {
+        await interaction.deferReply({ ephemeral: true });
+    }
+
+    const { worlds, total } = await db.getTeamWorlds(team.id, page, WORLDS_PER_PAGE);
+    const totalPages = Math.max(1, Math.ceil(total / WORLDS_PER_PAGE));
+    page = Math.max(1, Math.min(page, totalPages));
+
+    if (total === 0) {
+        const opts = { content: "Your team has no tracked worlds. Use `/team add` to add one.", ephemeral: true, components: [] };
+        if (isUpdate) await interaction.editReply(opts); else await interaction.reply(opts);
+        return;
+    }
+
+    const headers = ['WORLD', 'DAYS LEFT', 'NOTE', 'ADDED BY'];
+    const data = [headers];
+    worlds.forEach(w => {
+        data.push([
+            w.world_name.toUpperCase(),
+            w.days_left !== null ? w.days_left.toString() : 'N/A',
+            w.note || '-',
+            w.added_by_display_name || 'Unknown'
+        ]);
+    });
+    
+    const tableConfig = {
+        columns: [ { width: 15 }, { width: 10 }, { width: 20 }, { width: 15 } ],
+        border: getBorderCharacters('norc'),
+        header: { content: `Team "${team.name}" Worlds`, alignment: 'center' }
+    };
+    
+    let tableOutput = '```\n' + table(data, tableConfig) + '\n```';
+    if (tableOutput.length > 1900) {
+        tableOutput = tableOutput.substring(0, tableOutput.lastIndexOf('\n', 1900)) + '\n... (Table truncated) ...```';
+    }
+    const finalContent = `Page ${page}/${totalPages}\n${tableOutput}`;
+    
+    const components = total > WORLDS_PER_PAGE ? [utils.createPaginationRow(page, totalPages, `team_button_list_${team.id}`)] : [];
+    
+    const opts = { content: finalContent, components, ephemeral: true };
+    if (isUpdate) await interaction.editReply(opts); else await interaction.reply(opts);
 }
 
-
-module.exports = {
-    data: new SlashCommandBuilder()
-        .setName('team')
-        .setDescription('Manage or join a team for world tracking.')
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('create')
-                .setDescription('Create a new team and become its owner.')
-                .addStringOption(option =>
-                    option.setName('team_name')
-                        .setDescription('Name for your team (3-25 characters, alphanumeric, spaces, hyphens).')
-                        .setRequired(true)
-                        .setMinLength(3)
-                        .setMaxLength(25)))
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('join')
-                .setDescription('Join an existing team using an invitation code.')
-                .addStringOption(option => option.setName('team_name').setDescription('The name of the team to join.').setRequired(true))
-                .addStringOption(option => option.setName('invitation_code').setDescription('The invitation code.').setRequired(true)))
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('list')
-                .setDescription("View your team's tracked worlds.")
-                .addIntegerOption(option => option.setName('page').setDescription('Page number.').setMinValue(1).setRequired(false)))
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('add')
-                .setDescription('Add a world to your team list.')
-                .addStringOption(option => option.setName('world_name').setDescription('Name of the world.').setRequired(true))
-                .addIntegerOption(option => option.setName('days_owned').setDescription('How many days ago the world was acquired (1-180). Defaults to 1.').setMinValue(1).setMaxValue(180).setRequired(false))
-                .addStringOption(option => option.setName('note').setDescription('Optional note for the world.').setRequired(false).setMaxLength(100)))
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('remove')
-                .setDescription('Remove a world from your team list.')
-                .addStringOption(option => option.setName('world_name').setDescription('Name of the world to remove.').setRequired(true)))
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('info')
-                .setDescription('View information about your current team.'))
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('leave')
-                .setDescription('Leave your current team.'))
-        .addSubcommand(subcommand => // Owner Only Commands
-            subcommand
-                .setName('invite')
-                .setDescription('Generate a new single-use invitation code for your team (Owner only).'))
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('kick')
-                .setDescription('Remove a member from your team (Owner only).')
-                .addUserOption(option => option.setName('member').setDescription('The member to remove.').setRequired(true)))
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('transfer')
-                .setDescription('Transfer ownership of your team to another member (Owner only).')
-                .addUserOption(option => option.setName('new_owner').setDescription('The member to transfer ownership to.').setRequired(true)))
-        .addSubcommand(subcommand =>
-            subcommand
-                .setName('disband')
-                .setDescription('Permanently disband your team and delete all its data (Owner only).')),
-
-    async execute(interaction) {
-        const subcommand = interaction.options.getSubcommand();
-        const userId = interaction.user.id;
-        const username = interaction.user.username;
-
-        await db.addUser(userId, username);
-        const userTeam = await db.getUserTeam(userId);
-
-        const ownerOnlyCommands = ['invite', 'kick', 'transfer', 'disband'];
-        if (ownerOnlyCommands.includes(subcommand)) {
-            if (!userTeam) return interaction.reply({ content: "❌ You are not in a team, so you cannot perform owner actions.", ephemeral: true });
-            if (userTeam.owner_user_id !== userId) {
-                return interaction.reply({ content: "❌ Only the team owner can use this command.", ephemeral: true });
-            }
-        }
-
-        const memberOnlyCommands = ['list', 'add', 'remove', 'info', 'leave'];
-         if (memberOnlyCommands.includes(subcommand) && !userTeam && subcommand !== 'leave') {
-            return interaction.reply({ content: "❌ You are not in a team.", ephemeral: true });
-        }
-
-
-        if (interaction.isChatInputCommand()) {
-            if (subcommand === 'create') await handleTeamCreate(interaction, userId, userTeam);
-            else if (subcommand === 'join') await handleTeamJoin(interaction, userId, userTeam);
-            else if (subcommand === 'list') await handleTeamList(interaction, userId, userTeam, interaction.options.getInteger('page') || 1);
-            else if (subcommand === 'add') await handleTeamAddWorld(interaction, userId, userTeam);
-            else if (subcommand === 'remove') await handleTeamRemoveWorld(interaction, userId, userTeam);
-            else if (subcommand === 'info') await handleTeamInfo(interaction, userId, userTeam);
-            else if (subcommand === 'leave') await handleTeamLeave(interaction, userId, userTeam);
-            else if (subcommand === 'invite') await handleTeamInvite(interaction, userId, userTeam);
-            else if (subcommand === 'kick') await handleTeamKick(interaction, userId, userTeam);
-            else if (subcommand === 'transfer') await handleTeamTransfer(interaction, userId, userTeam);
-            else if (subcommand === 'disband') await handleTeamDisband(interaction, userId, userTeam);
-
-        } else if (interaction.isButton()) {
-            const parts = interaction.customId.split('_');
-            const context = parts[0];
-            const action = parts[1];
-            // General purpose parsing, specific actions might have different structures for parts[2] onwards
-            const operation = parts[2];
-            const value = parts[3];
-            // const teamIdForListStr = parts[4]; // Only used if action === 'list'
-
-            if (context !== 'team') return;
-
-            if (action === 'list') {
-                 // Custom ID structure: team_list_prev/next_PAGE_TEAMID
-                 // parts[0]=team, parts[1]=list, parts[2]=prev/next, parts[3]=pageNumStr, parts[4]=teamIdStr
-                 const pageNumStr = parts[3];
-                 const teamIdStr = parts[4];
-                 const pageNum = parseInt(pageNumStr);
-                 const teamId = parseInt(teamIdStr);
-
-                 const teamObj = await db.getTeamDetails(teamId);
-                 if (teamObj) await handleTeamList(interaction, userId, teamObj, pageNum, true);
-                 else await interaction.update({ content: "Error: Team info for pagination could not be retrieved.", components: []});
-            } else if (action === 'confirmleave') {
-                // Custom ID structure: team_confirmleave_yes/no
-                // parts[0]=team, parts[1]=confirmleave, parts[2]=yes/no (this is 'operation')
-                if (operation === 'yes') {
-                    const teamToLeave = userTeam; // userTeam is fetched from db earlier based on interaction.user.id
-                    if (!teamToLeave) return interaction.update({ content: "You are not in a team or your team info couldn't be retrieved.", components: []});
-                    const leaveResult = await db.leaveTeam(userId, teamToLeave.id);
-                    if (leaveResult.success) await interaction.update({ content: `✅ You have successfully left team **${leaveResult.teamName}**.`, components: [] });
-                    else await interaction.update({ content: `❌ Error leaving team: ${leaveResult.error}`, components: [] });
-                } else await interaction.update({ content: 'Team leave cancelled.', components: [] });
-            } else if (action === 'confirmremoveworld') {
-                 // Custom ID structure: team_confirmremoveworld_WORLDNAME~TEAMID_yes/no
-                 // parts[0]=team, parts[1]=confirmremoveworld, parts[2]=WORLDNAME~TEAMID (this is 'operation')
-                 // parts[3]=yes/no (this is 'value')
-                 const worldNameAndTeamId = operation;
-                 const confirmAction = value;
-
-                 const [worldNameToRemove, teamIdStr] = worldNameAndTeamId.split('~');
-                 const teamId = parseInt(teamIdStr);
-                 if (confirmAction === 'yes') {
-                     const removeResult = await db.removeWorldFromTeam(teamId, worldNameToRemove, userId); // Assuming userId is appropriate for permission check if not owner
-                     if (removeResult.success) await interaction.update({ content: `✅ World **${worldNameToRemove}** removed.`, components: [] });
-                     else await interaction.update({ content: `❌ Error removing world: ${removeResult.error}`, components: [] });
-                 } else await interaction.update({ content: `Removal of **${worldNameToRemove}** cancelled.`, components: [] });
-            } else if (action === 'confirmkick') {
-                // Custom ID structure: team_confirmkick_MEMBERID_yes/no
-                // parts[0]=team, parts[1]=confirmkick, parts[2]=MEMBERID (this is 'operation')
-                // parts[3]=yes/no (this is 'value')
-                const memberToKickId = operation;
-                const confirmAction = value;
-
-                if (confirmAction === 'yes') {
-                    if (!userTeam) return interaction.update({ content: "Error: Could not find your team information to perform kick.", components:[]});
-                    const kickResult = await db.removeTeamMember(userTeam.id, memberToKickId, userId); // userId is team owner
-                    if (kickResult.success) await interaction.update({ content: `✅ Member <@${memberToKickId}> kicked.`, components: []});
-                    else await interaction.update({ content: `❌ Error kicking member: ${kickResult.error}`, components: []});
-                } else await interaction.update({ content: 'Kick cancelled.', components: []});
-            }
-        } else if (interaction.type === InteractionType.ModalSubmit) {
-            const [context, action, targetIdFromModal] = interaction.customId.split('_'); // Updated split
-            if (context !== 'team') return;
-            if (!userTeam) return interaction.reply({content: "Error: Could not find your team information for modal submission.", ephemeral: true});
-
-
-            if (action === 'confirmtransfermodal') {
-                const newOwnerId = targetIdFromModal;
-                const confirmationText = interaction.fields.getTextInputValue('transfer_confirmation_field');
-                if (confirmationText !== 'TRANSFER') {
-                    return interaction.reply({ content: "❌ Ownership transfer cancelled: Incorrect confirmation text.", ephemeral: true });
-                }
-                const transferResult = await db.transferTeamOwnership(userTeam.id, userId, newOwnerId);
-                if (transferResult.success) await interaction.reply({ content: `✅ Ownership transferred to <@${newOwnerId}>. You are now a regular member.`, ephemeral: true });
-                else await interaction.reply({ content: `❌ Error transferring ownership: ${transferResult.error}`, ephemeral: true });
-
-            } else if (action === 'confirmdisbandmodal') {
-                const teamIdToDisband = userTeam.id;
-                const confirmationText = interaction.fields.getTextInputValue('disband_confirmation_field');
-                if (confirmationText !== userTeam.name) {
-                     return interaction.reply({ content: `❌ Team disband cancelled: You did not correctly type the team name ('${userTeam.name}').`, ephemeral: true });
-                }
-                const disbandResult = await db.disbandTeam(teamIdToDisband, userId);
-                if (disbandResult.success) await interaction.reply({ content: `✅ Team **${userTeam.name}** has been disbanded.`, ephemeral: true });
-                else await interaction.reply({ content: `❌ Error disbanding team: ${disbandResult.error}`, ephemeral: true });
-            }
-        }
-    },
-};
-
-// --- SUBCOMMAND HANDLERS (Create, Join, List, Add, Remove, Info, Leave - from previous step, ensure they use userTeam param) ---
+// --- Subcommand Handlers ---
 async function handleTeamCreate(interaction, userId, userTeam) {
-    if (userTeam) return interaction.reply({ content: `❌ You are already in team **${userTeam.name}**. Leave it before creating a new one.`, ephemeral: true });
+    if (userTeam) return interaction.reply({ content: `❌ You are already in team **${userTeam.name}**.`, ephemeral: true });
     const teamName = interaction.options.getString('team_name');
-    if (!/^[a-zA-Z0-9\s-]{3,25}$/.test(teamName)) return interaction.reply({ content: '❌ Team name must be 3-25 characters and can only contain letters, numbers, spaces, and hyphens.', ephemeral: true });
-    try {
-        const result = await db.createTeam(teamName, userId);
-        if (result.success) await interaction.reply({ content: `✅ Team **${teamName}** created! Owner: ${interaction.user.tag}.\nInvite code: \`\`\`${result.initialInviteCode}\`\`\``, ephemeral: true });
-        else await interaction.reply({ content: `❌ Error: ${result.error === 'name_taken' ? 'Team name taken.' : (result.error === 'already_in_team' ? 'You are already in a team.' : 'Database error.')}`, ephemeral: true });
-    } catch (e) { logger.error(e); await interaction.reply({ content: '❌ Unexpected error.', ephemeral: true }); }
+    if (!/^[a-zA-Z0-9\s-]{3,25}$/.test(teamName)) return interaction.reply({ content: '❌ Invalid team name format.', ephemeral: true });
+    
+    const result = await db.createTeam(teamName, userId);
+    if (result.success) await interaction.reply({ content: `✅ Team **${teamName}** created! Your invite code: \`\`\`${result.initialInviteCode}\`\`\``, ephemeral: true });
+    else await interaction.reply({ content: `❌ Error: ${result.error === 'name_taken' ? 'Team name taken.' : 'Database error.'}`, ephemeral: true });
 }
 
 async function handleTeamJoin(interaction, userId, userTeam) {
-    if (userTeam) return interaction.reply({ content: `❌ You are already in team **${userTeam.name}**. Leave it before joining another.`, ephemeral: true });
+    if (userTeam) return interaction.reply({ content: `❌ You are already in team **${userTeam.name}**.`, ephemeral: true });
     const teamName = interaction.options.getString('team_name');
-    const invitationCode = interaction.options.getString('invitation_code');
-    try {
-        const result = await db.validateAndUseTeamInvitation(teamName, invitationCode, userId);
-        if (result.success) await interaction.reply({ content: `🎉 Welcome to **${result.teamName}**! You are now a member.`, ephemeral: true });
-        else {
-             let errMsg = `❌ Error joining: ${result.error}`;
-             if (result.error === 'already_in_team' && result.teamName) errMsg = `❌ You are already in team **${result.teamName}**.`;
-             await interaction.reply({ content: errMsg, ephemeral: true });
-        }
-    } catch (e) { logger.error(e); await interaction.reply({ content: '❌ Unexpected error.', ephemeral: true }); }
+    const code = interaction.options.getString('invitation_code');
+    const result = await db.validateAndUseTeamInvitation(teamName, code, userId);
+    if (result.success) await interaction.reply({ content: `🎉 Welcome to **${result.teamName}**!`, ephemeral: true });
+    else await interaction.reply({ content: `❌ Error joining: ${result.error}`, ephemeral: true });
 }
 
-async function handleTeamList(interaction, userId, userTeam, page = 1, isButton = false) {
-    if (!userTeam) return interaction.reply({ content: "❌ You are not part of any team.", ephemeral: true });
-    const replyMethod = isButton ? interaction.update.bind(interaction) : interaction.reply.bind(interaction);
-    try {
-        let { worlds, total } = await db.getTeamWorlds(userTeam.id, page, WORLDS_PER_PAGE_TEAM);
-        const totalPages = Math.ceil(total / WORLDS_PER_PAGE_TEAM) || 1;
-        if (page > totalPages && totalPages > 0) {
-            page = totalPages;
-            const result = await db.getTeamWorlds(userTeam.id, page, WORLDS_PER_PAGE_TEAM);
-            worlds = result.worlds; total = result.total;
-        }
-        if (worlds.length === 0) {
-            await replyMethod({ content: "No worlds tracked by the team yet.", components: [], ephemeral: true });
-            return;
-        }
+async function handleTeamAdd(interaction, userId, userTeam) {
+    const worldName = interaction.options.getString('world_name').toUpperCase();
+    if (worldName.includes(' ')) return interaction.reply({ content: "❌ World names cannot contain spaces.", ephemeral: true });
+    const result = await db.addWorldToTeam(userTeam.id, worldName, interaction.options.getInteger('days_owned') || 1, interaction.options.getString('note'), userId);
+    if (result.success) await interaction.reply({ content: `✅ **${worldName}** added to the team list.`, ephemeral: true });
+    else await interaction.reply({ content: `❌ Error: ${result.error === 'already_exists' ? 'That world is already on the team list.' : 'Database error.'}`, ephemeral: true });
+}
 
-        const headers = ['WORLD', 'DAYS LEFT', 'NOTE', 'ADDED BY'];
-        const data = [headers];
+async function handleTeamRemove(interaction, userId, userTeam) {
+    const worldName = interaction.options.getString('world_name').toUpperCase();
+    const worldEntry = await db.getTeamWorlds(userTeam.id, 1, 1, { worldName }); // Not ideal, but checks existence
+    if (!worldEntry.worlds[0]) return interaction.reply({ content: 'That world is not on the team list.', ephemeral: true });
 
-        worlds.forEach(w => {
-            const world_name = w.world_name || 'N/A';
-            const days_left_value = w.days_left !== null ? w.days_left.toString() : 'N/A';
-            const note_value = w.note || '-';
-            // Ensure added_by_display_name is fetched or use a placeholder
-            const added_by_value = w.added_by_display_name || (w.added_by_username || 'Unknown');
-            data.push([world_name.toUpperCase(), days_left_value, note_value, added_by_value]);
-        });
-
-        const config = {
-            columns: [
-                { alignment: 'left', width: 15, wrapWord: true }, // WORLD
-                { alignment: 'right', width: 10 }, // DAYS LEFT
-                { alignment: 'left', width: 20, wrapWord: true }, // NOTE
-                { alignment: 'left', width: 15, wrapWord: true }  // ADDED BY
-            ],
-            border: getBorderCharacters('norc'),
-            header: {
-                alignment: 'center',
-                content: `Team ${userTeam.name}'s Worlds`,
-            }
-        };
-
-        let tableOutput = '```\n' + table(data, config) + '\n```';
-        if (tableOutput.length > 1950) { // Check if too long for Discord message
-            let cutOff = tableOutput.lastIndexOf('\n', 1900);
-            if (cutOff === -1) cutOff = 1900;
-            tableOutput = tableOutput.substring(0, cutOff) + '\n... (Table truncated) ...```';
-        }
-
-        const finalContent = `Page ${page}/${totalPages}\n${tableOutput}`;
-        const components = total > WORLDS_PER_PAGE_TEAM ? [createTeamWorldPaginationRow(page, totalPages, userTeam.id)] : [];
-
-        await replyMethod({ content: finalContent, components, ephemeral: true });
-    } catch (e) {
-        logger.error('[team.js] Error in handleTeamList:', e);
-        await replyMethod({ content: '❌ Error fetching team worlds.', components:[], ephemeral: true });
+    if (userId !== userTeam.owner_user_id && userId !== worldEntry.worlds[0].added_by_user_id) {
+        return interaction.reply({ content: "❌ You can only remove worlds you added, unless you're the team owner.", ephemeral: true });
     }
-}
-
-async function handleTeamAddWorld(interaction, userId, userTeam) {
-    if (!userTeam) return interaction.reply({ content: "❌ You must be in a team to add worlds.", ephemeral: true });
-    const worldName = interaction.options.getString('world_name').toUpperCase();
-    const daysOwned = interaction.options.getInteger('days_owned') || 1;
-    const note = interaction.options.getString('note');
-    if (!/^[A-Z0-9]{1,15}$/.test(worldName)) return interaction.reply({ content: "❌ Invalid world name (1-15 A-Z, 0-9, no spaces).", ephemeral: true });
-    try {
-        const result = await db.addWorldToTeam(userTeam.id, worldName, daysOwned, note, userId);
-        if (result.success) await interaction.reply({ content: `✅ **${worldName}** added to **${userTeam.name}**'s list.`, ephemeral: true });
-        else await interaction.reply({ content: `❌ Error adding world: ${result.error}`, ephemeral: true });
-    } catch (e) { logger.error(e); await interaction.reply({ content: '❌ Unexpected error.', ephemeral: true }); }
-}
-
-async function handleTeamRemoveWorld(interaction, userId, userTeam) {
-    if (!userTeam) return interaction.reply({ content: "❌ You must be in a team.", ephemeral: true });
-    const worldName = interaction.options.getString('world_name').toUpperCase();
     const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`team_confirmremoveworld_${worldName}~${userTeam.id}_yes`).setLabel("✅ Yes, Remove").setStyle(ButtonStyle.Danger), // Updated
-        new ButtonBuilder().setCustomId(`team_confirmremoveworld_${worldName}~${userTeam.id}_no`).setLabel("❌ No, Keep").setStyle(ButtonStyle.Secondary) // Updated
+        new ButtonBuilder().setCustomId(`team_button_confirmremove_yes_${userTeam.id}_${worldName}`).setLabel("✅ Yes, Remove").setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(`team_button_confirmremove_no`).setLabel("❌ No, Keep").setStyle(ButtonStyle.Secondary)
     );
-    await interaction.reply({ content: `Remove **${worldName}** from team list? (Owner or original adder only)`, components: [row], ephemeral: true });
+    await interaction.reply({ content: `Remove **${worldName}** from team list?`, components: [row], ephemeral: true });
 }
 
-async function handleTeamInfo(interaction, userId, userTeam) {
-    if (!userTeam) return interaction.reply({ content: "❌ You are not part of any team.", ephemeral: true });
-    try {
-        const details = await db.getTeamDetails(userTeam.id);
-        if (!details) return interaction.reply({ content: "❌ Could not fetch team details.", ephemeral: true });
-        const embed = new EmbedBuilder().setTitle(`🔰 Team Info: ${details.name}`).setColor(0x2ECC71)
-            .addFields(
-                { name: '👑 Owner', value: details.owner_display_name || 'N/A', inline: true },
-                { name: '🗓️ Created', value: `<t:${Math.floor(new Date(details.creation_date).getTime()/1000)}:D>`, inline: true },
-                { name: '📊 Worlds', value: String(details.totalWorlds), inline: true },
-                { name: '👥 Members', value: details.members.map(m => `${m.display_name} (Joined <t:${Math.floor(new Date(m.join_date).getTime()/1000)}:R>)`).join('\n').substring(0,1020) || 'Owner only', inline: false }
-            );
-
-        const viewListButton = new ButtonBuilder()
-            .setCustomId(`team_button_listFromInfo_${details.id}_1`) // teamId and page 1
-            .setLabel('View Team Worlds')
-            .setStyle(ButtonStyle.Primary);
-
-        const actionRow = new ActionRowBuilder().addComponents(viewListButton);
-
-        await interaction.reply({ embeds: [embed], components: [actionRow], ephemeral: true });
-    } catch (e) { logger.error(e); await interaction.reply({ content: '❌ Error fetching team info.', ephemeral: true }); }
-}
-
-async function handleTeamLeave(interaction, userId, userTeam) {
-    if (!userTeam) return interaction.reply({ content: "❌ You are not in any team.", ephemeral: true });
-    if (userTeam.owner_user_id === userId) return interaction.reply({ content: "❌ Owners must transfer or disband team.", ephemeral: true });
-    const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`team_confirmleave_yes`).setLabel("✅ Yes, Leave").setStyle(ButtonStyle.Danger), // Updated
-        new ButtonBuilder().setCustomId(`team_confirmleave_no`).setLabel("❌ No, Stay").setStyle(ButtonStyle.Secondary) // Updated
-    );
-    await interaction.reply({ content: `Leave **${userTeam.name}**?`, components: [row], ephemeral: true });
-}
-
-// --- OWNER-ONLY SUBCOMMAND HANDLERS ---
-async function handleTeamInvite(interaction, userId, userTeam) { // userTeam is passed and owner check is done
-    try {
-        const newCode = await db.generateTeamInvitationCode(userTeam.id, userId);
-        await interaction.reply({ content: `✅ New single-use invitation code for **${userTeam.name}**: \`\`\`${newCode}\`\`\``, ephemeral: true });
-    } catch (e) { logger.error(e); await interaction.reply({ content: '❌ Error generating invite code.', ephemeral: true }); }
+async function handleTeamInfo(interaction, userTeam) {
+    const details = await db.getTeamDetails(userTeam.id);
+    if (!details) return interaction.reply({ content: "❌ Could not fetch team details.", ephemeral: true });
+    const embed = new EmbedBuilder().setTitle(`🔰 Team Info: ${details.name}`).setColor(0x2ECC71)
+        .addFields(
+            { name: '👑 Owner', value: details.owner_display_name, inline: true },
+            { name: '🗓️ Created', value: `<t:${Math.floor(new Date(details.creation_date).getTime()/1000)}:D>`, inline: true },
+            { name: '📊 Worlds', value: String(details.totalWorlds), inline: true },
+            { name: '👥 Members', value: details.members.map(m => `> ${m.display_name}`).join('\n').substring(0,1020) || 'Owner only', inline: false }
+        );
+    await interaction.reply({ embeds: [embed], ephemeral: true });
 }
 
 async function handleTeamKick(interaction, userId, userTeam) {
-    const memberToKickUserObj = interaction.options.getUser('member');
-    if (!memberToKickUserObj) return interaction.reply({ content: "❌ You must specify a member to kick.", ephemeral: true });
-    const memberToKickId = memberToKickUserObj.id;
-
-    if (memberToKickId === userId) return interaction.reply({ content: "❌ You cannot kick yourself.", ephemeral: true });
-
+    const memberToKick = interaction.options.getUser('member');
+    if (memberToKick.id === userId) return interaction.reply({ content: "❌ You can't kick yourself.", ephemeral: true });
     const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`team_confirmkick_${memberToKickId}_yes`).setLabel(`✅ Yes, Kick ${memberToKickUserObj.username}`).setStyle(ButtonStyle.Danger), // Updated
-        new ButtonBuilder().setCustomId(`team_confirmkick_${memberToKickId}_no`).setLabel("❌ No, Don't Kick").setStyle(ButtonStyle.Secondary) // Updated
+        new ButtonBuilder().setCustomId(`team_button_confirmkick_yes_${memberToKick.id}`).setLabel(`Kick ${memberToKick.username}`).setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(`team_button_confirmkick_no`).setLabel("Cancel").setStyle(ButtonStyle.Secondary)
     );
-    await interaction.reply({ content: `Are you sure you want to remove ${memberToKickUserObj.tag} from **${userTeam.name}**?`, components: [row], ephemeral: true });
+    await interaction.reply({ content: `Are you sure you want to remove ${memberToKick.tag} from the team?`, components: [row], ephemeral: true });
 }
 
 async function handleTeamTransfer(interaction, userId, userTeam) {
-    const newOwnerUserObj = interaction.options.getUser('new_owner');
-    if (!newOwnerUserObj) return interaction.reply({ content: "❌ You must specify a new owner.", ephemeral: true});
-    const newOwnerId = newOwnerUserObj.id;
-
-    if (newOwnerId === userId) return interaction.reply({ content: "❌ You are already the owner.", ephemeral: true });
-
-    const modal = new ModalBuilder()
-        .setCustomId(`team_confirmtransfermodal_${newOwnerId}`) // Updated
-        .setTitle(`Transfer Team Ownership`);
-    const warningText = new TextInputBuilder()
-        .setCustomId('transfer_warning_text')
-        .setLabel(`Transfer to ${newOwnerUserObj.username}?`)
-        .setStyle(TextInputStyle.Paragraph)
-        .setValue(`WARNING: Transfer ownership of "${userTeam.name}" to ${newOwnerUserObj.tag}? You will become a regular member. This is IRREVERSIBLE. Type 'TRANSFER' below to confirm.`)
-        .setRequired(false);
-    const confirmationInput = new TextInputBuilder()
-        .setCustomId('transfer_confirmation_field')
-        .setLabel("Type 'TRANSFER' to confirm")
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('TRANSFER')
-        .setRequired(true)
-        .setMinLength(8).setMaxLength(8);
-
-    modal.addComponents(new ActionRowBuilder().addComponents(warningText), new ActionRowBuilder().addComponents(confirmationInput));
+    const newOwner = interaction.options.getUser('new_owner');
+    if (newOwner.id === userId) return interaction.reply({ content: "❌ You are already the owner.", ephemeral: true });
+    const modal = new ModalBuilder().setCustomId(`team_modal_transfer_${newOwner.id}`).setTitle(`Transfer Team Ownership`);
+    modal.addComponents(new ActionRowBuilder().addComponents(
+        new TextInputBuilder().setCustomId('confirm_text').setLabel(`Type 'TRANSFER' to confirm transfer`).setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('TRANSFER')
+    ));
     await interaction.showModal(modal);
 }
 
-async function handleTeamDisband(interaction, userId, userTeam) {
-    const modal = new ModalBuilder()
-        .setCustomId(`team_confirmdisbandmodal_${userTeam.id}`) // Updated
-        .setTitle(`Disband Team ${userTeam.name}`);
-    const warningText = new TextInputBuilder()
-        .setCustomId('disband_warning_text')
-        .setLabel(`Permanently delete team "${userTeam.name}"?`)
-        .setStyle(TextInputStyle.Paragraph)
-        .setValue(`WARNING: This action will permanently delete team "${userTeam.name}", all tracked worlds, and member associations. This CANNOT BE UNDONE. Type the team name '${userTeam.name}' below to confirm.`)
-        .setRequired(false);
-    const confirmationInput = new TextInputBuilder()
-        .setCustomId('disband_confirmation_field')
-        .setLabel(`Type '${userTeam.name}' to confirm`)
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder(userTeam.name)
-        .setRequired(true)
-        .setMinLength(userTeam.name.length)
-        .setMaxLength(userTeam.name.length);
+// --- Main Export ---
+module.exports = {
+    data: new SlashCommandBuilder().setName('team').setDescription('Manage your team.')
+        .addSubcommand(s => s.setName('create').setDescription('Create a team.').addStringOption(o => o.setName('team_name').setRequired(true).setMinLength(3).setMaxLength(25)))
+        .addSubcommand(s => s.setName('join').setDescription('Join a team.').addStringOption(o => o.setName('team_name').setRequired(true)).addStringOption(o => o.setName('invitation_code').setRequired(true)))
+        .addSubcommand(s => s.setName('list').setDescription("View team's worlds.").addIntegerOption(o => o.setName('page').setMinValue(1)))
+        .addSubcommand(s => s.setName('add').setDescription('Add a world.').addStringOption(o => o.setName('world_name').setRequired(true)).addIntegerOption(o => o.setName('days_owned').setMinValue(1).setMaxValue(180)).addStringOption(o => o.setName('note').setMaxLength(100)))
+        .addSubcommand(s => s.setName('remove').setDescription('Remove a world.').addStringOption(o => o.setName('world_name').setRequired(true)))
+        .addSubcommand(s => s.setName('info').setDescription('View team info.'))
+        .addSubcommand(s => s.setName('leave').setDescription('Leave your team.'))
+        .addSubcommand(s => s.setName('invite').setDescription('Generate a new invite code (Owner only).'))
+        .addSubcommand(s => s.setName('kick').setDescription('Kick a member (Owner only).').addUserOption(o => o.setName('member').setRequired(true)))
+        .addSubcommand(s => s.setName('transfer').setDescription('Transfer ownership (Owner only).').addUserOption(o => o.setName('new_owner').setRequired(true)))
+        .addSubcommand(s => s.setName('disband').setDescription('Permanently disband your team (Owner only).')),
+    async execute(interaction) {
+        const subcommand = interaction.options.getSubcommand();
+        const userId = interaction.user.id;
+        const userTeam = await db.getUserTeam(userId);
 
-    modal.addComponents(new ActionRowBuilder().addComponents(warningText), new ActionRowBuilder().addComponents(confirmationInput));
-    await interaction.showModal(modal);
-}
+        const memberRequired = ['list', 'add', 'remove', 'info', 'leave'];
+        const ownerRequired = ['invite', 'kick', 'transfer', 'disband'];
+
+        if ((memberRequired.includes(subcommand) || ownerRequired.includes(subcommand)) && !userTeam) {
+            return interaction.reply({ content: "❌ You are not in a team.", ephemeral: true });
+        }
+        if (ownerRequired.includes(subcommand) && userTeam.owner_user_id !== userId) {
+            return interaction.reply({ content: "❌ Only the team owner can use this command.", ephemeral: true });
+        }
+
+        switch (subcommand) {
+            case 'create': await handleTeamCreate(interaction, userId, userTeam); break;
+            case 'join': await handleTeamJoin(interaction, userId, userTeam); break;
+            case 'list': await showTeamList(interaction, userTeam, interaction.options.getInteger('page') || 1); break;
+            case 'add': await handleTeamAdd(interaction, userId, userTeam); break;
+            case 'remove': await handleTeamRemove(interaction, userId, userTeam); break;
+            case 'info': await handleTeamInfo(interaction, userTeam); break;
+            case 'leave':
+                if (userTeam.owner_user_id === userId) return interaction.reply({ content: "❌ Owners must transfer or disband the team.", ephemeral: true });
+                const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('team_button_confirmleave_yes').setLabel("✅ Yes, Leave").setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId('team_button_confirmleave_no').setLabel("❌ No, Stay").setStyle(ButtonStyle.Secondary));
+                await interaction.reply({ content: `Leave **${userTeam.name}**?`, components: [row], ephemeral: true });
+                break;
+            case 'invite':
+                const newCode = await db.generateTeamInvitationCode(userTeam.id, userId);
+                await interaction.reply({ content: `✅ New single-use invite code: \`\`\`${newCode}\`\`\``, ephemeral: true });
+                break;
+            case 'kick': await handleTeamKick(interaction, userId, userTeam); break;
+            case 'transfer': await handleTeamTransfer(interaction, userId, userTeam); break;
+            case 'disband':
+                const modal = new ModalBuilder().setCustomId('team_modal_disband').setTitle(`Disband Team ${userTeam.name}`);
+                modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('confirm_text').setLabel(`Type team name '${userTeam.name}' to confirm`).setStyle(TextInputStyle.Short).setRequired(true)));
+                await interaction.showModal(modal);
+                break;
+        }
+    },
+    async handleInteraction(interaction) {
+        const [context, command, ...args] = interaction.customId.split('_');
+        if (context !== 'team') return;
+
+        if (interaction.isButton()) {
+            const userTeam = await db.getUserTeam(interaction.user.id);
+            if (!userTeam && command !== 'confirmleave') return interaction.update({ content: 'You are no longer in a team.', components: [] });
+
+            switch(command) {
+                case 'button': {
+                    const [action, ...btnArgs] = args;
+                    if(action === 'list') await showTeamList(interaction, userTeam, parseInt(btnArgs[1]));
+                    else if (action === 'confirmleave') {
+                        if(btnArgs[0] === 'no') return interaction.update({ content: 'Leave cancelled.', components: [] });
+                        const result = await db.leaveTeam(interaction.user.id, userTeam.id);
+                        await interaction.update({ content: result.success ? `✅ You left **${userTeam.name}**.` : `❌ Error: ${result.error}`, components: [] });
+                    } else if (action === 'confirmremove') {
+                        const [confirm, teamId, worldName] = btnArgs;
+                        if(confirm === 'no') return interaction.update({ content: 'Removal cancelled.', components: [] });
+                        const result = await db.removeWorldFromTeam(parseInt(teamId), worldName, interaction.user.id);
+                        await interaction.update({ content: result.success ? `✅ World **${worldName}** removed.` : `❌ Error: ${result.error}`, components: [] });
+                    } else if (action === 'confirmkick') {
+                        const [confirm, memberId] = btnArgs;
+                        if(confirm === 'no') return interaction.update({ content: 'Kick cancelled.', components: [] });
+                        const result = await db.removeTeamMember(userTeam.id, memberId, interaction.user.id);
+                        await interaction.update({ content: result.success ? `✅ Member kicked.` : `❌ Error: ${result.error}`, components: [] });
+                    }
+                    break;
+                }
+            }
+        } else if (interaction.isModalSubmit()) {
+            const userTeam = await db.getUserTeam(interaction.user.id);
+            if (!userTeam) return interaction.reply({ content: 'You are no longer in a team.', ephemeral: true });
+
+            const [action, modalArgs] = args;
+            if(action === 'modal') {
+                const [operation, targetId] = modalArgs.split('_');
+                const confirmText = interaction.fields.getTextInputValue('confirm_text');
+                if(operation === 'transfer') {
+                    if (confirmText !== 'TRANSFER') return interaction.reply({ content: "❌ Confirmation text incorrect. Transfer cancelled.", ephemeral: true });
+                    const result = await db.transferTeamOwnership(userTeam.id, interaction.user.id, targetId);
+                    await interaction.reply({ content: result.success ? `✅ Ownership transferred to <@${targetId}>.` : `❌ Error: ${result.error}`, ephemeral: true });
+                } else if (operation === 'disband') {
+                    if(confirmText !== userTeam.name) return interaction.reply({ content: "❌ Confirmation text incorrect. Disband cancelled.", ephemeral: true });
+                    const result = await db.disbandTeam(userTeam.id, interaction.user.id);
+                    await interaction.reply({ content: result.success ? `✅ Team **${userTeam.name}** disbanded.` : `❌ Error: ${result.error}`, ephemeral: true });
+                }
+            }
+        }
+    },
+    showTeamList,
+};

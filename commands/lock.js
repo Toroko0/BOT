@@ -216,9 +216,26 @@ async function showLockFilterModal(interaction) {
   await interaction.showModal(modal);
 }
 
+function truncateString(str, maxLength) {
+    if (!str) return '';
+    if (str.length <= maxLength) return str;
+    // Keep 3 for "..."
+    return str.substring(0, maxLength - 3) + '...';
+}
+
 async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) {
   const ephemeralFlag = true;
   const PAGE_SIZE_LOCKED = CONSTANTS.PAGE_SIZE || 10;
+
+  let viewMode = 'pc';
+  try {
+    const userPrefs = await db.getUserPreferences(interaction.user.id);
+    if (userPrefs && userPrefs.view_mode) {
+        viewMode = userPrefs.view_mode;
+    }
+  } catch (e) {
+    logger.warn(`[LockCommand - ShowLockedWorlds] Failed to get user preferences for ${interaction.user.id}: ${e.message}`);
+  }
 
   try {
     if (interaction.isMessageComponent() || interaction.isModalSubmit()) {
@@ -250,38 +267,66 @@ async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) 
     }
 
     // --- Table-Based Display ---
-    const headers = ['WORLD', 'TYPE', 'LOCKED ON', 'NOTE'];
-    const data = [headers];
+    let headers;
+    const data = []; // Initialize data array
+    let currentTableConfig;
 
-    worlds.forEach(world => {
-      const worldName = world.world_name;
-      const lockType = world.lock_type;
-      const lockedOnDate = world.locked_on_date ? new Date(world.locked_on_date).toLocaleDateString('en-CA') : 'N/A';
-      const noteText = world.note || 'N/A';
-      data.push([worldName, lockType, lockedOnDate, noteText]);
-    });
+    if (viewMode === 'phone') {
+        headers = ['WORLD', 'TYPE', 'NOTE'];
+        data.push(headers); // Add headers first
 
-    const tableConfig = {
-      columns: [
-        { alignment: 'left', width: 20, wrapWord: true }, // WORLD
-        { alignment: 'left', width: 8 },  // TYPE
-        { alignment: 'left', width: 12 }, // LOCKED ON
-        { alignment: 'left', width: 25, wrapWord: true }  // NOTE
-      ],
-      border: getBorderCharacters('norc'),
-      header: {
-        alignment: 'center',
-        content: '🔒 YOUR LOCKED WORLDS'
-      }
-    };
+        worlds.forEach(world => {
+            const worldName = truncateString(world.world_name, 15);
+            const lockType = world.lock_type;
+            const noteText = truncateString(world.note || 'N/A', 20);
+            data.push([worldName, lockType, noteText]);
+        });
 
-    let tableOutput = `\`\`\`\n${table(data, tableConfig)}\n\`\`\``;
+        currentTableConfig = {
+            columns: [
+                { alignment: 'left', width: 15, wrapWord: true }, // WORLD
+                { alignment: 'left', width: 7 },  // TYPE
+                { alignment: 'left', width: 20, wrapWord: true }  // NOTE
+            ],
+            border: getBorderCharacters('compact'),
+            header: { alignment: 'center', content: '🔒 Locks (Phone)' }
+        };
+    } else { // PC Mode
+        headers = ['WORLD', 'TYPE', 'LOCKED ON', 'NOTE'];
+        data.push(headers); // Add headers first
+
+        worlds.forEach(world => {
+            const worldName = world.world_name;
+            const lockType = world.lock_type;
+            const lockedOnDate = world.locked_on_date ? new Date(world.locked_on_date).toLocaleDateString('en-CA') : 'N/A';
+            const noteText = world.note || 'N/A';
+            data.push([worldName, lockType, lockedOnDate, noteText]);
+        });
+
+        currentTableConfig = {
+            columns: [
+                { alignment: 'left', width: 20, wrapWord: true }, // WORLD
+                { alignment: 'left', width: 8 },  // TYPE
+                { alignment: 'left', width: 12 }, // LOCKED ON
+                { alignment: 'left', width: 25, wrapWord: true }  // NOTE
+            ],
+            border: getBorderCharacters('norc'),
+            header: {
+                alignment: 'center',
+                content: '🔒 YOUR LOCKED WORLDS'
+            }
+        };
+    }
+
+    let tableOutput = `\`\`\`\n${table(data, currentTableConfig)}\n\`\`\``;
     const footerText = `\n📊 Total locked worlds: ${total} | Page ${page}/${totalPages}`;
 
+    // Ensure headers is defined for the join operation in truncation logic
+    const currentHeadersString = headers.join(" | ");
     if (tableOutput.length + footerText.length > 1990) { // Adjusted for footer and potential truncation message
         const availableLength = 1950 - footerText.length - "\n... (Table truncated) ...```".length;
         let cutOff = tableOutput.lastIndexOf('\n', availableLength);
-        if (cutOff === -1 || cutOff < headers.join(" | ").length) cutOff = availableLength; // Ensure header is not cut awkwardly
+        if (cutOff === -1 || cutOff < currentHeadersString.length) cutOff = availableLength; // Ensure header is not cut awkwardly
         tableOutput = tableOutput.substring(0, cutOff) + "\n... (Table truncated) ...```";
     }
 
@@ -314,6 +359,28 @@ async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) 
       );
     }
     allActionRows.push(filterActionRow);
+
+    // Add StringSelectMenu for removing worlds if worlds are present
+    if (worlds && worlds.length > 0) {
+        const removeWorldOptions = worlds.map(world => {
+            const label = truncateString(`${world.world_name} (${world.lock_type})`, 100); // Max label length is 100
+            const description = truncateString(world.note || 'No note', 100); // Max description length is 100
+            // world.id is not available, using encoded world_name as planned.
+            const encodedWorldName = Buffer.from(world.world_name).toString('base64url');
+            return {
+                label: label,
+                description: description,
+                value: `remove:${encodedWorldName}`
+            };
+        });
+
+        const removeWorldSelectMenu = new StringSelectMenuBuilder()
+            .setCustomId('lock_sel_removeworldaction')
+            .setPlaceholder('Select a world to remove...')
+            .addOptions(removeWorldOptions);
+
+        allActionRows.push(new ActionRowBuilder().addComponents(removeWorldSelectMenu));
+    }
 
     await interaction.editReply({ content: finalContent, embeds: [], components: allActionRows, ephemeral: ephemeralFlag });
 
@@ -494,22 +561,41 @@ async function handleModalSubmitCommand(interaction, customIdParts) {
 async function handleSelectMenuCommand(interaction, customIdParts) {
   // customIdParts: [0: 'lock', 1: 'sel', 2: select_type, 3: encodedFilters]
   // const selectType = customIdParts[2];
-  // const encodedFilters = customIdParts[3] || '';
-  // let currentFilters = decodeFilters(encodedFilters);
+  // const encodedFilters = customIdParts[3] || ''; // Not used if customId is simple like 'lock_sel_removeworldaction'
+  // let currentFilters = decodeFilters(encodedFilters); // Not needed for this action
 
-  // logger.debug(`[LockCommand - SelectMenu] Handling select menu: ${customIdParts.join('_')}`);
+  logger.debug(`[LockCommand - SelectMenu] Handling select menu: ${interaction.customId}`);
 
-  // if (selectType === 'ftype') { // This select menu is removed
-  //   const selectedValue = interaction.values[0];
-  //   if (selectedValue === 'any') {
-  //     delete currentFilters.lockType;
-  //   } else {
-  //     currentFilters.lockType = selectedValue;
-  //   }
-  // }
-  // await showLockedWorldsList(interaction, 1, currentFilters);
-  logger.info(`[LockCommand - SelectMenu] Received select menu interaction, but 'ftype' (Filter by Type) is now part of the main filter modal: ${interaction.customId}`);
-  await interaction.reply({content: "Filter by Type is now part of the main '🔍 Filter List' modal. Please use that button.", ephemeral: true });
+  if (interaction.customId === 'lock_sel_removeworldaction') {
+    const selectedValue = interaction.values[0];
+    const [action, encodedWorldName] = selectedValue.split(':');
+
+    if (action === 'remove') {
+      const worldNameToRemove = Buffer.from(encodedWorldName, 'base64url').toString('utf8');
+
+      // Prepare confirmation buttons
+      const confirmButton = new ButtonBuilder()
+        .setCustomId(`lock_btn_rmconfirm_${encodedWorldName}`)
+        .setLabel('✅ Yes, Remove')
+        .setStyle(ButtonStyle.Danger);
+      const cancelButton = new ButtonBuilder()
+        .setCustomId('lock_btn_rmcancel_0') // Placeholder, not used by cancel logic
+        .setLabel('❌ No, Cancel')
+        .setStyle(ButtonStyle.Secondary);
+      const row = new ActionRowBuilder().addComponents(confirmButton, cancelButton);
+
+      await interaction.reply({
+        content: `⚠️ Are you sure you want to remove **${worldNameToRemove}** from your Locks list? This action cannot be undone.`,
+        components: [row],
+        ephemeral: true
+      });
+    }
+  } else {
+    // Fallback for other select menus, or if 'ftype' was intended to be handled differently.
+    // Based on previous state, 'ftype' was deprecated.
+    logger.info(`[LockCommand - SelectMenu] Received unhandled select menu ID: ${interaction.customId}`);
+    await interaction.reply({ content: "This selection is not currently handled.", ephemeral: true });
+  }
 }
 
 module.exports.handleButtonCommand = handleButtonCommand;
