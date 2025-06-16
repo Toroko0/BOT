@@ -1429,6 +1429,21 @@ async function getFilteredWorlds(userId, filters = {}, page = 1, pageSize = 10) 
             }
         }
 
+        if (filters.nameLengthMin !== undefined && filters.nameLengthMin !== null) {
+            const minLength = parseInt(filters.nameLengthMin);
+            if (!isNaN(minLength) && minLength > 0) {
+                query.andWhereRaw('LENGTH(w.name) >= ?', [minLength]);
+                countQueryBase.andWhereRaw('LENGTH(w.name) >= ?', [minLength]);
+            }
+        }
+        if (filters.nameLengthMax !== undefined && filters.nameLengthMax !== null) {
+            const maxLength = parseInt(filters.nameLengthMax);
+            if (!isNaN(maxLength) && maxLength > 0) {
+                query.andWhereRaw('LENGTH(w.name) <= ?', [maxLength]);
+                countQueryBase.andWhereRaw('LENGTH(w.name) <= ?', [maxLength]);
+            }
+        }
+
         const totalResult = await countQueryBase.count({ total: '*' }).first();
         const totalCount = totalResult ? Number(totalResult.total) : 0;
 

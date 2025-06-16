@@ -56,9 +56,9 @@ async function handleMarketList(interaction) {
 async function handleMarketBrowse(interaction, page = 1, browseOptions = {}) {
     const isUpdate = interaction.isMessageComponent() || interaction.isModalSubmit();
     if (isUpdate) {
-        if (!interaction.deferred) await interaction.deferUpdate();
+        if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
     } else {
-        await interaction.deferReply(); // Browse is public
+        await interaction.deferReply({ ephemeral: true }); // Made ephemeral
     }
 
     const dbOptions = { ...browseOptions, page, pageSize: ITEMS_PER_PAGE };
@@ -66,39 +66,67 @@ async function handleMarketBrowse(interaction, page = 1, browseOptions = {}) {
     const totalPages = Math.ceil(total / ITEMS_PER_PAGE) || 1;
     page = Math.max(1, Math.min(page, totalPages));
 
-    const embed = new EmbedBuilder().setColor(0xDAA520).setTitle('🛒 World Watcher Marketplace');
     const components = [];
     const encodedOpts = encodeMarketOptions(browseOptions);
+    let content;
 
     if (total === 0) {
-        embed.setDescription('No listings found.');
+        content = 'No listings found.';
     } else {
-        listings.forEach(l => {
-            embed.addFields({
-                name: `ID: ${l.listing_id} | ${l.world_name} - ${l.price_dl} DLs`,
-                value: `Seller: ${l.seller_display_name}\nNote: *${l.listing_note || 'None'}*\nListed: <t:${Math.floor(new Date(l.listed_on_date).getTime() / 1000)}:R>`
-            });
-        });
-        embed.setFooter({ text: `Page ${page} of ${totalPages}` });
+        const headers = ['ID', 'WORLD', 'SELLER', 'PRICE', 'NOTE', 'LISTED ON'];
+        const dataRows = listings.map(l => [
+            l.listing_id.toString(),
+            l.world_name,
+            l.seller_display_name.substring(0, 15), // Truncate seller name if too long
+            `${l.price_dl} DLs`,
+            (l.listing_note || 'N/A').substring(0, 20), // Truncate note
+            new Date(l.listed_on_date).toLocaleDateString('en-CA') // Format date as YYYY-MM-DD
+        ]);
+
+        const tableData = [headers, ...dataRows];
+        const tableConfig = {
+            border: getBorderCharacters('norc'),
+            columns: [
+                { alignment: 'right', width: 6 }, // ID
+                { width: 15 },                    // WORLD
+                { width: 15 },                    // SELLER
+                { alignment: 'right', width: 10 },// PRICE
+                { width: 20 },                    // NOTE
+                { width: 10 }                     // LISTED ON
+            ],
+            header: {
+                alignment: 'center',
+                content: `🛒 World Watcher Marketplace - Page ${page}/${totalPages} 🛒`
+            }
+        };
         
-        const actionRow = new ActionRowBuilder();
+        let tableString = table(tableData, tableConfig);
+        content = `\`\`\`\n${tableString}\n\`\`\``;
+        content += `\nTotal Listings: ${total}`;
+
+        // ActionRow for removing user's own listings (if any on page)
         const userListingsOnPage = listings.filter(l => l.seller_user_id === interaction.user.id);
-        if(userListingsOnPage.length > 0) {
+        if (userListingsOnPage.length > 0) {
             const selectOptions = userListingsOnPage.map(l => new StringSelectMenuOptionBuilder().setLabel(`Remove My Listing: ${l.world_name}`).setValue(l.listing_id.toString()));
-            actionRow.addComponents(new StringSelectMenuBuilder().setCustomId(`market_select_remove_${encodedOpts}`).setPlaceholder('🗑️ Remove one of your listings...').addOptions(selectOptions));
+            const userListingsRow = new ActionRowBuilder().addComponents(
+                new StringSelectMenuBuilder().setCustomId(`market_select_remove_${encodedOpts}`).setPlaceholder('🗑️ Remove one of your listings...').addOptions(selectOptions)
+            );
+            components.push(userListingsRow);
         }
-        components.push(actionRow);
     }
     
     if (totalPages > 1) {
+        // Ensure pagination row is added first if it exists
         components.unshift(utils.createPaginationRow(page, totalPages, `market_button_browse_${encodedOpts}`));
     }
     
     // Add "Message Seller" button regardless of listings
-    const msgSellerRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('market_button_messageseller').setLabel('✉️ Message a Seller').setStyle(ButtonStyle.Success));
+    const msgSellerRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('market_button_messageseller').setLabel('✉️ Message a Seller').setStyle(ButtonStyle.Success)
+    );
     components.push(msgSellerRow);
 
-    await interaction.editReply({ embeds: [embed], components });
+    await interaction.editReply({ content, embeds: [], components, ephemeral: true });
 }
 
 async function handleMyListings(interaction, page = 1) {

@@ -8,6 +8,7 @@ const utils = require('../utils.js');
 const CONSTANTS = require('../utils/constants.js');
 
 const WORLDS_PER_PAGE = CONSTANTS.PAGE_SIZE_TEAM || 5;
+const MEMBERS_PER_PAGE_INFO = CONSTANTS.PAGE_SIZE_INFO_MEMBERS || 5; // For member list in team info
 
 // --- Main Display Function ---
 async function showTeamList(interaction, team, page = 1) {
@@ -51,7 +52,23 @@ async function showTeamList(interaction, team, page = 1) {
     }
     const finalContent = `Page ${page}/${totalPages}\n${tableOutput}`;
     
-    const components = total > WORLDS_PER_PAGE ? [utils.createPaginationRow(page, totalPages, `team_button_list_${team.id}`)] : [];
+    const components = [];
+    if (total > WORLDS_PER_PAGE) {
+        components.push(utils.createPaginationRow(`team_button_list_${team.id}`, page, totalPages));
+    }
+
+    const actionRow = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId(`team_button_addworld_${team.id}`)
+                .setLabel('➕ Add World')
+                .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId(`team_button_removeworldmodal_${team.id}`)
+                .setLabel('➖ Remove World')
+                .setStyle(ButtonStyle.Danger)
+        );
+    components.push(actionRow);
     
     const opts = { content: finalContent, components, flags: MessageFlags.Ephemeral };
     await interaction.editReply(opts);
@@ -103,14 +120,97 @@ async function handleTeamRemove(interaction, userId, userTeam) {
 async function handleTeamInfo(interaction, userTeam) {
     const details = await db.getTeamDetails(userTeam.id);
     if (!details) return interaction.reply({ content: "❌ Could not fetch team details.", flags: MessageFlags.Ephemeral });
-    const embed = new EmbedBuilder().setTitle(`🔰 Team Info: ${details.name}`).setColor(0x2ECC71)
-        .addFields(
-            { name: '👑 Owner', value: details.owner_display_name, inline: true },
-            { name: '🗓️ Created', value: `<t:${Math.floor(new Date(details.creation_date).getTime()/1000)}:D>`, inline: true },
-            { name: '📊 Worlds', value: String(details.totalWorlds), inline: true },
-            { name: '👥 Members', value: details.members.map(m => `> ${m.display_name}`).join('\n').substring(0,1020) || 'Owner only', inline: false }
+    const isUpdate = interaction.isMessageComponent() || interaction.isModalSubmit();
+    if (isUpdate && !interaction.deferred && !interaction.replied) {
+        await interaction.deferUpdate();
+    } else if (!isUpdate && !interaction.deferred && !interaction.replied) {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    }
+
+    const details = await db.getTeamDetails(userTeam.id); // userTeam is an object with team details like id, name
+    if (!details) {
+        return interaction.editReply({ content: "❌ Could not fetch team details.", flags: MessageFlags.Ephemeral, components: [] });
+    }
+
+    let memberPage = interaction.options?.getInteger('memberpage') || 1; // Get page from options if initial call
+    if (isUpdate && interaction.customId?.startsWith('team_button_infomemberpage_')) { // Or from button custom ID
+        const parts = interaction.customId.split('_');
+        memberPage = parseInt(parts[parts.length -1]) || 1;
+    }
+
+
+    // Team Info Summary Table
+    const summaryData = [
+        ['Team Name', details.name],
+        ['Owner', details.owner_display_name],
+        ['Created', new Date(details.creation_date).toLocaleDateString('en-CA')],
+        ['Total Worlds', String(details.totalWorlds)],
+        ['Total Members', String(details.members.length)]
+    ];
+    const summaryTableConfig = {
+        border: getBorderCharacters('norc'),
+        columns: [{ width: 15 }, { width: 35 }],
+    };
+    let output = '```\n' + table(summaryData, summaryTableConfig) + '```\n';
+
+    // Member List Table & Pagination
+    const totalMemberPages = Math.max(1, Math.ceil(details.members.length / MEMBERS_PER_PAGE_INFO));
+    memberPage = Math.max(1, Math.min(memberPage, totalMemberPages));
+
+    const memberStartIndex = (memberPage - 1) * MEMBERS_PER_PAGE_INFO;
+    const memberEndIndex = memberStartIndex + MEMBERS_PER_PAGE_INFO;
+    const pagedMembers = details.members.slice(memberStartIndex, memberEndIndex);
+
+    output += `**Members (Page ${memberPage}/${totalMemberPages}):**\n`;
+    if (pagedMembers.length > 0) {
+        const membersHeaders = ['#', 'Member', 'Joined'];
+        const membersRows = pagedMembers.map((m, index) => [
+            (memberStartIndex + index + 1).toString(),
+            m.display_name,
+            new Date(m.join_date).toLocaleDateString('en-CA')
+        ]);
+        const membersTableConfig = {
+            border: getBorderCharacters('norc'),
+            columns: [{ width: 3 }, { width: 25 }, { width: 15 }],
+        };
+        output += '```\n' + table([membersHeaders, ...membersRows], membersTableConfig) + '```';
+    } else {
+        output += 'No members on this page (or team has no members other than owner if applicable).';
+    }
+
+    const components = [];
+    const actionRow1 = new ActionRowBuilder();
+    actionRow1.addComponents(
+        new ButtonBuilder().setCustomId(`team_button_infoviewworlds_${userTeam.id}`).setLabel('📚 View Worlds').setStyle(ButtonStyle.Primary)
+    );
+
+    if (interaction.user.id === details.owner_user_id) {
+        actionRow1.addComponents(
+            new ButtonBuilder().setCustomId(`team_button_infoinvitecode_${userTeam.id}`).setLabel('✉️ New Invite Code').setStyle(ButtonStyle.Success)
         );
-    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+        actionRow1.addComponents(
+             new ButtonBuilder().setCustomId(`team_button_infokickmodal_${userTeam.id}`).setLabel('👢 Kick Member').setStyle(ButtonStyle.Danger)
+        );
+    }
+    // "Leave Team" button should be on a new row for better UI separation if other owner buttons exist.
+    const actionRow2 = new ActionRowBuilder();
+    actionRow2.addComponents(
+        new ButtonBuilder().setCustomId(`team_button_leave_${userTeam.id}`).setLabel('🚪 Leave Team').setStyle(ButtonStyle.Danger)
+    );
+
+    components.push(actionRow1);
+    components.push(actionRow2);
+
+
+    if (details.members.length > MEMBERS_PER_PAGE_INFO) {
+        components.push(utils.createPaginationRow(`team_button_infomemberpage_${userTeam.id}`, memberPage, totalMemberPages));
+    }
+
+    if (isUpdate) {
+        await interaction.editReply({ content: output, components, flags: MessageFlags.Ephemeral });
+    } else {
+        await interaction.reply({ content: output, components, flags: MessageFlags.Ephemeral });
+    }
 }
 
 async function handleTeamKick(interaction, userId, userTeam) {
@@ -171,12 +271,26 @@ module.exports = {
             case 'list': await showTeamList(interaction, userTeam, interaction.options.getInteger('page') || 1); break;
             case 'add': await handleTeamAdd(interaction, userId, userTeam); break;
             case 'remove': await handleTeamRemove(interaction, userId, userTeam); break;
-            case 'info': await handleTeamInfo(interaction, userTeam); break;
-            case 'leave':
-                if (userTeam.owner_user_id === userId) return interaction.reply({ content: "❌ Owners must transfer or disband the team.", flags: MessageFlags.Ephemeral });
-                const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('team_button_confirmleave_yes').setLabel("✅ Yes, Leave").setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId('team_button_confirmleave_no').setLabel("❌ No, Stay").setStyle(ButtonStyle.Secondary));
-                await interaction.reply({ content: `Leave **${userTeam.name}**?`, components: [row], flags: MessageFlags.Ephemeral });
-                break;
+            case 'info': await handleTeamInfo(interaction, userTeam, 1); break; // Pass initial member page
+            case 'leave': {
+                // This is the /team leave subcommand
+                if (!userTeam) { // Should have been caught by pre-check, but safeguard
+                    return interaction.reply({ content: "❌ You are not in a team.", flags: MessageFlags.Ephemeral });
+                }
+                if (userTeam.owner_user_id === userId) {
+                    const teamDetails = await db.getTeamDetails(userTeam.id);
+                    if (teamDetails && teamDetails.members.length > 1) {
+                        return interaction.reply({ content: "❌ As the team owner, you cannot leave directly while other members are present. Please transfer ownership or remove other members first.", flags: MessageFlags.Ephemeral });
+                    } else { // Owner is solo or teamDetails fetch failed (assume solo for safety if failed)
+                        const result = await db.disbandTeam(userTeam.id, userId);
+                        return interaction.reply({ content: result.success ? `✅ You have left and disbanded team **${userTeam.name}**.` : `❌ Error disbanding team: ${result.error}`, flags: MessageFlags.Ephemeral });
+                    }
+                } else {
+                    const result = await db.leaveTeam(userId, userTeam.id);
+                    return interaction.reply({ content: result.success ? `✅ You have left team **${userTeam.name}**.` : `❌ Error leaving team: ${result.error}`, flags: MessageFlags.Ephemeral });
+                }
+                // break; // Unreachable due to returns, but good practice
+            }
             case 'invite':
                 const newCode = await db.generateTeamInvitationCode(userTeam.id, userId);
                 await interaction.reply({ content: `✅ New single-use invite code: \`\`\`${newCode}\`\`\``, flags: MessageFlags.Ephemeral });
@@ -200,42 +314,191 @@ module.exports = {
 
             switch(command) {
                 case 'button': {
-                    const [action, ...btnArgs] = args;
-                    if(action === 'list') await showTeamList(interaction, userTeam, parseInt(btnArgs[1]));
-                    else if (action === 'confirmleave') {
-                        if(btnArgs[0] === 'no') return interaction.update({ content: 'Leave cancelled.', components: [] });
-                        const result = await db.leaveTeam(interaction.user.id, userTeam.id);
-                        await interaction.update({ content: result.success ? `✅ You left **${userTeam.name}**.` : `❌ Error: ${result.error}`, components: [] });
+                    const [action, teamIdFromArgs, ...actionArgs] = args;
+                    if (action === 'list') {
+                        await showTeamList(interaction, userTeam, parseInt(actionArgs[0]));
+                    } else if (action === 'confirmleave') { // This specific confirmleave is from old /team leave direct command, might be dead after subcommand rework.
+                        if(teamIdFromArgs === 'no') return interaction.update({ content: 'Leave cancelled.', components: [] });
+                        // This part of confirmleave is now mostly handled by the direct /team leave logic or the new leave button from /team info
+                        const leaveResult = await db.leaveTeam(interaction.user.id, userTeam.id); // userTeam context should be valid
+                        await interaction.update({ content: leaveResult.success ? `✅ You left **${userTeam.name}**.` : `❌ Error: ${leaveResult.error}`, components: [] });
                     } else if (action === 'confirmremove') {
-                        const [confirm, teamId, worldName] = btnArgs;
-                        if(confirm === 'no') return interaction.update({ content: 'Removal cancelled.', components: [] });
-                        const result = await db.removeWorldFromTeam(parseInt(teamId), worldName, interaction.user.id);
+                        const [confirmStatus, worldName] = actionArgs;
+                        if(confirmStatus === 'no') return interaction.update({ content: 'Removal cancelled.', components: [] });
+                        const result = await db.removeWorldFromTeam(parseInt(teamIdFromArgs), worldName, interaction.user.id);
                         await interaction.update({ content: result.success ? `✅ World **${worldName}** removed.` : `❌ Error: ${result.error}`, components: [] });
+                         if (result.success && userTeam) await showTeamList(interaction, userTeam, 1);
                     } else if (action === 'confirmkick') {
-                        const [confirm, memberId] = btnArgs;
-                        if(confirm === 'no') return interaction.update({ content: 'Kick cancelled.', components: [] });
+                        const [confirmStatus, memberId] = actionArgs;
+                        if(teamIdFromArgs === 'no') return interaction.update({ content: 'Kick cancelled.', components: [] });
                         const result = await db.removeTeamMember(userTeam.id, memberId, interaction.user.id);
                         await interaction.update({ content: result.success ? `✅ Member kicked.` : `❌ Error: ${result.error}`, components: [] });
+                    } else if (action === 'addworld') {
+                        const teamId = teamIdFromArgs;
+                        const modal = new ModalBuilder().setCustomId(`team_modal_addworldsubmit_${teamId}`).setTitle('Add World to Team');
+                        modal.addComponents(
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('world_name').setLabel("World Name").setStyle(TextInputStyle.Short).setRequired(true)),
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('days_owned').setLabel("Days Owned (1-180)").setStyle(TextInputStyle.Short).setRequired(true).setValue('1')),
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('note').setLabel("Note (Optional)").setStyle(TextInputStyle.Paragraph).setRequired(false))
+                        );
+                        await interaction.showModal(modal);
+                    } else if (action === 'removeworldmodal') {
+                        const teamId = teamIdFromArgs;
+                        const modal = new ModalBuilder().setCustomId(`team_modal_removeworldsubmit_${teamId}`).setTitle('Remove World from Team');
+                        modal.addComponents(
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('world_name').setLabel("World Name to Remove").setStyle(TextInputStyle.Short).setRequired(true))
+                        );
+                        await interaction.showModal(modal);
+                    } else if (action === 'infoviewworlds') {
+                        const teamId = teamIdFromArgs;
+                        if (userTeam && userTeam.id.toString() === teamId) {
+                           await showTeamList(interaction, userTeam, 1);
+                        } else {
+                            const teamToView = await db.getTeamByName( (await db.getTeamDetails(teamId))?.name ); // Re-fetch team by ID then name for showTeamList
+                            if (teamToView) await showTeamList(interaction, teamToView, 1);
+                            else await interaction.reply({content: 'Could not fetch team to view its worlds.', ephemeral: true});
+                        }
+                    } else if (action === 'infoinvitecode') {
+                        const teamId = teamIdFromArgs;
+                        if (userTeam && userTeam.id.toString() === teamId && userTeam.owner_user_id === interaction.user.id) {
+                            const newCode = await db.generateTeamInvitationCode(teamId, interaction.user.id);
+                            await interaction.reply({ content: `✅ New single-use invite code for **${userTeam.name}**: \`\`\`${newCode}\`\`\``, flags: MessageFlags.Ephemeral });
+                        } else {
+                            await interaction.reply({ content: '❌ You must be the owner to generate an invite code, or team ID was mismatched.', flags: MessageFlags.Ephemeral });
+                        }
+                    } else if (action === 'infokickmodal') {
+                        const teamId = teamIdFromArgs;
+                         if (userTeam && userTeam.id.toString() === teamId && userTeam.owner_user_id === interaction.user.id) {
+                            const modal = new ModalBuilder().setCustomId(`team_modal_infokicksubmit_${teamId}`).setTitle('Kick Member from Team');
+                            modal.addComponents(
+                                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('member_id_kick').setLabel("User ID or @mention of member to kick").setStyle(TextInputStyle.Short).setRequired(true))
+                            );
+                            await interaction.showModal(modal);
+                        } else {
+                             await interaction.reply({ content: '❌ You must be the owner to kick members, or team ID was mismatched.', flags: MessageFlags.Ephemeral });
+                        }
+                    } else if (action === 'infomemberpage') {
+                        const teamId = teamIdFromArgs;
+                        const page = parseInt(actionArgs[0]) || 1;
+                        if (userTeam && userTeam.id.toString() === teamId) {
+                            await handleTeamInfo(interaction, userTeam, page);
+                        } else {
+                            const teamToView = await db.getTeamDetails(teamId); // Fetches the full team object
+                             if (teamToView) await handleTeamInfo(interaction, teamToView, page); // teamToView now has .id, .name etc.
+                             else await interaction.reply({content: 'Could not fetch team info for pagination.', ephemeral: true});
+                        }
+                    } else if (action === 'leave') { // Handler for "Leave Team" button from /team info
+                        const teamId = teamIdFromArgs;
+                        const currentMemberUserId = interaction.user.id;
+                        const teamToLeaveDetails = await db.getTeamDetails(teamId);
+
+                        if (!teamToLeaveDetails) {
+                            return interaction.update({ content: '❌ Team not found or could not be verified.', components: [] });
+                        }
+                        // Check if the current user is part of this team (safeguard)
+                        const isMember = teamToLeaveDetails.members.some(m => m.id === currentMemberUserId);
+                        if (!isMember && teamToLeaveDetails.owner_user_id !== currentMemberUserId) { // owner is also a member implicitly
+                             return interaction.update({ content: '❌ You are not a member of this team.', components: [] });
+                        }
+
+
+                        if (teamToLeaveDetails.owner_user_id === currentMemberUserId) { // User is the owner
+                            if (teamToLeaveDetails.members.length > 1) {
+                                return interaction.update({ content: "❌ As the team owner, you cannot leave directly if other members are present. Please transfer ownership or remove other members first.", components: [] });
+                            } else { // Owner is the only member
+                                const result = await db.disbandTeam(teamId, currentMemberUserId);
+                                return interaction.update({ content: result.success ? `✅ You have left and disbanded team **${teamToLeaveDetails.name}**.` : `❌ Error disbanding team: ${result.error}`, components: [] });
+                            }
+                        } else { // User is a regular member
+                            const result = await db.leaveTeam(currentMemberUserId, teamId);
+                            return interaction.update({ content: result.success ? `✅ You have left team **${teamToLeaveDetails.name}**.` : `❌ Error leaving team: ${result.error}`, components: [] });
+                        }
                     }
                     break;
                 }
             }
         } else if (interaction.isModalSubmit()) {
             const userTeam = await db.getUserTeam(interaction.user.id);
-            if (!userTeam) return interaction.reply({ content: 'You are no longer in a team.', flags: MessageFlags.Ephemeral });
+            if (!userTeam) return interaction.reply({ content: 'You are no longer in a team, or the team could not be determined.', flags: MessageFlags.Ephemeral });
 
-            const [action, modalArgs] = args;
-            if(action === 'modal') {
-                const [operation, targetId] = modalArgs.split('_');
-                const confirmText = interaction.fields.getTextInputValue('confirm_text');
-                if(operation === 'transfer') {
+            const [modalContext, modalName, actionType, targetIdIfPresent] = interaction.customId.split('_');
+            // For new modals: team_modal_infokicksubmit_TEAMID -> modalContext='team', modalName='modal', actionType='infokicksubmit', targetIdIfPresent=TEAMID
+            // For old modals: team_modal_addworldsubmit_TEAMID -> modalContext='team', modalName='modal', actionType='addworldsubmit', targetIdIfPresent=TEAMID
+            // For old modals: team_modal_transfer_USERID -> modalContext='team', modalName='modal', actionType='transfer', targetIdIfPresent=USERID
+
+            if (modalName === 'modal') {
+                if (actionType === 'transfer') {
+                    const targetUserId = targetIdIfPresent;
+                    const confirmText = interaction.fields.getTextInputValue('confirm_text');
                     if (confirmText !== 'TRANSFER') return interaction.reply({ content: "❌ Confirmation text incorrect. Transfer cancelled.", flags: MessageFlags.Ephemeral });
-                    const result = await db.transferTeamOwnership(userTeam.id, interaction.user.id, targetId);
-                    await interaction.reply({ content: result.success ? `✅ Ownership transferred to <@${targetId}>.` : `❌ Error: ${result.error}`, flags: MessageFlags.Ephemeral });
-                } else if (operation === 'disband') {
-                    if(confirmText !== userTeam.name) return interaction.reply({ content: "❌ Confirmation text incorrect. Disband cancelled.", flags: MessageFlags.Ephemeral });
+                    const result = await db.transferTeamOwnership(userTeam.id, interaction.user.id, targetUserId);
+                    await interaction.reply({ content: result.success ? `✅ Ownership transferred to <@${targetUserId}>.` : `❌ Error: ${result.error}`, flags: MessageFlags.Ephemeral });
+                } else if (actionType === 'disband') {
+                    const confirmText = interaction.fields.getTextInputValue('confirm_text');
+                    if (confirmText !== userTeam.name) return interaction.reply({ content: "❌ Confirmation text incorrect. Disband cancelled.", flags: MessageFlags.Ephemeral });
                     const result = await db.disbandTeam(userTeam.id, interaction.user.id);
                     await interaction.reply({ content: result.success ? `✅ Team **${userTeam.name}** disbanded.` : `❌ Error: ${result.error}`, flags: MessageFlags.Ephemeral });
+                } else if (actionType === 'addworldsubmit') { // From team list view
+                    const teamId = targetIdIfPresent;
+                    const worldName = interaction.fields.getTextInputValue('world_name').trim();
+                    const daysOwnedStr = interaction.fields.getTextInputValue('days_owned').trim();
+                    const note = interaction.fields.getTextInputValue('note').trim() || null;
+
+                    if (!worldName || worldName.includes(' ')) {
+                        await interaction.reply({ content: "❌ World name cannot be empty or contain spaces.", flags: MessageFlags.Ephemeral });
+                        return showTeamList(interaction, userTeam, 1); // Show list again
+                    }
+                    const daysOwned = parseInt(daysOwnedStr);
+                    if (isNaN(daysOwned) || daysOwned < 1 || daysOwned > 180) {
+                        await interaction.reply({ content: "❌ Days owned must be a number between 1 and 180.", flags: MessageFlags.Ephemeral });
+                        return showTeamList(interaction, userTeam, 1);
+                    }
+
+                    const result = await db.addWorldToTeam(teamId, worldName.toUpperCase(), daysOwned, note, interaction.user.id);
+                    await interaction.reply({ content: result.success ? `✅ World **${worldName.toUpperCase()}** added to team.` : `❌ Error: ${result.error === 'already_exists' ? 'That world is already on the team list.' : 'Database error.'}`, flags: MessageFlags.Ephemeral });
+                    await showTeamList(interaction, userTeam, 1); // Refresh list
+                } else if (actionType === 'removeworldsubmit') { // From team list view
+                    const teamId = targetIdIfPresent;
+                    const worldName = interaction.fields.getTextInputValue('world_name').trim();
+                    if (!worldName) {
+                        await interaction.reply({ content: "❌ World name cannot be empty.", flags: MessageFlags.Ephemeral });
+                        return showTeamList(interaction, userTeam, 1);
+                    }
+                    const result = await db.removeWorldFromTeam(teamId, worldName.toUpperCase(), interaction.user.id);
+                    await interaction.reply({ content: result.success ? `✅ World **${worldName.toUpperCase()}** removed from team.` : `❌ Error removing: ${result.message || result.error || 'Unknown error.'}`, flags: MessageFlags.Ephemeral });
+                    await showTeamList(interaction, userTeam, 1); // Refresh list
+                } else if (actionType === 'infokicksubmit') {
+                    const teamId = targetIdIfPresent;
+                    const memberIdentifier = interaction.fields.getTextInputValue('member_id_kick').trim();
+                    // Basic validation: Expect a User ID (string of numbers)
+                    if (!/^\d+$/.test(memberIdentifier)) {
+                        await interaction.reply({ content: "❌ Invalid User ID format. Please provide a valid User ID.", flags: MessageFlags.Ephemeral });
+                        return handleTeamInfo(interaction, userTeam, 1); // Refresh team info
+                    }
+                    const memberToKickId = memberIdentifier;
+
+                    if (memberToKickId === userTeam.owner_user_id) {
+                         await interaction.reply({ content: "❌ Cannot kick the team owner.", flags: MessageFlags.Ephemeral });
+                         return handleTeamInfo(interaction, userTeam, 1);
+                    }
+                     if (memberToKickId === interaction.user.id) {
+                        await interaction.reply({ content: "❌ You cannot kick yourself.", flags: MessageFlags.Ephemeral });
+                        return handleTeamInfo(interaction, userTeam, 1);
+                    }
+
+                    // Permission check (owner) is implicitly handled by button visibility, but double check here for safety
+                    if (userTeam.owner_user_id !== interaction.user.id) {
+                        await interaction.reply({ content: "❌ Only the team owner can kick members.", flags: MessageFlags.Ephemeral });
+                        return handleTeamInfo(interaction, userTeam, 1);
+                    }
+
+                    const kickResult = await db.removeTeamMember(teamId, memberToKickId, interaction.user.id);
+                    if (kickResult.success) {
+                        await interaction.reply({ content: `✅ Member <@${memberToKickId}> kicked from the team.`, flags: MessageFlags.Ephemeral });
+                    } else {
+                        await interaction.reply({ content: `❌ Failed to kick member: ${kickResult.error || 'Unknown error.'}`, flags: MessageFlags.Ephemeral });
+                    }
+                    await handleTeamInfo(interaction, userTeam, 1); // Refresh team info
                 }
             }
         }
