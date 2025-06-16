@@ -80,20 +80,12 @@ async function showLockedWorldsList(interaction, page = 1, currentFilters = {}) 
   const components = [];
   components.push(utils.createPaginationRow(`lock_button_page_${encodedFilters}`, page, totalPages));
 
-  if (worlds.length > 0) {
-    const selectOptions = worlds.map(w => new StringSelectMenuOptionBuilder()
-        .setLabel(`ID: ${w.id} - ${w.world_name}`)
-        .setDescription(w.note ? `Note: ${w.note.substring(0, 50)}` : 'No note provided.')
-        .setValue(w.id.toString())
-    );
-    components.push(new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder().setCustomId('lock_select_manage').setPlaceholder('Select a lock to manage...').addOptions(selectOptions)
-    ));
-  }
+  // Removed Select Menu
   
   const actionRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('lock_button_filtershow').setLabel('🔍 Filter List').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`lock_button_export_${page}_${encodedFilters}`).setLabel('📄 Export Page').setStyle(ButtonStyle.Success)
+      new ButtonBuilder().setCustomId(`lock_button_export_${page}_${encodedFilters}`).setLabel('📄 Export Page').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('lock_button_generic_listmarket').setLabel('💰 List on Market').setStyle(ButtonStyle.Primary)
   );
   if (Object.keys(currentFilters).length > 0) {
       actionRow.addComponents(new ButtonBuilder().setCustomId('lock_button_clearfilter').setLabel('Clear Filters').setStyle(ButtonStyle.Danger));
@@ -156,7 +148,10 @@ async function handleButtonCommand(interaction, params) {
       }
       break;
     }
-    case 'marketlist': { // This is now a button to open a modal
+    case 'marketlist': { // This was for the per-world listing, will be removed or refactored if a new "manage" flow is added.
+        // For now, this specific case might become dead code after select menu removal,
+        // unless another part of the UI calls lock_button_marketlist_WORLDID directly.
+        // The new generic button is lock_button_generic_listmarket.
         const [worldId] = args;
         const world = await db.getLockedWorldById(interaction.user.id, parseInt(worldId));
         if(!world) return interaction.update({content: 'Error: Could not find this world to list it.', components:[]});
@@ -167,6 +162,13 @@ async function handleButtonCommand(interaction, params) {
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('listing_note').setLabel('Optional Note for Listing').setStyle(TextInputStyle.Paragraph).setRequired(false))
         );
         await interaction.showModal(modal);
+        break;
+    }
+    case 'generic': { // Handler for new generic buttons
+        const [genericAction] = args;
+        if (genericAction === 'listmarket') {
+            await interaction.reply({ content: "Please use `/market list <worldname>` to list a world from your locks on the market.\nAlternatively, you can remove the lock and re-add it to your active list to use the `/market list` command with world selection from active worlds.", flags: MessageFlags.Ephemeral });
+        }
         break;
     }
   }
@@ -222,6 +224,8 @@ async function handleModalSubmitCommand(interaction, params) {
 }
 
 async function handleSelectMenuCommand(interaction, params) {
+    // This function is now effectively dead code as the select menu has been removed.
+    // It can be removed in a future cleanup.
     const [action] = params;
     if (action !== 'manage') return;
 

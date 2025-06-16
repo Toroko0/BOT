@@ -206,8 +206,8 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
 
     // Action Row 3
     const actionRow3 = new ActionRowBuilder();
-    if (userTeam && type === 'private') {
-        actionRow3.addComponents(new ButtonBuilder().setCustomId('list_button_viewteam').setLabel('🏢 Team Worlds').setStyle(ButtonStyle.Secondary));
+    if (userTeam && userTeam.id && type === 'private') { // Ensure userTeam.id exists
+        actionRow3.addComponents(new ButtonBuilder().setCustomId(`list_button_viewteam_${userTeam.id}`).setLabel('🏢 Team Worlds').setStyle(ButtonStyle.Secondary));
     }
     if (actionRow3.components.length > 0) components.push(actionRow3);
     
@@ -276,9 +276,22 @@ module.exports = {
                 await showLockedWorldsList(interaction, 1, {});
                 break;
             case 'viewteam': {
-                const userTeam = await db.getUserTeam(interaction.user.id);
-                if (!userTeam) return interaction.reply({ content: "You're not in a team. Use `/team` to join or create one.", ephemeral: true });
-                await showTeamList(interaction, 1, {}); // Assuming team list takes page and filters
+                const teamId = args[0];
+                if (!teamId) {
+                    logger.error('[list.js] viewteam button pressed but teamId is missing from customId args.');
+                    // Attempt to fetch user's team as a fallback, though this indicates an issue with button ID generation
+                    const userTeam = await db.getUserTeam(interaction.user.id);
+                    if (!userTeam || !userTeam.id) {
+                        return interaction.reply({ content: "You're not in a team, or your team ID could not be determined. Use `/team` to join or create one.", ephemeral: true });
+                    }
+                    // If fetched, use this teamId. This path suggests button ID was not correctly list_button_viewteam_TEAMID
+                    logger.warn(`[list.js] Fallback to fetched teamId ${userTeam.id} for viewteam button.`);
+                    await showTeamList(interaction, userTeam.id, 1, {}); // Pass teamId, page, filters
+                    return;
+                }
+                // Assuming showTeamList signature is (interaction, teamId, page, filters)
+                // The page and filters are hardcoded to 1 and {} for now, as per original call structure.
+                await showTeamList(interaction, teamId, 1, {});
                 break;
             }
             case 'export': {
