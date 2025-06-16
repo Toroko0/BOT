@@ -127,8 +127,7 @@ async function handleTeamInfo(interaction, userTeam) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     }
 
-    const details = await db.getTeamDetails(userTeam.id); // userTeam is an object with team details like id, name
-    if (!details) {
+    if (!details) { // This 'if' block should now use the 'details' variable from the first declaration
         return interaction.editReply({ content: "❌ Could not fetch team details.", flags: MessageFlags.Ephemeral, components: [] });
     }
 
