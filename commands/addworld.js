@@ -79,8 +79,8 @@ module.exports = {
       option.setName('custom_id')
         .setDescription('Custom ID for the world (optional, unique per user)')
         .setRequired(false)
-        .setMaxLength(24)), // Added max length
-
+        .setMaxLength(24)),
+  showAddWorldModal, // Add this line to export the function
   async execute(interaction) {
     const worldName = interaction.options.getString('world');
     const daysOwned = interaction.options.getInteger('days');
