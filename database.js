@@ -1223,13 +1223,34 @@ async function addWorld(userId, worldName, daysOwned, lockType = 'mainlock', cus
     if (worldNameUpper.includes(' ')) { return { success: false, message: 'World names cannot contain spaces.' }; }
     if (normalizedCustomId === '') { normalizedCustomId = null; }
     const now = new Date(); const daysLeft = 180 - daysOwnedNum; const expiryDate = new Date(now.getTime() + daysLeft * 24 * 60 * 60 * 1000); const expiryDateISO = expiryDate.toISOString();
+
+    // Pre-emptive check for existing world with exact same parameters
+    const existingWorld = await knexInstance('worlds')
+        .where({
+            user_id: userId,
+            name: worldNameUpper,
+            days_owned: daysOwnedNum,
+            lock_type: normalizedLockType
+        })
+        .first();
+
+    if (existingWorld) {
+        return { success: false, message: `You are already tracking a world named **${worldNameUpper}** with the exact same days owned and lock type.` };
+    }
+
     try {
         await knexInstance('worlds').insert({ name: worldNameUpper, days_owned: daysOwnedNum, expiry_date: expiryDateISO, lock_type: normalizedLockType, is_public: publicStatus, user_id: userId, custom_id: normalizedCustomId, added_by: username, guild_id: guildId });
         logger.info(`[DB] Added world ${worldNameUpper} for user ${userId}`);
         return { success: true, message: `**${worldNameUpper}** added.` };
     } catch (error) {
         logger.error(`[DB] Error adding world ${worldNameUpper} for user ${userId}:`, error);
-        if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) { if (error.message.includes('worlds.uq_worlds_name_user')) { return { success: false, message: `You are already tracking **${worldNameUpper}**.` }; } else if (error.message.includes('worlds.uq_worlds_customid_user') && normalizedCustomId) { return { success: false, message: `Custom ID **${normalizedCustomId}** already in use by you.` }; } }
+        if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) {
+            if (error.message.includes('uq_worlds_user_name_days_lock')) { // New constraint name
+                return { success: false, message: `You are already tracking a world named **${worldNameUpper}** with the exact same days owned and lock type (database constraint).` };
+            } else if (error.message.includes('worlds.uq_worlds_customid_user') && normalizedCustomId) { // normalizedCustomId is defined earlier in the function
+                return { success: false, message: `Custom ID **${normalizedCustomId}** already in use by you.` };
+            }
+        }
         return { success: false, message: 'Failed to add world due to a database error.' };
     }
 }

@@ -9,6 +9,7 @@ const utils = require('../utils.js');
 const logger = require('../utils/logger.js');
 const { table, getBorderCharacters } = require('table');
 const { showWorldInfo } = require('./info.js');
+const { showAddWorldModal } = require('../commands/addworld.js');
 const CONSTANTS = require('../utils/constants.js');
 const { showLockedWorldsList } = require('./lock.js');
 const { showTeamList } = require('./team.js'); // Added from new file for better team integration
@@ -259,7 +260,7 @@ module.exports = {
                 await showLockWorldModal(interaction);
                 break;
             case 'add':
-                await interaction.reply({ content: "Please use the `/addworld` command to add a new world.", flags: MessageFlags.Ephemeral });
+                await showAddWorldModal(interaction);
                 break;
             case 'filtershow': {
                 const [type] = args;
