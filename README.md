@@ -68,7 +68,8 @@ node index.js
 | `/unshare`     | Make a world private again           | `/unshare world_name:MYWORLD`                         |
 | `/stats`       | View your world statistics           | `/stats`                                              |
 | `/search`      | Filter worlds by prefix, lock, expiry| `/search prefix:BUY locktype:mainlock expiringdays:7` |
-| `/sync`        | Refresh slash commands (admin only)  | `/sync`                                               |
+| `/admin`       | Admin-specific commands              | `/admin <subcommand>`                                 |
+| `/settings`    | Adjust your personal bot settings    | `/settings`                                           |
 | `/help`        | Show help and onboarding info        | `/help`                                               |
 
 ---
