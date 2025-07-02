@@ -3,13 +3,6 @@ const db = require('../database.js'); // Assuming database connection is handled
 const logger = require('../utils/logger.js'); // Assuming you have a logger
 const CONSTANTS = require('../utils/constants.js'); // For autocomplete limit
 
-// Import handlers from lock.js
-const {
-    handleButtonCommand: handleLockButtonCommand,
-    handleModalSubmitCommand: handleLockModalSubmitCommand,
-    handleSelectMenuCommand: handleLockSelectMenuCommand
-} = require('../commands/lock.js');
-
 // Helper function to safely reply or followUp ephemerally
 async function safeReplyEphemeral(interaction, options) {
     try {
@@ -175,25 +168,6 @@ async function setupInteractionHandler(client) {
 
                  const command = client.commands.get(commandName);
 
-                 // --- Special handling for 'lock' command components ---
-                 if (commandName === 'lock') {
-                    if (interaction.isButton()) {
-                        logger.debug(`[Interaction Handler] Routing button ${interaction.customId} to lock.handleButtonCommand`);
-                        await handleLockButtonCommand(interaction, customIdParts); // Pass full customIdParts
-                    } else if (interaction.isStringSelectMenu()) {
-                        logger.debug(`[Interaction Handler] Routing select menu ${interaction.customId} to lock.handleSelectMenuCommand`);
-                        await handleLockSelectMenuCommand(interaction, customIdParts); // Pass full customIdParts
-                    } else {
-                        logger.warn(`[Interaction Handler] Unhandled component type for 'lock' command: ${interaction.componentType} with customId: ${interaction.customId}`);
-                        if (interaction.isRepliable() || interaction.deferred) {
-                           await safeEditEphemeral(interaction, { content: "This lock component type is not handled.", components: []});
-                        }
-                    }
-                    return; // Handled by lock command specific handlers
-                 }
-                 // --- End special handling for 'lock' ---
-
-
                  if (!command) {
                      logger.error(`[Interaction Handler] Command handler not found for component prefix: ${commandName} (customId: ${interaction.customId})`);
                      // Update the interaction if possible to remove potentially broken components
@@ -233,14 +207,6 @@ async function setupInteractionHandler(client) {
                      await safeReplyEphemeral(interaction, "This form seems outdated or invalid.");
                      return;
                  }
-
-                 // --- Special handling for 'lock' command modals ---
-                 if (commandName === 'lock' && modalIdentifier === 'mod') {
-                    logger.debug(`[Interaction Handler] Routing modal submission ${interaction.customId} to lock.handleModalSubmitCommand`);
-                    await handleLockModalSubmitCommand(interaction, customIdParts); // Pass full customIdParts
-                    return; // Handled by lock command specific modal handler
-                 }
-                 // --- End special handling for 'lock' ---
 
                  const command = client.commands.get(commandName);
                  // The original logic used `command.handleModal` and `params = customIdParts.slice(2)`
