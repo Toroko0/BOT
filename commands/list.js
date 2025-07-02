@@ -11,8 +11,8 @@ const { table, getBorderCharacters } = require('table');
 const { showWorldInfo } = require('./info.js');
 const { showAddWorldModal } = require('../commands/addworld.js');
 const CONSTANTS = require('../utils/constants.js');
-const { showLockedWorldsList } = require('./lock.js');
-const { showTeamList } = require('./team.js'); // Added from new file for better team integration
+// const { showLockedWorldsList } = require('./lock.js'); // Removed this line
+// const { showTeamList } = require('./team.js'); // Ensuring this is removed
 
 // --- Refactored Modal Definitions ---
 
@@ -39,25 +39,6 @@ async function showSimpleModal(interaction, type) {
         .setStyle(TextInputStyle.Short)
         .setRequired(true);
     modal.addComponents(new ActionRowBuilder().addComponents(textInput));
-    await interaction.showModal(modal);
-}
-
-// Modal for locking a world (multiple inputs)
-async function showLockWorldModal(interaction) {
-    const modal = new ModalBuilder()
-        .setCustomId('list_modal_lockworldsubmit')
-        .setTitle('Lock World from Active List');
-    modal.addComponents(
-        new ActionRowBuilder().addComponents(
-            new TextInputBuilder().setCustomId('identifier').setLabel('World Name or Custom ID to Lock').setPlaceholder('Enter the world name or its custom ID').setStyle(TextInputStyle.Short).setRequired(true)
-        ),
-        new ActionRowBuilder().addComponents(
-            new TextInputBuilder().setCustomId('lock_type').setLabel('Lock Type (main/out, optional)').setPlaceholder('Defaults to "main"').setStyle(TextInputStyle.Short).setRequired(false)
-        ),
-        new ActionRowBuilder().addComponents(
-            new TextInputBuilder().setCustomId('note').setLabel('Optional Note').setStyle(TextInputStyle.Paragraph).setRequired(false)
-        )
-    );
     await interaction.showModal(modal);
 }
 
@@ -89,7 +70,7 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
     const userPrefs = await db.getUserPreferences(interaction.user.id);
     const viewMode = userPrefs.view_mode || 'pc';
     const timezoneOffset = userPrefs.timezone_offset || 0.0;
-    const userTeam = await db.getUserTeam(interaction.user.id);
+    // const userTeam = await db.getUserTeam(interaction.user.id); // Removed this line
 
     logger.info(`[list.js] showWorldsList called - Type: ${type}, Page: ${page}, Filters: ${JSON.stringify(currentFilters)}`);
 
@@ -154,9 +135,9 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
             emptyRow.addComponents(new ButtonBuilder().setCustomId(`list_button_switch_${target}_1`).setLabel(`🔄 View ${target === 'public' ? 'Public' : 'Your'} Worlds`).setStyle(ButtonStyle.Secondary));
         }
         emptyRow.addComponents(new ButtonBuilder().setCustomId(`list_button_filtershow_${type}`).setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary));
-        if (userTeam && type === 'private') {
-            emptyRow.addComponents(new ButtonBuilder().setCustomId('list_button_viewteam').setLabel('🏢 View Team Worlds').setStyle(ButtonStyle.Secondary));
-        }
+        // if (userTeam && type === 'private') { // Removed team button
+        //     emptyRow.addComponents(new ButtonBuilder().setCustomId('list_button_viewteam').setLabel('🏢 View Team Worlds').setStyle(ButtonStyle.Secondary));
+        // }
 
         const opts = { content: emptyMsg, components: emptyRow.components.length > 0 ? [emptyRow] : [], flags: MessageFlags.Ephemeral };
         await interaction.editReply(opts);
@@ -180,8 +161,8 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
         actionRow1.addComponents(
             new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId('list_button_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId('list_button_lock').setLabel('🔒 Lock').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary)
+            // Removed: new ButtonBuilder().setCustomId('list_button_lock').setLabel('🔒 Lock').setStyle(ButtonStyle.Secondary)
         );
     } else {
         actionRow1.addComponents(new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary));
@@ -200,17 +181,17 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
     }
     actionRow2.addComponents(
         new ButtonBuilder().setCustomId(`list_button_filtershow_${type}`).setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('list_button_settings').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('list_button_viewlocks').setLabel('🔐 View Locks').setStyle(ButtonStyle.Primary)
+        new ButtonBuilder().setCustomId('list_button_settings').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary)
+        // Removed: new ButtonBuilder().setCustomId('list_button_viewlocks').setLabel('🔐 View Locks').setStyle(ButtonStyle.Primary)
     );
     if (actionRow2.components.length > 0) components.push(actionRow2);
 
-    // Action Row 3
-    const actionRow3 = new ActionRowBuilder();
-    if (userTeam && userTeam.id && type === 'private') { // Ensure userTeam.id exists
-        actionRow3.addComponents(new ButtonBuilder().setCustomId(`list_button_viewteam_${userTeam.id}`).setLabel('🏢 Team Worlds').setStyle(ButtonStyle.Secondary));
-    }
-    if (actionRow3.components.length > 0) components.push(actionRow3);
+    // Action Row 3 - Team button removed
+    // const actionRow3 = new ActionRowBuilder();
+    // if (userTeam && userTeam.id && type === 'private') { // Ensure userTeam.id exists
+    //     actionRow3.addComponents(new ButtonBuilder().setCustomId(`list_button_viewteam_${userTeam.id}`).setLabel('🏢 Team Worlds').setStyle(ButtonStyle.Secondary));
+    // }
+    // if (actionRow3.components.length > 0) components.push(actionRow3);
     
     // Select Menu
     if (viewMode === 'pc' && worlds.length > 0 && type === 'private') {
@@ -256,9 +237,9 @@ module.exports = {
             case 'unshare':
                 await showSimpleModal(interaction, action);
                 break;
-            case 'lock':
-                await showLockWorldModal(interaction);
-                break;
+            // case 'lock': // Removed this case
+            //     await showLockWorldModal(interaction); // Removed this line
+            //     break;
             case 'add':
                 await showAddWorldModal(interaction);
                 break;
@@ -273,28 +254,28 @@ module.exports = {
                 await interaction.reply(settingsReply);
                 break;
             }
-            case 'viewlocks':
-                await showLockedWorldsList(interaction, 1, {});
-                break;
-            case 'viewteam': {
-                const teamId = args[0];
-                if (!teamId) {
-                    logger.error('[list.js] viewteam button pressed but teamId is missing from customId args.');
-                    // Attempt to fetch user's team as a fallback, though this indicates an issue with button ID generation
-                    const userTeam = await db.getUserTeam(interaction.user.id);
-                    if (!userTeam || !userTeam.id) {
-                        return interaction.reply({ content: "You're not in a team, or your team ID could not be determined. Use `/team` to join or create one.", ephemeral: true });
-                    }
-                    // If fetched, use this teamId. This path suggests button ID was not correctly list_button_viewteam_TEAMID
-                    logger.warn(`[list.js] Fallback to fetched teamId ${userTeam.id} for viewteam button.`);
-                    await showTeamList(interaction, userTeam.id, 1, {}); // Pass teamId, page, filters
-                    return;
-                }
-                // Assuming showTeamList signature is (interaction, teamId, page, filters)
-                // The page and filters are hardcoded to 1 and {} for now, as per original call structure.
-                await showTeamList(interaction, teamId, 1, {});
-                break;
-            }
+            // case 'viewlocks': // Removed this case
+            //     await showLockedWorldsList(interaction, 1, {}); // Removed this line
+            //     break;
+            // case 'viewteam': { // Removed this case
+            //     const teamId = args[0];
+            //     if (!teamId) {
+            //         logger.error('[list.js] viewteam button pressed but teamId is missing from customId args.');
+            //         // Attempt to fetch user's team as a fallback, though this indicates an issue with button ID generation
+            //         const userTeam = await db.getUserTeam(interaction.user.id);
+            //         if (!userTeam || !userTeam.id) {
+            //             return interaction.reply({ content: "You're not in a team, or your team ID could not be determined. Use `/team` to join or create one.", ephemeral: true });
+            //         }
+            //         // If fetched, use this teamId. This path suggests button ID was not correctly list_button_viewteam_TEAMID
+            //         logger.warn(`[list.js] Fallback to fetched teamId ${userTeam.id} for viewteam button.`);
+            //         await showTeamList(interaction, userTeam.id, 1, {}); // Pass teamId, page, filters
+            //         return;
+            //     }
+            //     // Assuming showTeamList signature is (interaction, teamId, page, filters)
+            //     // The page and filters are hardcoded to 1 and {} for now, as per original call structure.
+            //     await showTeamList(interaction, teamId, 1, {});
+            //     break;
+            // }
             case 'export': {
                 await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                 const [type, pageStr] = args;
@@ -399,21 +380,21 @@ module.exports = {
                 await showWorldInfo(interaction, world);
                 break;
             }
-            case 'lockworldsubmit': {
-                // await interaction.deferReply({ flags: MessageFlags.Ephemeral }); // Modal was submitted, need new reply
-                const lockType = interaction.fields.getTextInputValue('lock_type')?.trim().toLowerCase() || 'main';
-                const note = interaction.fields.getTextInputValue('note')?.trim() || null;
-                
-                // world lookup already done above
-                if (!world || world.user_id !== interaction.user.id) return interaction.editReply({ content: `❌ World "${identifier}" not found in your active list.` });
-                
-                const alreadyLocked = await db.findLockedWorldByName(interaction.user.id, world.name);
-                if (alreadyLocked) return interaction.editReply({ content: `❌ World **${world.name}** is already in your Locks list.` });
-                
-                const result = await db.moveWorldToLocks(interaction.user.id, world.id, lockType, note);
-                await interaction.editReply({ content: result.success ? `✅ ${result.message}` : `❌ ${result.message}` });
-                break;
-            }
+            // case 'lockworldsubmit': { // Removed this case
+            //     // await interaction.deferReply({ flags: MessageFlags.Ephemeral }); // Modal was submitted, need new reply
+            //     const lockType = interaction.fields.getTextInputValue('lock_type')?.trim().toLowerCase() || 'main';
+            //     const note = interaction.fields.getTextInputValue('note')?.trim() || null;
+            //
+            //     // world lookup already done above
+            //     if (!world || world.user_id !== interaction.user.id) return interaction.editReply({ content: `❌ World "${identifier}" not found in your active list.` });
+            //
+            //     const alreadyLocked = await db.findLockedWorldByName(interaction.user.id, world.name);
+            //     if (alreadyLocked) return interaction.editReply({ content: `❌ World **${world.name}** is already in your Locks list.` });
+            //
+            //     const result = await db.moveWorldToLocks(interaction.user.id, world.id, lockType, note);
+            //     await interaction.editReply({ content: result.success ? `✅ ${result.message}` : `❌ ${result.message}` });
+            //     break;
+            // }
             default:
                 logger.warn(`[list.js] Unhandled modal action: ${action}`);
                 await interaction.reply({ content: 'This action is not recognized.', flags: MessageFlags.Ephemeral });
