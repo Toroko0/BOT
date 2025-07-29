@@ -46,13 +46,16 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = 
     const existingWorld = await knexInstance('worlds')
         .where({
             name: worldNameUpper,
-            days_owned: daysOwnedNum,
-            lock_type: normalizedLockType
+            lock_type: normalizedLockType,
+        })
+        .andWhere(function() {
+            this.where('days_owned', daysOwnedNum)
+                .orWhereRaw('julianday(?) - julianday(added_date) < 1', [now])
         })
         .first();
 
     if (existingWorld) {
-        return { success: false, message: `A world named **${worldNameUpper}** with the exact same days owned and lock type is already being tracked.` };
+        return { success: false, message: `A world named **${worldNameUpper}** with the exact same days owned and lock type is already being tracked by **${existingWorld.added_by_username}**.` };
     }
 
     try {
@@ -134,6 +137,11 @@ async function getWorldById(worldId) {
 async function getWorldByName(worldName) {
     try { const world = await knexInstance('worlds').whereRaw('lower(name) = lower(?)', [worldName]).first(); return world || null; }
     catch (error) { logger.error(`[DB] Error getting world by name "${worldName}":`, error); return null; }
+}
+
+async function getWorldsByName(worldName) {
+    try { const worlds = await knexInstance('worlds').whereRaw('lower(name) = lower(?)', [worldName]); return worlds; }
+    catch (error) { logger.error(`[DB] Error getting worlds by name "${worldName}":`, error); return []; }
 }
 
 async function getWorldByCustomId(customId) {
@@ -281,6 +289,7 @@ module.exports = {
   getWorlds,
   getWorldById,
   getWorldByName,
+  getWorldsByName,
   getWorldByCustomId,
   findWorldByIdentifier,
   getFilteredWorlds,

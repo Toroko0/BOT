@@ -95,8 +95,29 @@ async function testListUser() {
     await execute(interaction);
 }
 
+async function testEdit() {
+    const { execute } = require('./commands/edit.js');
+    const interaction = {
+        options: {
+            getString: (option) => {
+                if (option === 'world') return 'TESTWORLD';
+                return null;
+            }
+        },
+        user: {
+            id: '12345',
+            username: 'testuser'
+        },
+        showModal: async (modal) => {
+            console.log('Edit modal shown:', modal.title);
+        }
+    };
+    await execute(interaction);
+}
+
 setTimeout(async () => {
     await testAddWorld();
-    await testLeaderboard();
-    await testListUser();
+    await testAddWorld(); // Should fail
+    await testEdit();
+    await testRemove();
 }, 2000);
