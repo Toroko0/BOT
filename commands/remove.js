@@ -16,12 +16,12 @@ module.exports = {
   async execute(interaction) {
     const worldName = interaction.options.getString('world');
     
-    // Get the world by name for the current user
-    const world = await db.getWorldByName(worldName, interaction.user.id);
+    // Get the world by name
+    const world = await db.getWorldByName(worldName);
     
     if (!world) {
       await interaction.reply({ 
-        content: `World **${worldName}** not found in your tracking list.`, 
+        content: `World **${worldName}** not found in the tracking list.`,
         flags: 1 << 6
       });
       return;
@@ -70,15 +70,15 @@ module.exports = {
       
       const world = await db.getWorldById(worldId);
 
-      if (!world || world.user_id !== interaction.user.id) {
+      if (!world) {
         await interaction.reply({
-          content: 'World not found or you do not have permission to remove it.',
+          content: 'World not found.',
           flags: 1 << 6
         });
         return;
       }
 
-      const success = await db.removeWorld(worldId, interaction.user.id);
+      const success = await db.removeWorld(worldId);
 
       if (!success) {
         await interaction.reply({
@@ -88,14 +88,13 @@ module.exports = {
         return;
       }
 
-      await logHistory(worldId, interaction.user.id, 'remove', `Removed world ${world.name}`);
       require('./search.js').invalidateSearchCache(); // Invalidate search cache
 
       const row = new ActionRowBuilder()
         .addComponents(
           new ButtonBuilder()
-            .setCustomId('list_button_view_private_1')
-            .setLabel('View My Worlds')
+            .setCustomId('list_button_view_1')
+            .setLabel('View Worlds')
             .setStyle(ButtonStyle.Primary),
           new ButtonBuilder()
             .setCustomId('addworld_button_show')
@@ -104,7 +103,7 @@ module.exports = {
         );
 
       await interaction.update({ // Changed from interaction.reply to interaction.update
-        content: `✅ World **${world.name.toUpperCase()}** has been removed from your tracking list.`,
+        content: `✅ World **${world.name.toUpperCase()}** has been removed from the tracking list.`,
         components: [row],
         flags: 1 << 6
       });
