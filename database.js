@@ -214,6 +214,11 @@ async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10) {
             }
         }
 
+        if (filters.added_by_username) {
+            query.andWhere('added_by_username', filters.added_by_username);
+            countQueryBase.andWhere('added_by_username', filters.added_by_username);
+        }
+
         const totalResult = await countQueryBase.count({ total: '*' }).first();
         const totalCount = totalResult ? Number(totalResult.total) : 0;
 
@@ -242,6 +247,30 @@ async function getExpiringWorldCount(days = 7) { try { const targetDate = new Da
 
 async function getMostRecentWorld() { try { const world = await knexInstance('worlds').orderBy('added_date', 'desc').select('name', 'added_date').first(); return world || null; } catch (error) { logger.error(`[DB] Error getting most recent world:`, error); return null; } }
 
+async function getLeaderboard(page = 1, pageSize = 10) {
+    const offset = (page - 1) * pageSize;
+    logger.debug(`[DB] Attempting to get leaderboard, page ${page}`);
+    try {
+        const leaderboard = await knexInstance('worlds')
+            .select('added_by_username')
+            .count('* as world_count')
+            .groupBy('added_by_username')
+            .orderBy('world_count', 'desc')
+            .limit(pageSize)
+            .offset(offset);
+
+        const totalResult = await knexInstance('worlds').distinct('added_by_username').count({ total: '*' });
+        const totalCount = (totalResult && totalResult[0] && totalResult[0].total !== undefined)
+            ? Number(totalResult[0].total)
+            : 0;
+
+        return { leaderboard, total: totalCount };
+    } catch (error) {
+        logger.error(`[DB] Error getting leaderboard:`, error);
+        return { leaderboard: [], total: 0 };
+    }
+}
+
 // --- Module Exports ---
 module.exports = {
   knex: knexInstance,
@@ -261,4 +290,5 @@ module.exports = {
   getWorldLockStats,
   getExpiringWorldCount,
   getMostRecentWorld,
+  getLeaderboard,
 };

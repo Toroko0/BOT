@@ -59,6 +59,44 @@ async function testRemove() {
     await execute(interaction);
 }
 
+async function testLeaderboard() {
+    const { execute } = require('./commands/leaderboard.js');
+    const interaction = {
+        deferReply: async () => {},
+        editReply: async (message) => {
+            console.log('Leaderboard command output:', message.content);
+        },
+        isMessageComponent: () => false,
+    };
+    await execute(interaction);
+}
+
+async function testListUser() {
+    const { execute } = require('./commands/list.js');
+    const interaction = {
+        user: {
+            id: '12345',
+            tag: 'testuser#0000'
+        },
+        client: {},
+        options: {
+            getString: (option) => {
+                if (option === 'user') return 'testuser';
+                return null;
+            }
+        },
+        deferReply: async () => {},
+        editReply: async (message) => {
+            console.log('List command output (user filter):', message.content);
+        },
+        isMessageComponent: () => false,
+        type: 0
+    };
+    await execute(interaction);
+}
+
 setTimeout(async () => {
     await testAddWorld();
+    await testLeaderboard();
+    await testListUser();
 }, 2000);

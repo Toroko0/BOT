@@ -171,11 +171,17 @@ async function showWorldsList(interaction, page = 1, currentFilters = null) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('list')
-        .setDescription('View your tracked Growtopia worlds or public worlds in this server.'),
+        .setDescription('View the tracked Growtopia worlds.')
+        .addStringOption(option =>
+            option.setName('user')
+                .setDescription('Filter the list by a specific user.')
+                .setRequired(false)),
     async execute(interaction) {
         logger.info(`[list.js] Entered execute function for /list, User: ${interaction.user.tag}, Interaction ID: ${interaction.id}`);
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        await showWorldsList(interaction, 1, null);
+        const username = interaction.options.getString('user');
+        const filters = username ? { added_by_username: username } : null;
+        await showWorldsList(interaction, 1, filters);
     },
     async handleButton(interaction, params) {
         const cooldown = utils.checkCooldown(interaction.user.id, 'list_button');
