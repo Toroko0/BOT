@@ -79,11 +79,6 @@ async function setupInteractionHandler(client) {
             client.cooldowns.set(interaction.user.id, validTimestamps);
         }
 
-        // --- Add/Update User in DB (run silently in background, don't await) ---
-        db.addUser(interaction.user.id, interaction.user.username)
-            .then(() => { /* logger.debug(`[DB] User ${interaction.user.id} ensured.`); */ })
-            .catch(e => logger.warn(`[DB] Failed to add/update user ${interaction.user.id} during interaction: ${e.message}`));
-
         try {
             // --- Autocomplete Handling ---
             if (interaction.type === InteractionType.ApplicationCommandAutocomplete) {
