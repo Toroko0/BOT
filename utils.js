@@ -263,11 +263,11 @@ function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset, targetU
   const tableData = [];
   const now = new Date(); // Current time in UTC
   const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const isAnotherUser = targetUsername && worlds.some(w => w.added_by_username.toLowerCase() !== targetUsername.toLowerCase());
+  const showAddedBy = !targetUsername;
 
   if (viewMode === 'pc') {
       const headers = ['WORLD', 'OWNED', 'LEFT', 'EXPIRES ON', 'LOCK'];
-      if (isAnotherUser) headers.push('ADDED BY');
+      if (showAddedBy) headers.push('ADDED BY');
       tableData.push(headers);
 
     for (const world of worlds) {
@@ -291,12 +291,12 @@ function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset, targetU
         displayExpiryDate,
         lockTypeDisplay
         ];
-        if (isAnotherUser) row.push(world.added_by_username);
+        if (showAddedBy) row.push(world.added_by_username);
         tableData.push(row);
     }
   } else { // Mobile Mode
       const headers = ['WORLD', 'OWNED'];
-      if (isAnotherUser) headers.push('BY');
+      if (showAddedBy) headers.push('BY');
       tableData.push(headers);
     for (const world of worlds) {
       const expiryDate = new Date(world.expiry_date); // Assuming expiry_date is UTC
@@ -314,7 +314,7 @@ function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset, targetU
         `(${lockTypeChar}) ${world.name.toUpperCase()}`,
         days_owned.toString()
         ];
-        if (isAnotherUser) row.push(world.added_by_username);
+        if (showAddedBy) row.push(world.added_by_username);
         tableData.push(row);
     }
   }

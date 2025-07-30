@@ -401,6 +401,74 @@ async function getUserStats(username) {
     }
 }
 
+async function getAllFilteredWorlds(userId, filters) {
+    try {
+        let query = knexInstance('worlds').select('*');
+
+        if (filters.prefix) {
+            const prefixLower = filters.prefix.toLowerCase();
+            query.andWhereRaw('lower(name) LIKE ?', [`${prefixLower}%`]);
+        }
+
+        if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') {
+            query.andWhere('lock_type', filters.lockType);
+        }
+
+        if (filters.expiryDay) {
+            const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
+            const dayNum = dayMap[filters.expiryDay.toLowerCase()];
+            if (dayNum !== undefined) {
+                query.andWhereRaw("strftime('%w', date(expiry_date)) = ?", [dayNum.toString()]);
+            }
+        }
+
+        if (filters.daysOwned !== undefined && filters.daysOwned !== null) {
+            const daysOwnedInput = parseInt(filters.daysOwned);
+            if (!isNaN(daysOwnedInput)) {
+                if (daysOwnedInput === 180) {
+                    const todayEnd = new Date();
+                    todayEnd.setUTCHours(23, 59, 59, 999);
+                    query.andWhere('expiry_date', '<=', todayEnd.toISOString());
+                } else if (daysOwnedInput >= 0 && daysOwnedInput < 180) {
+                    const targetDaysLeft = 180 - daysOwnedInput;
+                    const targetDate = new Date();
+                    targetDate.setUTCHours(0,0,0,0);
+                    targetDate.setUTCDate(targetDate.getUTCDate() + targetDaysLeft);
+                    const targetStartDateISO = targetDate.toISOString();
+                    const targetEndDate = new Date(targetDate);
+                    targetEndDate.setUTCDate(targetDate.getUTCDate() + 1);
+                    const targetEndDateISO = targetEndDate.toISOString();
+                    query.andWhere('expiry_date', '>=', targetStartDateISO)
+                         .andWhere('expiry_date', '<', targetEndDateISO);
+                }
+            }
+        }
+
+        if (filters.nameLengthMin !== undefined && filters.nameLengthMin !== null) {
+            const minLength = parseInt(filters.nameLengthMin);
+            if (!isNaN(minLength) && minLength > 0) {
+                query.andWhereRaw('LENGTH(name) >= ?', [minLength]);
+            }
+        }
+        if (filters.nameLengthMax !== undefined && filters.nameLengthMax !== null) {
+            const maxLength = parseInt(filters.nameLengthMax);
+            if (!isNaN(maxLength) && maxLength > 0) {
+                query.andWhereRaw('LENGTH(name) <= ?', [maxLength]);
+            }
+        }
+
+        if (filters.added_by_username) {
+            query.andWhere('added_by_username', filters.added_by_username);
+        }
+
+        const worlds = await query;
+        return worlds;
+    } catch (error) {
+        logger.error(`[DB] Error in getAllFilteredWorlds (Filters: ${JSON.stringify(filters)}):`, error);
+        return [];
+    }
+}
+
 // --- Module Exports ---
 module.exports = {
   knex: knexInstance,
@@ -428,4 +496,5 @@ module.exports = {
   updateUserViewMode,
   updateUserReminderSettings,
   getUserStats,
+  getAllFilteredWorlds,
 };

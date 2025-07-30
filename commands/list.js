@@ -8,7 +8,7 @@ const db = require('../database.js');
 const utils = require('../utils.js');
 const logger = require('../utils/logger.js');
 const { table, getBorderCharacters } = require('table');
-const { showWorldInfo } = require('./info.js');
+const infoCommand = require('./info.js');
 const { showAddWorldModal } = require('../commands/addworld.js');
 const CONSTANTS = require('../utils/constants.js');
 // const { showLockedWorldsList } = require('./lock.js'); // Removed this line
@@ -182,7 +182,7 @@ module.exports = {
         logger.info(`[list.js] Entered execute function for /list, User: ${interaction.user.tag}, Interaction ID: ${interaction.id}`);
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const username = interaction.options.getString('user');
-        const filters = username ? { added_by_username: username } : { added_by_username: interaction.user.username };
+        const filters = username ? { added_by_username: username } : {};
         await showWorldsList(interaction, 1, filters, username);
     },
     async handleButton(interaction, params) {
@@ -245,7 +245,7 @@ module.exports = {
             if (!world || (world.user_id !== interaction.user.id && !world.is_public)) {
                 return interaction.reply({ content: '❌ World not found or you lack permission.', flags: MessageFlags.Ephemeral });
             }
-            await showWorldInfo(interaction, world);
+            await infoCommand.showWorldInfo(interaction, world);
         }
     },
     async handleModal(interaction, params) {
@@ -289,7 +289,7 @@ module.exports = {
             }
             case 'info': {
                 if (!world) return interaction.editReply({ content: `❌ World "**${identifier}**" not found.` });
-                await showWorldInfo(interaction, world);
+                await infoCommand.showWorldInfo(interaction, world);
                 break;
             }
             default:

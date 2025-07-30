@@ -142,7 +142,7 @@ async function displaySearchResults(interaction, filters, currentPageWorlds, tot
   actionRow.addComponents(
     new ButtonBuilder().setCustomId('list_button_view_private_1').setLabel('Back to List').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('search_button_new').setLabel('New Search').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('search_button_export_all').setLabel('📄 Export All Names').setStyle(ButtonStyle.Success)
+    new ButtonBuilder().setCustomId('search_export_all').setLabel('📄 Export All Names').setStyle(ButtonStyle.Success)
   );
   components.push(actionRow);
 
@@ -205,7 +205,7 @@ module.exports = {
   },
 
   async handleButton(interaction, params) {
-    const action = params[0];
+    const action = params[0] === 'export' ? 'export_all' : params[0];
     const currentPage = parseInt(params[1] || '1');
     const replyOpts = { flags: 1 << 6 };
     const cooldown = utils.checkCooldown(interaction.user.id, 'search_btn', 1);

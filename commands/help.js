@@ -24,22 +24,12 @@ module.exports = {
     // Create button row with corrected custom IDs
     const row = new ActionRowBuilder()
       .addComponents(
-        // Calls addworld.js handler
-        new ButtonBuilder()
-          .setCustomId('addworld_button_show') // Command: addworld, Type: button, Action: show
-          .setLabel('➕ Add World')
-          .setStyle(ButtonStyle.Success),
         // Calls list.js handler to show private list page 1
         new ButtonBuilder()
           // Using 'view' action here just for logical separation in list handler if needed, could also be just 'private_1'
           .setCustomId('list_button_view_private_1') // Command: list, Type: button, Action: view, Param1: private, Param2: 1
           .setLabel('View My Worlds')
-          .setStyle(ButtonStyle.Primary),
-         // Calls leaderboard.js handler to show leaderboard
-        new ButtonBuilder()
-          .setCustomId('leaderboard_button_view')
-          .setLabel('📊 View Leaderboard')
-          .setStyle(ButtonStyle.Secondary)
+          .setStyle(ButtonStyle.Primary)
       );
 
     // *** FIX AREA: Ensure no ```javascript inside this template literal ***
