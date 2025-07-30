@@ -158,32 +158,36 @@ async function findWorldByIdentifier(identifier) {
 
 async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10) {
     logger.debug(`[DB] getFilteredWorlds called - Filters: ${JSON.stringify(filters)}, Page: ${page}, PageSize: ${pageSize}`);
+
+    // Ensure filters is an object to prevent errors on property access
+    const effectiveFilters = filters || {};
+
     try {
         let query = knexInstance('worlds').select('*');
         let countQueryBase = knexInstance('worlds');
 
-        if (filters.prefix) {
-            const prefixLower = filters.prefix.toLowerCase();
+        if (effectiveFilters.prefix) {
+            const prefixLower = effectiveFilters.prefix.toLowerCase();
             query.andWhereRaw('lower(name) LIKE ?', [`${prefixLower}%`]);
             countQueryBase.andWhereRaw('lower(name) LIKE ?', [`${prefixLower}%`]);
         }
 
-        if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') {
-            query.andWhere('lock_type', filters.lockType);
-            countQueryBase.andWhere('lock_type', filters.lockType);
+        if (effectiveFilters.lockType === 'mainlock' || effectiveFilters.lockType === 'outlock') {
+            query.andWhere('lock_type', effectiveFilters.lockType);
+            countQueryBase.andWhere('lock_type', effectiveFilters.lockType);
         }
 
-        if (filters.expiryDay) {
+        if (effectiveFilters.expiryDay) {
             const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
-            const dayNum = dayMap[filters.expiryDay.toLowerCase()];
+            const dayNum = dayMap[effectiveFilters.expiryDay.toLowerCase()];
             if (dayNum !== undefined) {
                 query.andWhereRaw("strftime('%w', date(expiry_date)) = ?", [dayNum.toString()]);
                 countQueryBase.andWhereRaw("strftime('%w', date(expiry_date)) = ?", [dayNum.toString()]);
             }
         }
 
-        if (filters.daysOwned !== undefined && filters.daysOwned !== null) {
-            const daysOwnedInput = parseInt(filters.daysOwned);
+        if (effectiveFilters.daysOwned !== undefined && effectiveFilters.daysOwned !== null) {
+            const daysOwnedInput = parseInt(effectiveFilters.daysOwned);
             if (!isNaN(daysOwnedInput)) {
                 if (daysOwnedInput === 180) {
                     const todayEnd = new Date();
@@ -207,24 +211,24 @@ async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10) {
             }
         }
 
-        if (filters.nameLengthMin !== undefined && filters.nameLengthMin !== null) {
-            const minLength = parseInt(filters.nameLengthMin);
+        if (effectiveFilters.nameLengthMin !== undefined && effectiveFilters.nameLengthMin !== null) {
+            const minLength = parseInt(effectiveFilters.nameLengthMin);
             if (!isNaN(minLength) && minLength > 0) {
                 query.andWhereRaw('LENGTH(name) >= ?', [minLength]);
                 countQueryBase.andWhereRaw('LENGTH(name) >= ?', [minLength]);
             }
         }
-        if (filters.nameLengthMax !== undefined && filters.nameLengthMax !== null) {
-            const maxLength = parseInt(filters.nameLengthMax);
+        if (effectiveFilters.nameLengthMax !== undefined && effectiveFilters.nameLengthMax !== null) {
+            const maxLength = parseInt(effectiveFilters.nameLengthMax);
             if (!isNaN(maxLength) && maxLength > 0) {
                 query.andWhereRaw('LENGTH(name) <= ?', [maxLength]);
                 countQueryBase.andWhereRaw('LENGTH(name) <= ?', [maxLength]);
             }
         }
 
-        if (filters.added_by_username) {
-            query.andWhere('added_by_username', filters.added_by_username);
-            countQueryBase.andWhere('added_by_username', filters.added_by_username);
+        if (effectiveFilters.added_by_username) {
+            query.andWhere('added_by_username', effectiveFilters.added_by_username);
+            countQueryBase.andWhere('added_by_username', effectiveFilters.added_by_username);
         }
 
         const totalResult = await countQueryBase.count({ total: '*' }).first();
