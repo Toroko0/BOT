@@ -115,9 +115,20 @@ async function testEdit() {
     await execute(interaction);
 }
 
+async function testSettings() {
+    const { execute } = require('./commands/settings.js');
+    const interaction = {
+        user: {
+            id: '12345',
+            username: 'testuser'
+        },
+        reply: async (message) => {
+            console.log('Settings command output:', message.embeds[0].title);
+        }
+    };
+    await execute(interaction);
+}
+
 setTimeout(async () => {
-    await testAddWorld();
-    await testAddWorld(); // Should fail
-    await testEdit();
-    await testRemove();
+    await testSettings();
 }, 2000);

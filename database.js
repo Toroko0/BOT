@@ -279,6 +279,104 @@ async function getLeaderboard(page = 1, pageSize = 10) {
     }
 }
 
+async function addUser(userId, username) {
+  try {
+    const existingUser = await knexInstance('users').where({ id: userId }).first();
+    if (existingUser) {
+      if (existingUser.username !== username) {
+        await knexInstance('users').where({ id: userId }).update({ username: username });
+        logger.debug(`[DB] Updated username for user ${userId} to ${username}`);
+      }
+      return true;
+    } else {
+      await knexInstance('users').insert({
+        id: userId,
+        username: username,
+      });
+      logger.info(`[DB] Added new user ${userId} (${username})`);
+      return true;
+    }
+  } catch (error) { logger.error(`[DB] Error adding/updating user ${userId}:`, error); return false; }
+}
+
+async function getUserPreferences(userId) {
+    try {
+        const user = await knexInstance('users').where({ id: userId }).first();
+        if (user) {
+            return {
+                timezone_offset: user.timezone_offset,
+                view_mode: user.view_mode,
+                reminder_enabled: !!user.reminder_enabled,
+                reminder_time_utc: user.reminder_time_utc
+            };
+        }
+        return {
+            timezone_offset: 0.0,
+            view_mode: 'pc',
+            reminder_enabled: false,
+            reminder_time_utc: null
+        };
+    } catch (error) {
+        logger.error(`[DB] Error getting preferences for user ${userId}:`, error);
+        return {
+            timezone_offset: 0.0,
+            view_mode: 'pc',
+            reminder_enabled: false,
+            reminder_time_utc: null
+        };
+    }
+}
+
+async function updateUserTimezone(userId, timezoneOffset) {
+    try {
+        const offset = parseFloat(timezoneOffset);
+        if (isNaN(offset) || offset < -12.0 || offset > 14.0) {
+            return false;
+        }
+        await knexInstance('users').where({ id: userId }).update({ timezone_offset: offset });
+        logger.info(`[DB] Updated timezone for user ${userId} to ${offset}`);
+        return true;
+    } catch (error) {
+        logger.error(`[DB] Error updating timezone for user ${userId}:`, error);
+        return false;
+    }
+}
+
+async function updateUserViewMode(userId, viewMode) {
+    try {
+        if (viewMode !== 'pc' && viewMode !== 'phone') {
+            return false;
+        }
+        await knexInstance('users').where({ id: userId }).update({ view_mode: viewMode });
+        logger.info(`[DB] Updated view mode for user ${userId} to ${viewMode}`);
+        return true;
+    } catch (error) {
+        logger.error(`[DB] Error updating view mode for user ${userId}:`, error);
+        return false;
+    }
+}
+
+async function updateUserReminderSettings(userId, reminderEnabled, reminderTimeUtc) {
+    try {
+        if (reminderEnabled && reminderTimeUtc) {
+            if (!/^\d{2}:\d{2}$/.test(reminderTimeUtc)) {
+                 return false;
+            }
+        }
+        const effectiveReminderTimeUtc = reminderEnabled ? reminderTimeUtc : null;
+
+        await knexInstance('users').where({ id: userId }).update({
+            reminder_enabled: !!reminderEnabled,
+            reminder_time_utc: effectiveReminderTimeUtc
+        });
+        logger.info(`[DB] Updated reminder settings for user ${userId} to enabled: ${!!reminderEnabled}, time: ${effectiveReminderTimeUtc}`);
+        return true;
+    } catch (error) {
+        logger.error(`[DB] Error updating reminder settings for user ${userId}:`, error);
+        return false;
+    }
+}
+
 // --- Module Exports ---
 module.exports = {
   knex: knexInstance,
@@ -300,4 +398,9 @@ module.exports = {
   getExpiringWorldCount,
   getMostRecentWorld,
   getLeaderboard,
+  addUser,
+  getUserPreferences,
+  updateUserTimezone,
+  updateUserViewMode,
+  updateUserReminderSettings,
 };
