@@ -141,7 +141,7 @@ async function showWorldInfo(interaction, world) {
   components.push(generalButtonsRow);
 
   // Show management buttons only if the user owns the world
-  if (world.user_id === interaction.user.id) {
+  if (world.added_by_username === interaction.user.username) {
     const mgmtButtonsRow = new ActionRowBuilder();
     // Share button: Enabled only if private OR public in another server
     mgmtButtonsRow.addComponents(
@@ -219,7 +219,7 @@ module.exports = {
     // Defer early as DB lookup might take time
     await interaction.deferReply(replyOpts);
 
-    const world = await db.findWorldByIdentifier(interaction.user.id, worldIdentifier, interaction.guildId);
+    const world = await db.findWorldByIdentifier(worldIdentifier);
 
     if (!world) {
         await interaction.editReply({ content: `❌ World/ID "**${worldIdentifier}**" not found or not accessible.` });

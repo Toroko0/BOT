@@ -58,7 +58,7 @@ async function showListFilterModal(interaction, currentListType) {
 }
 
 // --- Core List Display Function ---
-async function showWorldsList(interaction, page = 1, currentFilters = null) {
+async function showWorldsList(interaction, page = 1, currentFilters = null, targetUsername = null) {
     // Retained filter management from original
     interaction.client.activeListFilters = interaction.client.activeListFilters || {};
     if (currentFilters) {
@@ -67,10 +67,11 @@ async function showWorldsList(interaction, page = 1, currentFilters = null) {
         delete interaction.client.activeListFilters[interaction.user.id];
     }
 
-    const viewMode = 'pc'; // Default to PC view
-    const timezoneOffset = 0.0; // Default to UTC
+    const userPreferences = await db.getUserPreferences(interaction.user.id);
+    const viewMode = userPreferences.view_mode || 'pc';
+    const timezoneOffset = userPreferences.timezone_offset || 0.0;
 
-    logger.info(`[list.js] showWorldsList called - Page: ${page}, Filters: ${JSON.stringify(currentFilters)}`);
+    logger.info(`[list.js] showWorldsList called - Page: ${page}, Filters: ${JSON.stringify(currentFilters)}, Target: ${targetUsername}`);
 
     const isUpdate = interaction.isMessageComponent() || interaction.type === InteractionType.ModalSubmit;
     if (isUpdate && !interaction.deferred && !interaction.replied) {
@@ -130,7 +131,7 @@ async function showWorldsList(interaction, page = 1, currentFilters = null) {
     }
     
     // Retained the detailed, original table generation and component building logic
-    const { data, config } = utils.formatWorldsToTable(worlds, viewMode, 'public', timezoneOffset);
+    const { data, config } = utils.formatWorldsToTable(worlds, viewMode, 'public', timezoneOffset, targetUsername);
     let tableOutput = '```\n' + table(data, config) + '\n```';
     if (tableOutput.length > 1900) {
         tableOutput = tableOutput.substring(0, tableOutput.lastIndexOf('\n', 1900)) + '\n... (Table truncated) ...```';
@@ -141,10 +142,11 @@ async function showWorldsList(interaction, page = 1, currentFilters = null) {
     components.push(utils.createPaginationRow(`list_button_page`, page, totalPages));
     
     // Action Row 1
+    const isOwnList = !targetUsername || targetUsername.toLowerCase() === interaction.user.username.toLowerCase();
     const actionRow1 = new ActionRowBuilder();
     actionRow1.addComponents(
-        new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('list_button_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add').setStyle(ButtonStyle.Success).setDisabled(!isOwnList),
+        new ButtonBuilder().setCustomId('list_button_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger).setDisabled(!isOwnList),
         new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(`list_button_export_${page}`).setLabel('📄 Export').setStyle(ButtonStyle.Secondary)
     );
@@ -180,8 +182,8 @@ module.exports = {
         logger.info(`[list.js] Entered execute function for /list, User: ${interaction.user.tag}, Interaction ID: ${interaction.id}`);
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const username = interaction.options.getString('user');
-        const filters = username ? { added_by_username: username } : null;
-        await showWorldsList(interaction, 1, filters);
+        const filters = username ? { added_by_username: username } : { added_by_username: interaction.user.username };
+        await showWorldsList(interaction, 1, filters, username);
     },
     async handleButton(interaction, params) {
         const cooldown = utils.checkCooldown(interaction.user.id, 'list_button');
@@ -189,11 +191,12 @@ module.exports = {
 
         const [action, ...args] = params;
         const userActiveFilters = interaction.client.activeListFilters?.[interaction.user.id] || null;
+        const targetUsername = userActiveFilters?.added_by_username;
 
         switch (action) {
             case 'page': {
                 const [pageStr] = args;
-                await showWorldsList(interaction, parseInt(pageStr) || 1, userActiveFilters);
+                await showWorldsList(interaction, parseInt(pageStr) || 1, userActiveFilters, targetUsername);
                 break;
             }
             case 'remove':
@@ -253,7 +256,8 @@ module.exports = {
             await interaction.deferUpdate();
             const filters = utils.parseFilterModal(interaction);
             logger.info(`[list.js] Applying filters: ${JSON.stringify(filters)}`);
-            await showWorldsList(interaction, 1, filters);
+            const targetUsername = filters.added_by_username;
+            await showWorldsList(interaction, 1, filters, targetUsername);
             return;
         }
         
