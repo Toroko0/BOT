@@ -82,6 +82,7 @@ module.exports = {
         .setMaxLength(24)),
   showAddWorldModal, // Add this line to export the function
   async execute(interaction) {
+    logger.info('[addworld.js] Executing addworld command');
     const worldName = interaction.options.getString('world');
     const daysOwned = interaction.options.getInteger('days');
     const lockType = interaction.options.getString('locktype');
@@ -96,26 +97,18 @@ module.exports = {
         return;
       }
 
-      // Add user silently first (handled by interaction handler already, but safe to keep)
-      // await db.addUser(interaction.user.id, interaction.user.username);
-
       // Add the world
+      logger.info('[addworld.js] Calling db.addWorld');
       const result = await db.addWorld(
-        interaction.user.id,
         worldName,
         daysOwned || 1, // Default to 1 if not provided
         lockType || 'mainlock', // Default to mainlock if not provided
         customId,
-        interaction.user.username,
-        interaction.guildId // Pass guildId, can be null
+        interaction.user.username
       );
+      logger.info('[addworld.js] db.addWorld returned', result);
 
       if (result.success) {
-        const addedWorld = await db.getWorldByName(worldName, interaction.user.id);
-        if (addedWorld) {
-          // Use Knex-based logHistory now
-          await logHistory(addedWorld.id, interaction.user.id, 'add', `Added world ${addedWorld.name.toUpperCase()}`);
-        }
         invalidateSearchCache();
         await interaction.reply({ ...replyOpts, content: `✅ ${result.message}` }); // Use message from DB function
       } else {
@@ -177,26 +170,20 @@ module.exports = {
 
         try {
           const result = await db.addWorld(
-            interaction.user.id,
             worldName,
             daysOwned, // Use validated number
             normalizedLockType,
             customId || null, // Pass null if empty
-            interaction.user.username,
-            interaction.guildId // Pass guildId, can be null
+            interaction.user.username
           );
 
           if (result.success) {
-            const addedWorld = await db.getWorldByName(worldName, interaction.user.id);
-            if (addedWorld) {
-              await logHistory(addedWorld.id, interaction.user.id, 'add', `Added world ${addedWorld.name.toUpperCase()} via modal`);
-            }
             invalidateSearchCache();
             const row = new ActionRowBuilder()
               .addComponents(
                 new ButtonBuilder()
-                  .setCustomId('list_button_view_private_1')
-                  .setLabel('View My Worlds')
+                  .setCustomId('list_button_view_1')
+                  .setLabel('View Worlds')
                   .setStyle(ButtonStyle.Primary)
               );
             await interaction.reply({ ...replyOpts, content: `✅ ${result.message}`, components: [row] });
@@ -207,8 +194,8 @@ module.exports = {
           }
         } catch (error) {
           logger.error('[addworld.js] Error during addWorld via modal:', error);
-          if (error.message && error.message.includes('SQLITE_CONSTRAINT: UNIQUE constraint failed: worlds.name, worlds.user_id')) {
-            await interaction.reply({ ...replyOpts, content: "❌ You already have a world with this name. Please choose a different name." });
+          if (error.message && error.message.includes('SQLITE_CONSTRAINT: UNIQUE constraint failed: worlds.name')) {
+            await interaction.reply({ ...replyOpts, content: "❌ A world with this name already exists. Please choose a different name." });
           } else {
             await interaction.reply({ ...replyOpts, content: '❌ An unexpected error occurred while adding the world. Please try again later.' });
           }

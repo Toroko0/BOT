@@ -6,7 +6,6 @@ const path = require('path');
 const db = require('./database.js'); // Knex instance from database.js
 const logger = require('./utils/logger.js');
 const { DateTime } = require('luxon');
-const reminderScheduler = require('./services/reminderScheduler.js');
 const { deployCommands } = require('./deploy-commands.js'); // Updated for renamed function
 
 // --- Client Setup ---
@@ -108,10 +107,6 @@ client.once(Events.ClientReady, async c => {
         logger.info('[Startup] In-process slash command deployment complete.');
 
         setupScheduledTasks();
-
-        logger.info('[Startup] Starting reminder scheduler...');
-        reminderScheduler.start(c);
-        logger.info('[Startup] Reminder scheduler started.');
 
     } catch (err) {
         logger.error('[Startup] FATAL: Error during startup process (migrations, command deployment, or schedulers):', err);

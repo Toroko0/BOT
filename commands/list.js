@@ -58,7 +58,7 @@ async function showListFilterModal(interaction, currentListType) {
 }
 
 // --- Core List Display Function ---
-async function showWorldsList(interaction, type = 'private', page = 1, currentFilters = null) {
+async function showWorldsList(interaction, page = 1, currentFilters = null) {
     // Retained filter management from original
     interaction.client.activeListFilters = interaction.client.activeListFilters || {};
     if (currentFilters) {
@@ -67,26 +67,19 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
         delete interaction.client.activeListFilters[interaction.user.id];
     }
 
-    const userPrefs = await db.getUserPreferences(interaction.user.id);
-    const viewMode = userPrefs.view_mode || 'pc';
-    const timezoneOffset = userPrefs.timezone_offset || 0.0;
-    // const userTeam = await db.getUserTeam(interaction.user.id); // Removed this line
+    const viewMode = 'pc'; // Default to PC view
+    const timezoneOffset = 0.0; // Default to UTC
 
-    logger.info(`[list.js] showWorldsList called - Type: ${type}, Page: ${page}, Filters: ${JSON.stringify(currentFilters)}`);
+    logger.info(`[list.js] showWorldsList called - Page: ${page}, Filters: ${JSON.stringify(currentFilters)}`);
 
     const isUpdate = interaction.isMessageComponent() || interaction.type === InteractionType.ModalSubmit;
     if (isUpdate && !interaction.deferred && !interaction.replied) {
         try { await interaction.deferUpdate(); } catch (e) { logger.error(`[list.js] Defer update failed: ${e.message}`); return; }
     }
 
-    if (!interaction.guildId) type = 'private';
-
     let dbResult = { worlds: [], total: 0 };
     try {
-        // Using the simplified, single database call from the new file
-        const filtersForDb = { ...currentFilters, guildId: type === 'public' ? interaction.guildId : null };
-        const userIdForDb = type === 'private' ? interaction.user.id : null;
-        dbResult = await db.getFilteredWorlds(userIdForDb, filtersForDb, page, CONSTANTS.PAGE_SIZE);
+        dbResult = await db.getFilteredWorlds(currentFilters, page, CONSTANTS.PAGE_SIZE);
     } catch (error) {
         // CRITICAL: Retained the robust error handling from the original file
         logger.error(`[list.js] Error fetching worlds:`, error?.stack || error);
@@ -123,29 +116,21 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
     }
 
     if (worlds.length === 0) {
-        let emptyMsg = `No ${type} worlds found.`;
-        if (currentFilters && Object.keys(currentFilters).length > 0) emptyMsg = `No ${type} worlds match your filters. Try adjusting them.`;
-        else if (type === 'private') emptyMsg = "You haven't added any worlds yet. Use `/addworld` or the button below!";
-        else if (interaction.guildId) emptyMsg = `There are no public worlds shared in this server yet.`;
+        let emptyMsg = `No worlds found.`;
+        if (currentFilters && Object.keys(currentFilters).length > 0) emptyMsg = `No worlds match your filters. Try adjusting them.`;
+        else emptyMsg = "The list is empty. Use `/addworld` or the button below to add a world!";
         
         const emptyRow = new ActionRowBuilder();
-        if (type === 'private') emptyRow.addComponents(new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add World').setStyle(ButtonStyle.Success));
-        if (interaction.guildId) {
-            const target = type === 'private' ? 'public' : 'private';
-            emptyRow.addComponents(new ButtonBuilder().setCustomId(`list_button_switch_${target}_1`).setLabel(`🔄 View ${target === 'public' ? 'Public' : 'Your'} Worlds`).setStyle(ButtonStyle.Secondary));
-        }
-        emptyRow.addComponents(new ButtonBuilder().setCustomId(`list_button_filtershow_${type}`).setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary));
-        // if (userTeam && type === 'private') { // Removed team button
-        //     emptyRow.addComponents(new ButtonBuilder().setCustomId('list_button_viewteam').setLabel('🏢 View Team Worlds').setStyle(ButtonStyle.Secondary));
-        // }
+        emptyRow.addComponents(new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add World').setStyle(ButtonStyle.Success));
+        emptyRow.addComponents(new ButtonBuilder().setCustomId(`list_button_filtershow`).setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary));
 
-        const opts = { content: emptyMsg, components: emptyRow.components.length > 0 ? [emptyRow] : [], flags: MessageFlags.Ephemeral };
+        const opts = { content: emptyMsg, components: [emptyRow], flags: MessageFlags.Ephemeral };
         await interaction.editReply(opts);
         return;
     }
     
     // Retained the detailed, original table generation and component building logic
-    const { data, config } = utils.formatWorldsToTable(worlds, viewMode, type, timezoneOffset);
+    const { data, config } = utils.formatWorldsToTable(worlds, viewMode, 'public', timezoneOffset);
     let tableOutput = '```\n' + table(data, config) + '\n```';
     if (tableOutput.length > 1900) {
         tableOutput = tableOutput.substring(0, tableOutput.lastIndexOf('\n', 1900)) + '\n... (Table truncated) ...```';
@@ -153,53 +138,32 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
 
     const components = [];
     // Navigation Row (using a utility for cleaner code)
-    components.push(utils.createPaginationRow(`list_button_page_${type}`, page, totalPages));
+    components.push(utils.createPaginationRow(`list_button_page`, page, totalPages));
     
     // Action Row 1
     const actionRow1 = new ActionRowBuilder();
-    if (type === 'private') {
-        actionRow1.addComponents(
-            new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add').setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId('list_button_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary)
-            // Removed: new ButtonBuilder().setCustomId('list_button_lock').setLabel('🔒 Lock').setStyle(ButtonStyle.Secondary)
-        );
-    } else {
-        actionRow1.addComponents(new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary));
-    }
-    actionRow1.addComponents(new ButtonBuilder().setCustomId(`list_button_export_${type}_${page}`).setLabel('📄 Export').setStyle(ButtonStyle.Secondary));
+    actionRow1.addComponents(
+        new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('list_button_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`list_button_export_${page}`).setLabel('📄 Export').setStyle(ButtonStyle.Secondary)
+    );
     components.push(actionRow1);
 
     // Action Row 2
     const actionRow2 = new ActionRowBuilder();
-    if (interaction.guildId) {
-        const target = type === 'private' ? 'public' : 'private';
-        actionRow2.addComponents(
-            new ButtonBuilder().setCustomId(`list_button_${type === 'private' ? 'share' : 'unshare'}`).setLabel(type === 'private' ? '🔗 Share' : '🔓 Unshare').setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId(`list_button_switch_${target}_1`).setLabel(`🔄 View ${target === 'public' ? 'Public' : 'Your'} Worlds`).setStyle(ButtonStyle.Secondary)
-        );
-    }
     actionRow2.addComponents(
-        new ButtonBuilder().setCustomId(`list_button_filtershow_${type}`).setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('list_button_settings').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary)
-        // Removed: new ButtonBuilder().setCustomId('list_button_viewlocks').setLabel('🔐 View Locks').setStyle(ButtonStyle.Primary)
+        new ButtonBuilder().setCustomId(`list_button_filtershow`).setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary)
     );
     if (actionRow2.components.length > 0) components.push(actionRow2);
-
-    // Action Row 3 - Team button removed
-    // const actionRow3 = new ActionRowBuilder();
-    // if (userTeam && userTeam.id && type === 'private') { // Ensure userTeam.id exists
-    //     actionRow3.addComponents(new ButtonBuilder().setCustomId(`list_button_viewteam_${userTeam.id}`).setLabel('🏢 Team Worlds').setStyle(ButtonStyle.Secondary));
-    // }
-    // if (actionRow3.components.length > 0) components.push(actionRow3);
     
     // Select Menu
-    if (viewMode === 'pc' && worlds.length > 0 && type === 'private') {
+    if (viewMode === 'pc' && worlds.length > 0) {
         const selectOptions = worlds.slice(0, 25).map(world => utils.createWorldSelectOption(world, timezoneOffset));
         components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('list_select_info').setPlaceholder('📋 Select a world for details').addOptions(selectOptions)));
     }
   
-    const finalContent = `${tableOutput}\n📊 Total ${type} worlds: ${totalWorlds}`;
+    const finalContent = `${tableOutput}\n📊 Total worlds: ${totalWorlds}`;
     const finalOpts = { content: finalContent, components, flags: MessageFlags.Ephemeral };
     await interaction.editReply(finalOpts);
 }
@@ -207,11 +171,17 @@ async function showWorldsList(interaction, type = 'private', page = 1, currentFi
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('list')
-        .setDescription('View your tracked Growtopia worlds or public worlds in this server.'),
+        .setDescription('View the tracked Growtopia worlds.')
+        .addStringOption(option =>
+            option.setName('user')
+                .setDescription('Filter the list by a specific user.')
+                .setRequired(false)),
     async execute(interaction) {
         logger.info(`[list.js] Entered execute function for /list, User: ${interaction.user.tag}, Interaction ID: ${interaction.id}`);
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        await showWorldsList(interaction, 'private', 1, null);
+        const username = interaction.options.getString('user');
+        const filters = username ? { added_by_username: username } : null;
+        await showWorldsList(interaction, 1, filters);
     },
     async handleButton(interaction, params) {
         const cooldown = utils.checkCooldown(interaction.user.id, 'list_button');
@@ -222,67 +192,26 @@ module.exports = {
 
         switch (action) {
             case 'page': {
-                const [type, pageStr] = args;
-                await showWorldsList(interaction, type, parseInt(pageStr) || 1, userActiveFilters);
-                break;
-            }
-            case 'switch': {
-                const [type, pageStr] = args;
-                await showWorldsList(interaction, type, parseInt(pageStr) || 1, null); // Clear filters on switch
+                const [pageStr] = args;
+                await showWorldsList(interaction, parseInt(pageStr) || 1, userActiveFilters);
                 break;
             }
             case 'remove':
             case 'info':
-            case 'share':
-            case 'unshare':
                 await showSimpleModal(interaction, action);
                 break;
-            // case 'lock': // Removed this case
-            //     await showLockWorldModal(interaction); // Removed this line
-            //     break;
             case 'add':
                 await showAddWorldModal(interaction);
                 break;
             case 'filtershow': {
-                const [type] = args;
-                await showListFilterModal(interaction, type);
+                await showListFilterModal(interaction);
                 break;
             }
-            case 'settings': {
-                const { getSettingsReplyOptions } = require('./settings.js');
-                const settingsReply = await getSettingsReplyOptions(interaction.user.id);
-                await interaction.reply(settingsReply);
-                break;
-            }
-            // case 'viewlocks': // Removed this case
-            //     await showLockedWorldsList(interaction, 1, {}); // Removed this line
-            //     break;
-            // case 'viewteam': { // Removed this case
-            //     const teamId = args[0];
-            //     if (!teamId) {
-            //         logger.error('[list.js] viewteam button pressed but teamId is missing from customId args.');
-            //         // Attempt to fetch user's team as a fallback, though this indicates an issue with button ID generation
-            //         const userTeam = await db.getUserTeam(interaction.user.id);
-            //         if (!userTeam || !userTeam.id) {
-            //             return interaction.reply({ content: "You're not in a team, or your team ID could not be determined. Use `/team` to join or create one.", ephemeral: true });
-            //         }
-            //         // If fetched, use this teamId. This path suggests button ID was not correctly list_button_viewteam_TEAMID
-            //         logger.warn(`[list.js] Fallback to fetched teamId ${userTeam.id} for viewteam button.`);
-            //         await showTeamList(interaction, userTeam.id, 1, {}); // Pass teamId, page, filters
-            //         return;
-            //     }
-            //     // Assuming showTeamList signature is (interaction, teamId, page, filters)
-            //     // The page and filters are hardcoded to 1 and {} for now, as per original call structure.
-            //     await showTeamList(interaction, teamId, 1, {});
-            //     break;
-            // }
             case 'export': {
                 await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-                const [type, pageStr] = args;
+                const [pageStr] = args;
                 const page = parseInt(pageStr) || 1;
-                const filtersForDb = { ...userActiveFilters, guildId: type === 'public' ? interaction.guildId : null };
-                const userIdForDb = type === 'private' ? interaction.user.id : null;
-                const { worlds } = await db.getFilteredWorlds(userIdForDb, filtersForDb, page, CONSTANTS.PAGE_SIZE);
+                const { worlds } = await db.getFilteredWorlds(userActiveFilters, page, CONSTANTS.PAGE_SIZE);
                 if (worlds.length === 0) { await interaction.editReply({ content: 'No names to export on this page.' }); return; }
 
                 // CRITICAL: Retained the detailed export format from the original file
@@ -318,13 +247,13 @@ module.exports = {
     },
     async handleModal(interaction, params) {
         // Using original's robust modal handling logic, adapted for new modal structure
-        const [action, type] = params; // e.g., 'filterapply', 'private'
+        const [action] = params; // e.g., 'filterapply'
 
         if (action === 'filterapply') {
             await interaction.deferUpdate();
             const filters = utils.parseFilterModal(interaction);
-            logger.info(`[list.js] Applying filters: ${JSON.stringify(filters)} for list type ${type}`);
-            await showWorldsList(interaction, type, 1, filters);
+            logger.info(`[list.js] Applying filters: ${JSON.stringify(filters)}`);
+            await showWorldsList(interaction, 1, filters);
             return;
         }
         
@@ -337,13 +266,13 @@ module.exports = {
         // Defer for actions that need DB lookups
         if (action !== 'remove') await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-        const world = await db.findWorldByIdentifier(interaction.user.id, identifier, interaction.guildId);
+        const world = await db.findWorldByIdentifier(identifier);
         
         switch (action) {
             case 'remove': {
                 // CRITICAL: Retained the remove confirmation flow from the original file
-                if (!world || world.user_id !== interaction.user.id) {
-                    return interaction.reply({ content: `❌ World "**${identifier}**" not found in your list.`, flags: MessageFlags.Ephemeral });
+                if (!world) {
+                    return interaction.reply({ content: `❌ World "**${identifier}**" not found.`, flags: MessageFlags.Ephemeral });
                 }
                 const confirmId = `remove_button_confirm_${world.id}`;
                 const cancelId = `remove_button_cancel`;
@@ -351,50 +280,14 @@ module.exports = {
                     new ButtonBuilder().setCustomId(confirmId).setLabel('Confirm Remove').setStyle(ButtonStyle.Danger),
                     new ButtonBuilder().setCustomId(cancelId).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
                 );
-                await interaction.reply({ content: `⚠️ Are you sure you want to remove **${world.name.toUpperCase()}** from your list?`, components: [row], flags: MessageFlags.Ephemeral });
-                break;
-            }
-            case 'share':
-            case 'unshare': {
-                if (!interaction.guildId) return interaction.editReply({ content: "Sharing/unsharing is only possible in a server." });
-                if (!world || world.user_id !== interaction.user.id) return interaction.editReply({ content: `❌ World "**${identifier}**" not found in your list.` });
-                
-                const makePublic = action === 'share';
-                if (makePublic && world.is_public && world.guild_id === interaction.guildId) {
-                    return interaction.editReply({ content: `🌐 **${world.name.toUpperCase()}** is already public in this server.` });
-                }
-                if (!makePublic && !world.is_public) {
-                    return interaction.editReply({ content: `🔒 **${world.name.toUpperCase()}** is already private.` });
-                }
-
-                const success = await db.updateWorldVisibility(world.id, interaction.user.id, makePublic, makePublic ? interaction.guildId : null);
-                if (success) {
-                    await require('./search.js').invalidateSearchCache();
-                    await require('../utils/share_and_history.js').logHistory(world.id, interaction.user.id, action, `World ${world.name.toUpperCase()} ${action}d in guild ${interaction.guildId}`);
-                }
-                await interaction.editReply({ content: success ? `✅ World **${world.name}** is now ${makePublic ? 'public here' : 'private'}.` : `❌ Failed to update world visibility.` });
+                await interaction.reply({ content: `⚠️ Are you sure you want to remove **${world.name.toUpperCase()}**?`, components: [row], flags: MessageFlags.Ephemeral });
                 break;
             }
             case 'info': {
-                if (!world) return interaction.editReply({ content: `❌ World "**${identifier}**" not found or not accessible.` });
+                if (!world) return interaction.editReply({ content: `❌ World "**${identifier}**" not found.` });
                 await showWorldInfo(interaction, world);
                 break;
             }
-            // case 'lockworldsubmit': { // Removed this case
-            //     // await interaction.deferReply({ flags: MessageFlags.Ephemeral }); // Modal was submitted, need new reply
-            //     const lockType = interaction.fields.getTextInputValue('lock_type')?.trim().toLowerCase() || 'main';
-            //     const note = interaction.fields.getTextInputValue('note')?.trim() || null;
-            //
-            //     // world lookup already done above
-            //     if (!world || world.user_id !== interaction.user.id) return interaction.editReply({ content: `❌ World "${identifier}" not found in your active list.` });
-            //
-            //     const alreadyLocked = await db.findLockedWorldByName(interaction.user.id, world.name);
-            //     if (alreadyLocked) return interaction.editReply({ content: `❌ World **${world.name}** is already in your Locks list.` });
-            //
-            //     const result = await db.moveWorldToLocks(interaction.user.id, world.id, lockType, note);
-            //     await interaction.editReply({ content: result.success ? `✅ ${result.message}` : `❌ ${result.message}` });
-            //     break;
-            // }
             default:
                 logger.warn(`[list.js] Unhandled modal action: ${action}`);
                 await interaction.reply({ content: 'This action is not recognized.', flags: MessageFlags.Ephemeral });
