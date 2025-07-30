@@ -129,6 +129,30 @@ async function testSettings() {
     await execute(interaction);
 }
 
+async function testListNoFilter() {
+    const { execute } = require('./commands/list.js');
+    const interaction = {
+        user: {
+            id: '12345',
+            tag: 'testuser#0000'
+        },
+        client: {},
+        options: {
+            getString: (option) => {
+                return null;
+            }
+        },
+        deferReply: async () => {},
+        editReply: async (message) => {
+            console.log('List command output (no filter):', message.content);
+        },
+        isMessageComponent: () => false,
+        type: 0
+    };
+    await execute(interaction);
+}
+
 setTimeout(async () => {
     await testSettings();
+    await testListNoFilter();
 }, 2000);
