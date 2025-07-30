@@ -259,13 +259,17 @@ function createPaginationRow(baseCustomId, currentPage, totalPages) {
     return row;
 }
 
-function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset) {
+function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset, targetUsername = null) {
   const tableData = [];
   const now = new Date(); // Current time in UTC
   const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const isAnotherUser = targetUsername && worlds.some(w => w.added_by_username.toLowerCase() !== targetUsername.toLowerCase());
 
   if (viewMode === 'pc') {
-    tableData.push(['WORLD', 'OWNED', 'LEFT', 'EXPIRES ON', 'LOCK']);
+      const headers = ['WORLD', 'OWNED', 'LEFT', 'EXPIRES ON', 'LOCK'];
+      if (isAnotherUser) headers.push('ADDED BY');
+      tableData.push(headers);
+
     for (const world of worlds) {
       const expiryDate = new Date(world.expiry_date); // Assuming expiry_date is UTC
       const expiryDateUTC = new Date(Date.UTC(expiryDate.getUTCFullYear(), expiryDate.getUTCMonth(), expiryDate.getUTCDate()));
@@ -280,16 +284,20 @@ function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset) {
       if (lockTypeDisplay === 'MAINLOCK') lockTypeDisplay = 'MAIN';
       if (lockTypeDisplay === 'OUTLOCK') lockTypeDisplay = 'OUT';
 
-      tableData.push([
+        const row = [
         world.name.toUpperCase(),
         days_owned.toString(),
         days_left > 0 ? days_left.toString() : 'EXP',
         displayExpiryDate,
         lockTypeDisplay
-      ]);
+        ];
+        if (isAnotherUser) row.push(world.added_by_username);
+        tableData.push(row);
     }
   } else { // Mobile Mode
-    tableData.push(['WORLD', 'OWNED']);
+      const headers = ['WORLD', 'OWNED'];
+      if (isAnotherUser) headers.push('BY');
+      tableData.push(headers);
     for (const world of worlds) {
       const expiryDate = new Date(world.expiry_date); // Assuming expiry_date is UTC
       const expiryDateUTC = new Date(Date.UTC(expiryDate.getUTCFullYear(), expiryDate.getUTCMonth(), expiryDate.getUTCDate()));
@@ -302,10 +310,12 @@ function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset) {
       if (world.lock_type && world.lock_type.toLowerCase() === 'outlock') lockTypeChar = 'O';
 
 
-      tableData.push([
+        const row = [
         `(${lockTypeChar}) ${world.name.toUpperCase()}`,
         days_owned.toString()
-      ]);
+        ];
+        if (isAnotherUser) row.push(world.added_by_username);
+        tableData.push(row);
     }
   }
 

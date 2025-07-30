@@ -381,6 +381,26 @@ async function updateUserReminderSettings(userId, reminderEnabled, reminderTimeU
     }
 }
 
+async function getUserStats(username) {
+    try {
+        const totalWorlds = await knexInstance('worlds').where('added_by_username', username).count({ count: '*' }).first();
+        const lockStats = await knexInstance('worlds').where('added_by_username', username).select('lock_type').count({ count: '*' }).groupBy('lock_type');
+        const result = {
+            totalWorlds: totalWorlds ? Number(totalWorlds.count) : 0,
+            mainlock: 0,
+            outlock: 0,
+        };
+        lockStats.forEach(row => {
+            if (row.lock_type === 'mainlock') result.mainlock = Number(row.count);
+            else if (row.lock_type === 'outlock') result.outlock = Number(row.count);
+        });
+        return result;
+    } catch (error) {
+        logger.error(`[DB] Error getting stats for user ${username}:`, error);
+        return { totalWorlds: 0, mainlock: 0, outlock: 0 };
+    }
+}
+
 // --- Module Exports ---
 module.exports = {
   knex: knexInstance,
@@ -407,4 +427,5 @@ module.exports = {
   updateUserTimezone,
   updateUserViewMode,
   updateUserReminderSettings,
+  getUserStats,
 };

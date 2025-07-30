@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
 const db = require('../database.js');
 const { table } = require('table');
 const CONSTANTS = require('../utils/constants.js');
@@ -21,11 +21,20 @@ async function showLeaderboard(interaction, page = 1) {
     }
 
     const tableData = [['Rank', 'User', 'Worlds Added']];
+    const selectMenuOptions = [];
     leaderboard.forEach((user, index) => {
         tableData.push([`#${(page - 1) * CONSTANTS.PAGE_SIZE + index + 1}`, user.added_by_username, user.world_count]);
+        selectMenuOptions.push({
+            label: user.added_by_username,
+            value: user.added_by_username,
+        });
     });
 
     const tableOutput = '```\n' + table(tableData) + '\n```';
+
+    const stats = await db.getWorldLockStats();
+    const totalWorlds = await db.getWorldCount();
+    const statsOutput = `\n**Global Stats**\nTotal Worlds: ${totalWorlds}\nMainlocks: ${stats.mainlock}\nOutlocks: ${stats.outlock}`;
 
     const components = [];
     const navigationRow = new ActionRowBuilder();
@@ -43,7 +52,14 @@ async function showLeaderboard(interaction, page = 1) {
     );
     components.push(navigationRow);
 
-    const finalContent = `${tableOutput}\nPage ${page} of ${totalPages}`;
+    const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('leaderboard_select_user')
+        .setPlaceholder('View user stats')
+        .addOptions(selectMenuOptions);
+
+    components.push(new ActionRowBuilder().addComponents(selectMenu));
+
+    const finalContent = `${tableOutput}\nPage ${page} of ${totalPages}${statsOutput}`;
     const finalOpts = { content: finalContent, components, flags: 1 << 6 };
     if (isUpdate) await interaction.editReply(finalOpts); else await interaction.reply(finalOpts);
 }
@@ -60,5 +76,11 @@ module.exports = {
         if (action === 'page') {
             await showLeaderboard(interaction, parseInt(pageStr) || 1);
         }
+    },
+    async handleSelectMenu(interaction, params) {
+        const username = interaction.values[0];
+        const stats = await db.getUserStats(username);
+        const statsOutput = `**${username}'s Stats**\nTotal Worlds: ${stats.totalWorlds}\nMainlocks: ${stats.mainlock}\nOutlocks: ${stats.outlock}`;
+        await interaction.reply({ content: statsOutput, flags: 1 << 6 });
     }
 };
