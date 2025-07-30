@@ -74,7 +74,15 @@ module.exports = {
     async handleButton(interaction, params) {
         const [action, pageStr] = params;
         if (action === 'page') {
-            await showLeaderboard(interaction, parseInt(pageStr) || 1);
+            const currentPage = parseInt(pageStr, 10);
+            const direction = interaction.customId.includes('next') ? 'next' : 'prev';
+            let newPage = currentPage;
+            if (direction === 'next') {
+                newPage = currentPage + 1;
+            } else if (direction === 'prev') {
+                newPage = currentPage - 1;
+            }
+            await showLeaderboard(interaction, newPage);
         }
     },
     async handleSelectMenu(interaction, params) {

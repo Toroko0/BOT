@@ -206,7 +206,10 @@ module.exports = {
 
   async handleButton(interaction, params) {
     const action = params[0] === 'export' ? 'export_all' : params[0];
-    const currentPage = parseInt(params[1] || '1');
+    let currentPage = parseInt(params[1] || '1');
+    if (params[0] === 'next' || params[0] === 'prev') {
+        currentPage = parseInt(params[1], 10);
+    }
     const replyOpts = { flags: 1 << 6 };
     const cooldown = utils.checkCooldown(interaction.user.id, 'search_btn', 1);
     if (cooldown.onCooldown) { await interaction.reply({ ...replyOpts, content: `⏱️ Wait ${cooldown.timeLeft}s.` }); return; }

@@ -48,10 +48,7 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = 
             name: worldNameUpper,
             lock_type: normalizedLockType,
         })
-        .andWhere(function() {
-            this.where('days_owned', daysOwnedNum)
-                .orWhereRaw('julianday(?) - julianday(added_date) < 1', [now])
-        })
+        .andWhere('expiry_date', '>', now.toISOString())
         .first();
 
     if (existingWorld) {

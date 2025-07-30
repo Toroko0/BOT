@@ -5,6 +5,7 @@ const { invalidateSearchCache } = require('./search.js'); // Assuming search.js 
 const logger = require('../utils/logger.js'); // Added logger
 const { logHistory } = require('../utils/share_and_history.js'); // For logging edits
 const CONSTANTS = require('../utils/constants.js'); // For select options limit
+const { showWorldsList } = require('./list.js');
 
 // Function to show the Edit World Modal
 async function showEditWorldModal(interaction, world) {
@@ -134,7 +135,7 @@ async function showWorldInfo(interaction, world) {
   const generalButtonsRow = new ActionRowBuilder();
   generalButtonsRow.addComponents(
     new ButtonBuilder()
-        .setCustomId('list_button_view_private_1')
+        .setCustomId('info_button_back')
         .setLabel('⬅️ Back to List')
         .setStyle(ButtonStyle.Secondary)
   );
@@ -247,6 +248,9 @@ module.exports = {
     let feedback = '';
     try {
         switch (action) {
+            case 'back':
+                await showWorldsList(interaction, 1, null, null);
+                return;
             case 'share':
                 if (!interaction.guildId) { feedback = '❌ Sharing only possible in servers.'; break; }
                  // Check for duplicate public world name in *this* guild if sharing

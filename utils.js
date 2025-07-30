@@ -246,7 +246,7 @@ function createPaginationRow(baseCustomId, currentPage, totalPages) {
             .setStyle(ButtonStyle.Primary)
             .setDisabled(currentPage <= 1),
         new ButtonBuilder()
-            .setCustomId(`${baseCustomId}_display_${currentPage}_${totalPages}`)
+            .setCustomId(`display_${currentPage}_${totalPages}`)
             .setLabel(`Page ${currentPage}/${totalPages}`)
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(true),
@@ -333,6 +333,23 @@ function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset, targetU
   return { data: tableData, config: tableConfig };
 }
 
+function parseFilterModal(interaction) {
+    const filters = {};
+    const prefix = interaction.fields.getTextInputValue('filter_prefix');
+    const nameLengthMin = interaction.fields.getTextInputValue('filter_name_length_min');
+    const nameLengthMax = interaction.fields.getTextInputValue('filter_name_length_max');
+    const expiryDay = interaction.fields.getTextInputValue('filter_expiry_day');
+    const daysOwned = interaction.fields.getTextInputValue('filter_days_owned');
+
+    if (prefix) filters.prefix = prefix;
+    if (nameLengthMin) filters.nameLengthMin = nameLengthMin;
+    if (nameLengthMax) filters.nameLengthMax = nameLengthMax;
+    if (expiryDay) filters.expiryDay = expiryDay;
+    if (daysOwned) filters.daysOwned = daysOwned;
+
+    return filters;
+}
+
 function createWorldSelectOption(world, timezoneOffset) {
   const expiryDate = new Date(world.expiry_date); // Assuming expiry_date is UTC
   const userLocalExpiry = new Date(expiryDate.getTime() + timezoneOffset * 3600000);
@@ -363,5 +380,6 @@ module.exports = {
   createPaginationRow,
   formatWorldsToTable,
   createWorldSelectOption,
+  parseFilterModal,
   // Potentially export new date/day calculation if needed elsewhere, or keep them local to new functions
 };

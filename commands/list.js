@@ -195,8 +195,15 @@ module.exports = {
 
         switch (action) {
             case 'page': {
-                const [pageStr] = args;
-                await showWorldsList(interaction, parseInt(pageStr) || 1, userActiveFilters, targetUsername);
+                const [direction, currentPageStr] = args;
+                const currentPage = parseInt(currentPageStr, 10);
+                let newPage = currentPage;
+                if (direction === 'next') {
+                    newPage = currentPage + 1;
+                } else if (direction === 'prev') {
+                    newPage = currentPage - 1;
+                }
+                await showWorldsList(interaction, newPage, userActiveFilters, targetUsername);
                 break;
             }
             case 'remove':
@@ -277,6 +284,9 @@ module.exports = {
                 // CRITICAL: Retained the remove confirmation flow from the original file
                 if (!world) {
                     return interaction.reply({ content: `❌ World "**${identifier}**" not found.`, flags: MessageFlags.Ephemeral });
+                }
+                if (world.added_by_username !== interaction.user.username) {
+                    return interaction.reply({ content: `❌ You do not have permission to remove the world "**${identifier}**".`, flags: MessageFlags.Ephemeral });
                 }
                 const confirmId = `remove_button_confirm_${world.id}`;
                 const cancelId = `remove_button_cancel`;
