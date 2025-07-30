@@ -59,10 +59,14 @@ async function performSearch(interaction, filters) {
 
   try {
       // Add guildId to filters if searching public worlds (currently defaults to private)
-      if (filters.showPublic) filters.guildId = interaction.guildId; // Note: getFilteredWorlds expects guildId within filters obj
+      if (filters.showPublic) {
+        filters.guildId = interaction.guildId;
+      } else {
+        filters.added_by_username = interaction.user.username;
+      }
 
       // Fetch only the first page and total count initially
-      const { worlds: firstPageWorlds, total: totalMatchingWorlds } = await db.getFilteredWorlds(interaction.user.id, filters, 1, CONSTANTS.PAGE_SIZE);
+      const { worlds: firstPageWorlds, total: totalMatchingWorlds } = await db.getFilteredWorlds(filters, 1, CONSTANTS.PAGE_SIZE);
 
       // Display results (always treated as an update after deferral)
       await displaySearchResults(interaction, filters, firstPageWorlds, totalMatchingWorlds, 1, true);
@@ -226,7 +230,7 @@ module.exports = {
         logger.info(`[search.js] Refreshing search with filters: ${JSON.stringify(cachedFilters)}`);
         if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate(); // Ensure deferral
         // Fetch page 1 for refresh
-        const { worlds: refreshedPageOneWorlds } = await db.getFilteredWorlds(interaction.user.id, cachedFilters, 1, CONSTANTS.PAGE_SIZE);
+        const { worlds: refreshedPageOneWorlds } = await db.getFilteredWorlds(cachedFilters, 1, CONSTANTS.PAGE_SIZE);
         await displaySearchResults(interaction, cachedFilters, refreshedPageOneWorlds, cachedTotalWorlds, 1, true);
         return;
     } else if (action === 'page') {
@@ -283,7 +287,7 @@ module.exports = {
 
     if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
     // Fetch the specific page needed for 'prev'/'next'
-    const { worlds: newPageWorlds } = await db.getFilteredWorlds(interaction.user.id, cachedFilters, targetPage, CONSTANTS.PAGE_SIZE);
+    const { worlds: newPageWorlds } = await db.getFilteredWorlds(cachedFilters, targetPage, CONSTANTS.PAGE_SIZE);
     await displaySearchResults(interaction, cachedFilters, newPageWorlds, cachedTotalWorlds, targetPage, true);
   },
 

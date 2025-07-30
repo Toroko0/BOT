@@ -11,13 +11,12 @@ module.exports = {
       .setTitle('🌱 Growtopia Tracker Bot - Help Guide')
       .setDescription('Welcome! This bot helps you privately track your Growtopia worlds, expiration dates, and more.')
       .addFields(
-        { name: '🌍 World Management', value: '`/addworld` - Add a world (Use options or modal)\n`/remove` - Remove a world\n`/list` - View and manage your worlds\n`/info` - Detailed info about a world\n`/share` - Make a world public in this server\n`/unshare` - Make a world private' },
-        { name: '📊 Stats & Search', value: '`/stats` - Your world statistics\n`/search` - Search your worlds with filters' },
+        { name: '🌍 World Management', value: '`/addworld` - Add a world (Use options or modal)\n`/remove` - Remove a world\n`/list` - View and manage your worlds\n`/info` - Detailed info about a world' },
+        { name: '📊 Stats & Search', value: '`/leaderboard` - View the leaderboard and global stats\n`/search` - Search your worlds with filters' },
         //{ name: '⚙️ Admin', value: '`/sync` - Refresh slash commands (admin only)' }, // Removed sync as file missing
         { name: '🔑 Lock Types', value: '**M**ain Lock\n**O**ut Lock (Out-of-place)', inline: true },
         { name: '⏱️ World Expiration', value: 'Worlds expire 180 days after being added/last edited. Bot tracks days left.', inline: true },
-        { name: '🌐 Sharing', value: 'Use `/share`, `/unshare` or buttons in `/list` / `/info`. Public worlds are visible via `/list` (public view).', inline: false },
-        { name: '🔒 Privacy', value: 'Your world data is private by default. Only worlds you explicitly share become public *in the server where you share them*. Custom IDs are also private unless shared.', inline: false },
+        { name: '🔒 Privacy', value: 'Your world data is private by default. Custom IDs are also private.', inline: false },
         { name: '💡 Tips', value: 'Use Custom IDs in `/addworld` or `/info` (edit button) for easier lookup! World names and Custom IDs are case-insensitive for commands.', inline: false }
       )
       .setFooter({ text: 'Use responsibly! Contact bot owner for issues.'});
@@ -36,10 +35,10 @@ module.exports = {
           .setCustomId('list_button_view_private_1') // Command: list, Type: button, Action: view, Param1: private, Param2: 1
           .setLabel('View My Worlds')
           .setStyle(ButtonStyle.Primary),
-         // Calls stats.js handler to show private stats
+         // Calls leaderboard.js handler to show leaderboard
         new ButtonBuilder()
-          .setCustomId('stats_button_view_private') // Command: stats, Type: button, Action: view, Param1: private
-          .setLabel('📊 View Stats')
+          .setCustomId('leaderboard_button_view')
+          .setLabel('📊 View Leaderboard')
           .setStyle(ButtonStyle.Secondary)
       );
 
