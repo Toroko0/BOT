@@ -251,13 +251,7 @@ module.exports = {
         }
         const { filters: exportFilters } = cachedDataForExport;
 
-        // Add guildId to filters if it was a public search context (original filters might not have it if it was a private search)
-        // This relies on the search context being implicitly private unless filters.showPublic was true.
-        // The original `performSearch` adds `filters.guildId` if `filters.showPublic` is true.
-        // `getAllFilteredWorlds` expects `filters.guildId` for public, and `userId` for private.
-        const userIdForExport = interaction.user.id; // getAllFilteredWorlds needs userId for private searches
-
-        const allMatchingWorlds = await db.getAllFilteredWorlds(userIdForExport, exportFilters);
+        const { worlds: allMatchingWorlds } = await db.getFilteredWorlds(exportFilters, 1, 10000);
 
         if (!allMatchingWorlds || allMatchingWorlds.length === 0) {
             await interaction.editReply({ content: 'No names to export for the current filters.', ephemeral: true });
