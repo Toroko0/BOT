@@ -42,20 +42,17 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = 
     if (normalizedCustomId === '') { normalizedCustomId = null; }
     const now = new Date(); const daysLeft = 180 - daysOwnedNum; const expiryDate = new Date(now.getTime() + daysLeft * 24 * 60 * 60 * 1000); const expiryDateISO = expiryDate.toISOString();
 
-    // Pre-emptive check for existing world with exact same parameters
+    // Pre-emptive check for existing world with the exact same name, lock type, and days owned.
     const existingWorld = await knexInstance('worlds')
         .where({
             name: worldNameUpper,
             lock_type: normalizedLockType,
-        })
-        .andWhere(function() {
-            this.where('days_owned', daysOwnedNum)
-                .orWhereRaw('julianday(?) - julianday(added_date) < 1', [now])
+            days_owned: daysOwnedNum
         })
         .first();
 
     if (existingWorld) {
-        return { success: false, message: `A world named **${worldNameUpper}** with the exact same days owned and lock type is already being tracked by **${existingWorld.added_by_username}**.` };
+        return { success: false, message: `A world named **${worldNameUpper}** with **${daysOwnedNum}** days owned and lock type **${normalizedLockType.charAt(0).toUpperCase()}** is already being tracked by **${existingWorld.added_by_username}**.` };
     }
 
     try {
