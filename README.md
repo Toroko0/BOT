@@ -8,7 +8,6 @@ A Discord bot to privately track Growtopia worlds, expiration dates, sharing, an
 
 - Slash commands to add, list, remove, share, unshare, and search worlds
 - Unique share links with optional expiration
-- World expiration tracking and reminders
 - Categories and usage examples in `/help`
 - Admin commands with permission checks
 - Audit logs of all actions

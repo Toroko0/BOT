@@ -306,24 +306,18 @@ async function getUserPreferences(userId) {
         if (user) {
             return {
                 timezone_offset: user.timezone_offset,
-                view_mode: user.view_mode,
-                reminder_enabled: !!user.reminder_enabled,
-                reminder_time_utc: user.reminder_time_utc
+                view_mode: user.view_mode
             };
         }
         return {
             timezone_offset: 0.0,
-            view_mode: 'pc',
-            reminder_enabled: false,
-            reminder_time_utc: null
+            view_mode: 'pc'
         };
     } catch (error) {
         logger.error(`[DB] Error getting preferences for user ${userId}:`, error);
         return {
             timezone_offset: 0.0,
-            view_mode: 'pc',
-            reminder_enabled: false,
-            reminder_time_utc: null
+            view_mode: 'pc'
         };
     }
 }
@@ -353,27 +347,6 @@ async function updateUserViewMode(userId, viewMode) {
         return true;
     } catch (error) {
         logger.error(`[DB] Error updating view mode for user ${userId}:`, error);
-        return false;
-    }
-}
-
-async function updateUserReminderSettings(userId, reminderEnabled, reminderTimeUtc) {
-    try {
-        if (reminderEnabled && reminderTimeUtc) {
-            if (!/^\d{2}:\d{2}$/.test(reminderTimeUtc)) {
-                 return false;
-            }
-        }
-        const effectiveReminderTimeUtc = reminderEnabled ? reminderTimeUtc : null;
-
-        await knexInstance('users').where({ id: userId }).update({
-            reminder_enabled: !!reminderEnabled,
-            reminder_time_utc: effectiveReminderTimeUtc
-        });
-        logger.info(`[DB] Updated reminder settings for user ${userId} to enabled: ${!!reminderEnabled}, time: ${effectiveReminderTimeUtc}`);
-        return true;
-    } catch (error) {
-        logger.error(`[DB] Error updating reminder settings for user ${userId}:`, error);
         return false;
     }
 }
@@ -423,6 +396,5 @@ module.exports = {
   getUserPreferences,
   updateUserTimezone,
   updateUserViewMode,
-  updateUserReminderSettings,
   getUserStats,
 };
