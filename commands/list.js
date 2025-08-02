@@ -182,7 +182,7 @@ module.exports = {
         logger.info(`[list.js] Entered execute function for /list, User: ${interaction.user.tag}, Interaction ID: ${interaction.id}`);
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const username = interaction.options.getString('user');
-        const filters = username ? { added_by_username: username } : { added_by_username: interaction.user.username };
+        const filters = username ? { added_by_username: username } : {};
         await showWorldsList(interaction, 1, filters, username);
     },
     async handleButton(interaction, params) {
@@ -240,12 +240,19 @@ module.exports = {
             return;
         }
 
-        switch (action) {
-            case 'page': {
-                const [pageStr] = args;
-                await showWorldsList(interaction, parseInt(pageStr) || 1, userActiveFilters, targetUsername);
-                break;
+        if (action === 'page') {
+            const direction = args[0];
+            let currentPage = parseInt(args[1]);
+            if (direction === 'prev') {
+                currentPage--;
+            } else if (direction === 'next') {
+                currentPage++;
             }
+            await showWorldsList(interaction, currentPage, userActiveFilters, targetUsername);
+            return;
+        }
+
+        switch (action) {
             case 'remove':
             case 'info':
                 await showSimpleModal(interaction, action);
