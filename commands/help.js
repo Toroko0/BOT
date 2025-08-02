@@ -13,7 +13,6 @@ module.exports = {
       .addFields(
         { name: '🌍 World Management', value: '`/addworld` - Add a world (Use options or modal)\n`/remove` - Remove a world\n`/list` - View and manage your worlds\n`/info` - Detailed info about a world' },
         { name: '📊 Stats & Search', value: '`/leaderboard` - View the leaderboard and global stats\n`/search` - Search your worlds with filters' },
-        //{ name: '⚙️ Admin', value: '`/sync` - Refresh slash commands (admin only)' }, // Removed sync as file missing
         { name: '🔑 Lock Types', value: '**M**ain Lock\n**O**ut Lock (Out-of-place)', inline: true },
         { name: '⏱️ World Expiration', value: 'Worlds expire 180 days after being added/last edited. Bot tracks days left.', inline: true },
         { name: '🔒 Privacy', value: 'Your world data is private by default. Custom IDs are also private.', inline: false },
