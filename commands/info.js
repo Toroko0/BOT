@@ -397,22 +397,9 @@ module.exports = {
                 // Fetch user's worlds + public worlds in this guild
                 const identifierQuery = focusedOption.value.toLowerCase();
                 // Combine results from user's worlds and public worlds (limit each)
-                const userWorldsResult = await db.getFilteredWorlds({ added_by_username: interaction.user.username }, 1, 25);
-                let publicWorldsResult = { worlds: [], total: 0 };
-                if (interaction.guildId) {
-                     publicWorldsResult = await db.getFilteredWorlds({ is_public: true, guild_id: interaction.guildId }, 1, 25);
-                }
+                const { worlds: allWorlds } = await db.getFilteredWorlds({}, 1, 10000);
 
-                const combinedWorlds = [...userWorldsResult.worlds];
-                // Add public worlds, avoiding duplicates by ID
-                const userWorldIds = new Set(userWorldsResult.worlds.map(w => w.id));
-                publicWorldsResult.worlds.forEach(pw => {
-                    if (!userWorldIds.has(pw.id)) {
-                        combinedWorlds.push(pw);
-                    }
-                });
-
-                choices = combinedWorlds
+                choices = allWorlds
                     .filter(w =>
                         w.name.toLowerCase().includes(identifierQuery) ||
                         (w.custom_id && w.custom_id.toLowerCase().includes(identifierQuery))

@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
 const db = require('../database.js');
 const logger = require('../utils/logger.js');
+const { showWorldsList } = require('./list.js');
 
 async function getSettingsReplyOptions(userId) {
     const userPrefs = await db.getUserPreferences(userId);
@@ -25,6 +26,10 @@ async function getSettingsReplyOptions(userId) {
             new ButtonBuilder()
                 .setCustomId('settings_button_timezone')
                 .setLabel('Set Timezone')
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('settings_button_back')
+                .setLabel('Back to List')
                 .setStyle(ButtonStyle.Secondary)
         )
     ];
@@ -59,6 +64,8 @@ module.exports = {
             await db.updateUserTimezone(userId, newTimezone);
             const replyOptions = await getSettingsReplyOptions(userId);
             await interaction.update(replyOptions);
+        } else if (action === 'back') {
+            await showWorldsList(interaction, 1, { added_by_username: interaction.user.username }, interaction.user.username);
         }
     },
     getSettingsReplyOptions,
