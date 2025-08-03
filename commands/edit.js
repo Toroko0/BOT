@@ -12,10 +12,10 @@ module.exports = {
                 .setRequired(true)),
     async execute(interaction) {
         const worldName = interaction.options.getString('world');
-        const worlds = await db.getWorldsByName(worldName);
+        const { worlds } = await db.getFilteredWorlds({ prefix: worldName, added_by_username: interaction.user.username });
 
         if (worlds.length === 0) {
-            return interaction.reply({ content: `World **${worldName}** not found in the tracking list.`, flags: 1 << 6 });
+            return interaction.reply({ content: `World starting with **${worldName}** not found in your tracking list.`, flags: 1 << 6 });
         }
 
         if (worlds.length === 1) {
@@ -41,7 +41,7 @@ module.exports = {
                 );
 
             await interaction.reply({
-                content: `There are multiple worlds named **${worldName}**. Please select the one you want to edit.`,
+                content: `There are multiple worlds starting with **${worldName}**. Please select the one you want to edit.`,
                 components: [row],
                 flags: 1 << 6
             });

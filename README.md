@@ -1,16 +1,13 @@
 # Growtopia Tracker Bot
 
-A Discord bot to privately track Growtopia worlds, expiration dates, sharing, and more.
+A Discord bot to privately track Growtopia worlds, expiration dates, and more.
 
 ---
 
 ## Features
 
-- Slash commands to add, list, remove, share, unshare, and search worlds
-- Unique share links with optional expiration
-- World expiration tracking and reminders
+- Slash commands to add, list, remove, and search worlds
 - Categories and usage examples in `/help`
-- Admin commands with permission checks
 - Audit logs of all actions
 - CI/CD pipeline with GitHub Actions
 - Dockerized deployment
@@ -64,11 +61,8 @@ node index.js
 | `/list`        | List your worlds                     | `/list`                                               |
 | `/info`        | Detailed info about a world          | `/info world:MYWORLD`                                 |
 | `/remove`      | Remove a world                       | `/remove world:MYWORLD`                               |
-| `/share`       | Generate a share link                | `/share world_name:MYWORLD`                           |
-| `/unshare`     | Make a world private again           | `/unshare world_name:MYWORLD`                         |
 | `/stats`       | View your world statistics           | `/stats`                                              |
-| `/search`      | Filter worlds by prefix, lock, expiry| `/search prefix:BUY locktype:mainlock expiringdays:7` |
-| `/admin`       | Admin-specific commands              | `/admin <subcommand>`                                 |
+| `/search`      | Filter worlds by prefix, lock, expiry| `/search prefix:BUY locktype:mainlock daysowned:7` |
 | `/settings`    | Adjust your personal bot settings    | `/settings`                                           |
 | `/help`        | Show help and onboarding info        | `/help`                                               |
 

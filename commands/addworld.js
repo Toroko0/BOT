@@ -2,7 +2,7 @@ const { SlashCommandBuilder, ActionRowBuilder, ModalBuilder, TextInputBuilder, T
 const db = require('../database.js');
 const utils = require('../utils.js');
 const { logHistory } = require('../utils/share_and_history.js');
-const { invalidateSearchCache } = require('./search.js'); // Assuming search.js exports this
+const { invalidateSearchCache, performSearch } = require('./search.js'); // Assuming search.js exports this
 const logger = require('../utils/logger.js'); // Added logger
 
 // Function to show the Add World Modal
@@ -113,7 +113,12 @@ module.exports = {
         await interaction.reply({ ...replyOpts, content: `✅ ${result.message}` }); // Use message from DB function
       } else {
         logger.error('[addworld.js] Add world via slash failed:', result.message);
-        await interaction.reply({ ...replyOpts, content: `❌ ${result.message || 'Failed to add world.'}` }); // Show specific error
+        if (result.message.includes('is already being tracked by')) {
+            await interaction.reply({ ...replyOpts, content: `❌ ${result.message || 'Failed to add world.'}` });
+            await performSearch(interaction, { prefix: worldName });
+        } else {
+            await interaction.reply({ ...replyOpts, content: `❌ ${result.message || 'Failed to add world.'}` }); // Show specific error
+        }
       }
     } else {
       // If no world name provided in slash command, show the modal
@@ -190,7 +195,12 @@ module.exports = {
           } else {
             // This case might be redundant if db.addWorld throws errors for all failures
             logger.error('[addworld.js] Add world via modal failed (result.success false):', result.message);
-            await interaction.reply({ ...replyOpts, content: `❌ ${result.message || 'Failed to add world.'}` });
+            if (result.message.includes('is already being tracked by')) {
+                await interaction.reply({ ...replyOpts, content: `❌ ${result.message || 'Failed to add world.'}` });
+                await performSearch(interaction, { prefix: worldName });
+            } else {
+                await interaction.reply({ ...replyOpts, content: `❌ ${result.message || 'Failed to add world.'}` });
+            }
           }
         } catch (error) {
           logger.error('[addworld.js] Error during addWorld via modal:', error);

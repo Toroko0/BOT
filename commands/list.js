@@ -133,9 +133,6 @@ async function showWorldsList(interaction, page = 1, currentFilters = null, targ
     // Retained the detailed, original table generation and component building logic
     const { data, config } = utils.formatWorldsToTable(worlds, viewMode, 'public', timezoneOffset, targetUsername);
     let tableOutput = '```\n' + table(data, config) + '\n```';
-    if (tableOutput.length > 1900) {
-        tableOutput = tableOutput.substring(0, tableOutput.lastIndexOf('\n', 1900)) + '\n... (Table truncated) ...```';
-    }
 
     const components = [];
     // Navigation Row (using a utility for cleaner code)
@@ -182,7 +179,7 @@ module.exports = {
         logger.info(`[list.js] Entered execute function for /list, User: ${interaction.user.tag}, Interaction ID: ${interaction.id}`);
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const username = interaction.options.getString('user');
-        const filters = username ? { added_by_username: username } : { added_by_username: interaction.user.username };
+        const filters = username ? { added_by_username: username } : {};
         await showWorldsList(interaction, 1, filters, username);
     },
     async handleButton(interaction, params) {
@@ -190,15 +187,94 @@ module.exports = {
         if (cooldown.onCooldown) { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, flags: MessageFlags.Ephemeral }); return; }
 
         const [action, ...args] = params;
-        const userActiveFilters = interaction.client.activeListFilters?.[interaction.user.id] || null;
+        const userActiveFilters = interaction.client.activeListFilters?.[interaction.user.id] || {};
         const targetUsername = userActiveFilters?.added_by_username;
 
-        switch (action) {
-            case 'page': {
-                const [pageStr] = args;
-                await showWorldsList(interaction, parseInt(pageStr) || 1, userActiveFilters, targetUsername);
-                break;
+        if (action === 'export') {
+            if (!interaction.deferred && !interaction.replied) {
+                await interaction.deferReply({ ephemeral: true });
             }
+
+            const row = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('list_button_export_179')
+                        .setLabel('Export 179 Days')
+                        .setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder()
+                        .setCustomId('list_button_export_180')
+                        .setLabel('Export 180 Days')
+                        .setStyle(ButtonStyle.Primary)
+                );
+
+            await interaction.editReply({
+                content: 'Please choose which worlds to export:',
+                components: [row],
+                ephemeral: true
+            });
+            return;
+        }
+
+        if (action.startsWith('export_')) {
+            if (!interaction.deferred && !interaction.replied) {
+                await interaction.deferReply({ ephemeral: true });
+            }
+            const parts = action.split('_');
+            const daysOwned = parts[1];
+            const includeUser = parts.length < 3 || parts[2] !== 'no_user';
+
+            const exportFilters = { ...userActiveFilters, daysOwned: parseInt(daysOwned) };
+
+            const { worlds: allMatchingWorlds } = await db.getFilteredWorlds(exportFilters, 1, 10000);
+
+            if (!allMatchingWorlds || allMatchingWorlds.length === 0) {
+                await interaction.editReply({ content: 'No names to export for the current filters.', ephemeral: true });
+                return;
+            }
+
+            let exportText = "```\n";
+            allMatchingWorlds.forEach(world => {
+                const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
+                const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
+                if (includeUser) {
+                    exportText += `(${lockChar}) ${world.name.toUpperCase()}${customIdPart}, ${world.added_by_username}\n`;
+                } else {
+                    exportText += `(${lockChar}) ${world.name.toUpperCase()}${customIdPart}\n`;
+                }
+            });
+            exportText += "```";
+
+            if (exportText.length > 2000) {
+                let cutOff = exportText.lastIndexOf('\n', 1990);
+                if (cutOff === -1) cutOff = 1990;
+                exportText = exportText.substring(0, cutOff) + "\n... (list truncated)```";
+            }
+
+            const row = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`list_button_export_${daysOwned}_no_user`)
+                        .setLabel('Export without user')
+                        .setStyle(ButtonStyle.Secondary)
+                );
+
+            await interaction.editReply({ content: exportText, components: [row], ephemeral: true });
+            return;
+        }
+
+        if (action === 'page') {
+            const direction = args[0];
+            let currentPage = parseInt(args[1]);
+            if (direction === 'prev') {
+                currentPage--;
+            } else if (direction === 'next') {
+                currentPage++;
+            }
+            await showWorldsList(interaction, currentPage, userActiveFilters, targetUsername);
+            return;
+        }
+
+        switch (action) {
             case 'remove':
             case 'info':
                 await showSimpleModal(interaction, action);
@@ -208,23 +284,6 @@ module.exports = {
                 break;
             case 'filtershow': {
                 await showListFilterModal(interaction);
-                break;
-            }
-            case 'export': {
-                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-                const [pageStr] = args;
-                const page = parseInt(pageStr) || 1;
-                const { worlds } = await db.getFilteredWorlds(userActiveFilters, page, CONSTANTS.PAGE_SIZE);
-                if (worlds.length === 0) { await interaction.editReply({ content: 'No names to export on this page.' }); return; }
-
-                // CRITICAL: Retained the detailed export format from the original file
-                let exportText = "```\n" + worlds.map(world => {
-                    const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
-                    const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
-                    return `(${lockChar}) ${world.name.toUpperCase()}${customIdPart}`;
-                }).join('\n') + "\n```";
-                
-                await interaction.editReply({ content: exportText.substring(0, 2000) });
                 break;
             }
             default:

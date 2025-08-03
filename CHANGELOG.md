@@ -16,7 +16,6 @@
 ### Added
 - Slash commands: addworld, list, info, remove, share, unshare, stats, search, sync, help
 - Unique share links with expiration
-- World expiration tracking and reminders
 - Audit logs for add, remove, share, unshare
 - SQLite database with migrations
 - CI/CD pipeline with GitHub Actions

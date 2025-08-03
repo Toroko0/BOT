@@ -328,7 +328,7 @@ function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset, targetU
     },
     columns: viewMode === 'pc' ?
       { 0: { width: 15 }, 1: { width: 6, alignment: 'right'}, 2: { width: 5, alignment: 'right' }, 3: { width: 15 }, 4: { width: 6 } } :
-      { 0: { width: 20 }, 1: { width: 6, alignment: 'right' } }
+      { 0: { width: 15 }, 1: { width: 6, alignment: 'right' } }
   };
   return { data: tableData, config: tableConfig };
 }
