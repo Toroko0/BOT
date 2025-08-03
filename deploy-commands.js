@@ -103,8 +103,14 @@ async function deployCommands(logger) { // Renamed and added logger as a paramet
             logger.info("[Deploy] Successfully cleared all global commands.");
         }
     } catch (error) {
-        // Check if the error is the specific duplicate name error from Discord.
-        if (error.code === 50035 && error.message.includes('duplicate')) {
+        // Check if the error is the specific duplicate name error from Discord by inspecting the raw error data.
+        const isDuplicateError = !!(error.code === 50035 &&
+                                  error.rawError?.errors &&
+                                  Object.values(error.rawError.errors).some(err =>
+                                    err._errors?.some(e => e.code === 'APPLICATION_COMMANDS_DUPLICATE_NAME')
+                                  ));
+
+        if (isDuplicateError) {
             logger.warn('[Deploy] Deployment failed due to a duplicate command name error. This is likely a Discord API state issue. Forcing a clear and retrying...');
             try {
                 // Clear all commands to resolve the state issue.
