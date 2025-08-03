@@ -30,6 +30,7 @@ async function deployCommands(logger) { // Renamed and added logger as a paramet
                     adminCommandsData.push(command.data.toJSON());
                     logger.debug(`[Deploy] Loaded ADMIN command: ${command.data.name}`);
                 } else {
+                    logger.info(`[Deploy] Loading command: ${command.data.name}`); // Diagnostic log
                     globalCommandsData.push(command.data.toJSON());
                     logger.debug(`[Deploy] Loaded GLOBAL command: ${command.data.name}`);
                 }
@@ -85,6 +86,7 @@ async function deployCommands(logger) { // Renamed and added logger as a paramet
     // Filter out 'admin' command from global deployment
     const finalGlobalCommands = globalCommandsData.filter(cmd => cmd.name !== 'admin');
     logger.info(`[Deploy] Final global commands for deployment after filtering 'admin': ${finalGlobalCommands.map(cmd => cmd.name).join(', ') || 'None'}`);
+    logger.info(`[Deploy] Final command list to be sent: ${JSON.stringify(finalGlobalCommands.map(c => c.name))}`); // Diagnostic log
 
     // Deploy Global Commands
     try {
