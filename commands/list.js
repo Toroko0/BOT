@@ -145,14 +145,15 @@ async function showWorldsList(interaction, page = 1, currentFilters = null, targ
         new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add').setStyle(ButtonStyle.Success).setDisabled(!isOwnList),
         new ButtonBuilder().setCustomId('list_button_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger).setDisabled(!isOwnList),
         new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(`list_button_export_${page}`).setLabel('📄 Export').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(`list_button_export`).setLabel('📄 Export').setStyle(ButtonStyle.Secondary)
     );
     components.push(actionRow1);
 
     // Action Row 2
     const actionRow2 = new ActionRowBuilder();
     actionRow2.addComponents(
-        new ButtonBuilder().setCustomId(`list_button_filtershow`).setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(`list_button_filtershow`).setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('settings_button_show').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary)
     );
     if (actionRow2.components.length > 0) components.push(actionRow2);
     
@@ -220,8 +221,8 @@ module.exports = {
                 await interaction.deferReply({ ephemeral: true });
             }
             const parts = action.split('_');
-            const daysOwned = parts[1];
-            const includeUser = parts.length < 3 || parts[2] !== 'no_user';
+            const daysOwned = parts[parts.length - (parts.includes('no_user') ? 2 : 1)];
+            const includeUser = !parts.includes('no_user');
 
             const exportFilters = { ...userActiveFilters, daysOwned: parseInt(daysOwned) };
 
@@ -284,6 +285,12 @@ module.exports = {
                 break;
             case 'filtershow': {
                 await showListFilterModal(interaction);
+                break;
+            }
+            case 'settings': {
+                const { getSettingsReplyOptions } = require('./settings.js');
+                const replyOptions = await getSettingsReplyOptions(interaction.user.id);
+                await interaction.update(replyOptions);
                 break;
             }
             default:

@@ -17,11 +17,11 @@ module.exports = {
     const worldName = interaction.options.getString('world');
     
     // Get all worlds with the given name
-    const worlds = await db.getWorldsByName(worldName);
+    const { worlds } = await db.getFilteredWorlds({ prefix: worldName, added_by_username: interaction.user.username });
     
     if (worlds.length === 0) {
       await interaction.reply({ 
-        content: `World **${worldName}** not found in the tracking list.`,
+        content: `World starting with **${worldName}** not found in your tracking list.`,
         flags: 1 << 6
       });
       return;
@@ -65,7 +65,7 @@ module.exports = {
             );
 
         await interaction.reply({
-            content: `There are multiple worlds named **${worldName}**. Please select the one you want to remove.`,
+            content: `There are multiple worlds starting with **${worldName}**. Please select the one you want to remove.`,
             components: [row],
             flags: 1 << 6
         });

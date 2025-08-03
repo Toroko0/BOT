@@ -57,7 +57,7 @@ function formatWorldDetails(world) {
   // For display, adjust expiryDate by timezoneOffset if available, otherwise show as UTC
   // This part depends on how timezoneOffset is passed or stored for info command.
   // For simplicity, showing UTC here. Adapt if offset is available.
-  const displayExpiryDate = `${expiryDate.getUTCMonth() + 1}/${expiryDate.getUTCDate()}/${expiryDate.getUTCFullYear()} (${getDayOfWeek(expiryDate)})`;
+  const displayExpiryDate = `${expiryDate.getUTCDate()}/${expiryDate.getUTCMonth() + 1} (${getDayOfWeek(expiryDate)})`;
 
   return `
 **World Information: ${world.name.toUpperCase()}**
@@ -263,11 +263,9 @@ function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset, targetU
   const tableData = [];
   const now = new Date(); // Current time in UTC
   const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const isAnotherUser = targetUsername && worlds.some(w => w.added_by_username.toLowerCase() !== targetUsername.toLowerCase());
 
   if (viewMode === 'pc') {
-      const headers = ['WORLD', 'OWNED', 'LEFT', 'EXPIRES ON', 'LOCK'];
-      if (isAnotherUser) headers.push('ADDED BY');
+      const headers = ['WORLD', 'DAYS', 'LEFT', 'EXPIRES ON', 'LOCK', 'ADDED BY'];
       tableData.push(headers);
 
     for (const world of worlds) {
@@ -278,7 +276,7 @@ function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset, targetU
       const days_owned = days_left > 0 ? Math.max(0, 180 - days_left) : 180;
 
       const userLocalExpiry = new Date(expiryDate.getTime() + timezoneOffset * 3600000);
-      const displayExpiryDate = `${userLocalExpiry.getUTCMonth() + 1}/${userLocalExpiry.getUTCDate()}/${userLocalExpiry.getUTCFullYear()} (${getDayOfWeek(userLocalExpiry)})`;
+      const displayExpiryDate = `${userLocalExpiry.getUTCDate()}/${userLocalExpiry.getUTCMonth() + 1} (${getDayOfWeek(userLocalExpiry)})`;
 
       let lockTypeDisplay = (world.lock_type || 'MAIN').toUpperCase();
       if (lockTypeDisplay === 'MAINLOCK') lockTypeDisplay = 'MAIN';
@@ -289,14 +287,13 @@ function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset, targetU
         days_owned.toString(),
         days_left > 0 ? days_left.toString() : 'EXP',
         displayExpiryDate,
-        lockTypeDisplay
+        lockTypeDisplay,
+        world.added_by_username
         ];
-        if (isAnotherUser) row.push(world.added_by_username);
         tableData.push(row);
     }
   } else { // Mobile Mode
-      const headers = ['WORLD', 'OWNED'];
-      if (isAnotherUser) headers.push('BY');
+      const headers = ['WORLD', 'DAYS', 'BY'];
       tableData.push(headers);
     for (const world of worlds) {
       const expiryDate = new Date(world.expiry_date); // Assuming expiry_date is UTC
@@ -312,9 +309,9 @@ function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset, targetU
 
         const row = [
         `(${lockTypeChar}) ${world.name.toUpperCase()}`,
-        days_owned.toString()
+        days_owned.toString(),
+        world.added_by_username
         ];
-        if (isAnotherUser) row.push(world.added_by_username);
         tableData.push(row);
     }
   }
@@ -327,8 +324,8 @@ function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset, targetU
       content: `${baseTitle} (View: ${viewMode === 'pc' ? 'PC' : 'Mobile'})`
     },
     columns: viewMode === 'pc' ?
-      { 0: { width: 15 }, 1: { width: 6, alignment: 'right'}, 2: { width: 5, alignment: 'right' }, 3: { width: 15 }, 4: { width: 6 } } :
-      { 0: { width: 15 }, 1: { width: 6, alignment: 'right' } }
+      { 0: { width: 15 }, 1: { width: 6, alignment: 'right'}, 2: { width: 5, alignment: 'right' }, 3: { width: 15 }, 4: { width: 6 }, 5: { width: 15 } } :
+      { 0: { width: 15 }, 1: { width: 6, alignment: 'right' }, 2: { width: 15 } }
   };
   return { data: tableData, config: tableConfig };
 }
@@ -345,7 +342,7 @@ function createWorldSelectOption(world, timezoneOffset) {
   return new StringSelectMenuOptionBuilder()
     .setLabel(`${world.name.substring(0, 25)} (${world.custom_id || 'No ID'})`)
     .setValue(world.id.toString())
-    .setDescription(`Expires: ${userLocalExpiry.getUTCMonth() + 1}/${userLocalExpiry.getUTCDate()}/${userLocalExpiry.getUTCFullYear()} (${daysLeft > 0 ? daysLeft : 'EXP'}d left)`);
+    .setDescription(`Expires: ${userLocalExpiry.getUTCDate()}/${userLocalExpiry.getUTCMonth() + 1} (${daysLeft > 0 ? daysLeft : 'EXP'}d left)`);
 }
 
 module.exports = {

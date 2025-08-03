@@ -104,27 +104,14 @@ async function displaySearchResults(interaction, filters, currentPageWorlds, tot
   }
 
   // Build Table
-  const headers = ['WORLD', 'OWNED', 'LEFT', 'EXPIRES', 'LOCK', 'ADDED BY'];
-  const data = [headers];
-  currentPageWorlds.forEach(world => {
-    if (!world || !world.expiry_date) { logger.warn("[search.js] Skipping invalid world in results:", world); return; }
-    const expiryDate = new Date(world.expiry_date); if (isNaN(expiryDate.getTime())) { logger.warn(`[search.js] Skipping world with invalid date: ${world.name}`); return; }
-    const today = new Date(); const todayMidnight = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()); const expiryMidnight = Date.UTC(expiryDate.getUTCFullYear(), expiryDate.getUTCMonth(), expiryDate.getUTCDate());
-    const daysLeft = Math.ceil((expiryMidnight - todayMidnight) / 86400000); const displayedDaysOwned = daysLeft <= 0 ? 180 : Math.max(1, 180 - daysLeft);
-    const displayDaysLeft = daysLeft <= 0 ? 'EXP' : daysLeft.toString(); const dayOfWeek = expiryDate.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }); const formattedExpiry = `${expiryDate.toLocaleDateString('en-US', { timeZone: 'UTC' })} (${dayOfWeek})`;
-    const lockTypeDisplay = world.lock_type.charAt(0).toUpperCase();
-    const row = [ world.name.toUpperCase(), displayedDaysOwned.toString(), displayDaysLeft, formattedExpiry, lockTypeDisplay, world.added_by_username ]; data.push(row);
-  });
+  const { data, config } = utils.formatWorldsToTable(currentPageWorlds, 'pc', 'search', 0, interaction.user.username);
+  let tableOutput = '```\n' + table(data, config) + '\n```';
 
    if (data.length <= 1 && totalWorlds > 0) {
        const errorMsg = { content: ` Gomen 🙏, no valid worlds to display on Page ${page}/${totalPages} of search results.`, components: [], flags: 1 << 6 };
        try { if (isUpdate || interaction.deferred || interaction.replied) await interaction.editReply(errorMsg); else await interaction.reply(errorMsg); }
        catch (e) { logger.error("[search.js] Error sending invalid data message:", e); } return;
    }
-
-  const columnAlignments = ['left', 'right', 'right', 'left', 'center', 'left'];
-  const config = { columns: columnAlignments.reduce((acc, align, index) => { acc[index] = { alignment: align }; return acc; }, {}), border: getBorderCharacters('norc'), header: { alignment: 'center', content: '🔍 SEARCH RESULTS' } };
-  let tableOutput = '```\n' + table(data, config) + '\n```'; if (tableOutput.length > 1950) tableOutput = tableOutput.substring(0, 1950) + '...```';
 
   // Build Components
   const components = [];

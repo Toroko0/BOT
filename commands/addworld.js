@@ -114,7 +114,7 @@ module.exports = {
       } else {
         logger.error('[addworld.js] Add world via slash failed:', result.message);
         if (result.message.includes('is already being tracked by')) {
-            await interaction.reply({ ...replyOpts, content: `❌ This world is already being tracked. ${result.message}` });
+            await interaction.reply({ ...replyOpts, content: `❌ ${result.message}` });
             await performSearch(interaction, { prefix: worldName });
         } else {
             await interaction.reply({ ...replyOpts, content: `❌ ${result.message || 'Failed to add world.'}` }); // Show specific error
@@ -196,7 +196,7 @@ module.exports = {
             // This case might be redundant if db.addWorld throws errors for all failures
             logger.error('[addworld.js] Add world via modal failed (result.success false):', result.message);
             if (result.message.includes('is already being tracked by')) {
-                await interaction.reply({ ...replyOpts, content: `❌ This world is already being tracked. ${result.message}` });
+                await interaction.reply({ ...replyOpts, content: `❌ ${result.message}` });
                 await performSearch(interaction, { prefix: worldName });
             } else {
                 await interaction.reply({ ...replyOpts, content: `❌ ${result.message || 'Failed to add world.'}` });
