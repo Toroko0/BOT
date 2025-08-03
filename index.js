@@ -27,7 +27,6 @@ try {
     for (const file of commandFiles) {
       const filePath = path.join(commandsPath, file);
       try {
-          logger.info(`[Startup] Loading file: ${file}`); // Diagnostic log
           // Clear cache before requiring to pick up changes during dev
           delete require.cache[require.resolve(filePath)];
           const command = require(filePath);
