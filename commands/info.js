@@ -131,14 +131,6 @@ async function showWorldInfo(interaction, world) {
   const components = [];
   const replyOpts = { flags: MessageFlags.Ephemeral }; // Ephemeral by default
 
-  const generalButtonsRow = new ActionRowBuilder();
-  generalButtonsRow.addComponents(
-    new ButtonBuilder()
-        .setCustomId('list_button_view_private_1')
-        .setLabel('⬅️ Back to List')
-        .setStyle(ButtonStyle.Secondary)
-  );
-  components.push(generalButtonsRow);
 
   // Show management buttons only if the user owns the world
   if (world.added_by_username === interaction.user.username) {

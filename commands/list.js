@@ -133,9 +133,6 @@ async function showWorldsList(interaction, page = 1, currentFilters = null, targ
     // Retained the detailed, original table generation and component building logic
     const { data, config } = utils.formatWorldsToTable(worlds, viewMode, 'public', timezoneOffset, targetUsername);
     let tableOutput = '```\n' + table(data, config) + '\n```';
-    if (tableOutput.length > 1900) {
-        tableOutput = tableOutput.substring(0, tableOutput.lastIndexOf('\n', 1900)) + '\n... (Table truncated) ...```';
-    }
 
     const components = [];
     // Navigation Row (using a utility for cleaner code)
@@ -192,6 +189,31 @@ module.exports = {
         const [action, ...args] = params;
         const userActiveFilters = interaction.client.activeListFilters?.[interaction.user.id] || {};
         const targetUsername = userActiveFilters?.added_by_username;
+
+        if (action === 'export') {
+            if (!interaction.deferred && !interaction.replied) {
+                await interaction.deferReply({ ephemeral: true });
+            }
+
+            const row = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('list_button_export_179')
+                        .setLabel('Export 179 Days')
+                        .setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder()
+                        .setCustomId('list_button_export_180')
+                        .setLabel('Export 180 Days')
+                        .setStyle(ButtonStyle.Primary)
+                );
+
+            await interaction.editReply({
+                content: 'Please choose which worlds to export:',
+                components: [row],
+                ephemeral: true
+            });
+            return;
+        }
 
         if (action.startsWith('export_')) {
             if (!interaction.deferred && !interaction.replied) {
@@ -262,30 +284,6 @@ module.exports = {
                 break;
             case 'filtershow': {
                 await showListFilterModal(interaction);
-                break;
-            }
-            case 'export': {
-                if (!interaction.deferred && !interaction.replied) {
-                    await interaction.deferReply({ ephemeral: true });
-                }
-
-                const row = new ActionRowBuilder()
-                    .addComponents(
-                        new ButtonBuilder()
-                            .setCustomId('list_button_export_179')
-                            .setLabel('Export 179 Days')
-                            .setStyle(ButtonStyle.Primary),
-                        new ButtonBuilder()
-                            .setCustomId('list_button_export_180')
-                            .setLabel('Export 180 Days')
-                            .setStyle(ButtonStyle.Primary)
-                    );
-
-                await interaction.editReply({
-                    content: 'Please choose which worlds to export:',
-                    components: [row],
-                    ephemeral: true
-                });
                 break;
             }
             default:

@@ -1,8 +1,9 @@
-const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
+const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder } = require('discord.js');
 const db = require('../database.js');
 const { table } = require('table');
 const CONSTANTS = require('../utils/constants.js');
 const logger = require('../utils/logger.js');
+const { showWorldsList } = require('./list.js');
 
 async function showLeaderboard(interaction, page = 1) {
     const isUpdate = interaction.isMessageComponent();
@@ -80,7 +81,19 @@ module.exports = {
     async handleSelectMenu(interaction, params) {
         const username = interaction.values[0];
         const stats = await db.getUserStats(username);
-        const statsOutput = `**${username}'s Stats**\nTotal Worlds: ${stats.totalWorlds}\nMainlocks: ${stats.mainlock}\nOutlocks: ${stats.outlock}`;
-        await interaction.reply({ content: statsOutput, flags: 1 << 6 });
+
+        const embed = new EmbedBuilder()
+            .setColor(0x0099FF)
+            .setTitle(`📊 Stats for ${username}`)
+            .addFields(
+                { name: '🌍 Total Worlds', value: stats.totalWorlds.toString(), inline: true },
+                { name: '🧲 Mainlocks', value: stats.mainlock.toString(), inline: true },
+                { name: '👑 Outlocks', value: stats.outlock.toString(), inline: true }
+            );
+
+        await interaction.reply({ embeds: [embed], flags: 1 << 6 });
+
+        const filters = { added_by_username: username };
+        await showWorldsList(interaction, 1, filters, username);
     }
 };
