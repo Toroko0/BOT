@@ -87,8 +87,8 @@ async function deployCommands(logger) { // Renamed and added logger as a paramet
     logger.info(`[Deploy] Final global commands for deployment after filtering 'admin': ${finalGlobalCommands.map(cmd => cmd.name).join(', ') || 'None'}`);
 
     // Deploy Global Commands
-    if (finalGlobalCommands.length > 0) {
-        try {
+    try {
+        if (finalGlobalCommands.length > 0) {
             logger.info(`[Deploy] Attempting to deploy ${finalGlobalCommands.length} global commands...`);
             const deployedGlobalPayload = await rest.put(
                 Routes.applicationCommands(clientId),
@@ -96,25 +96,40 @@ async function deployCommands(logger) { // Renamed and added logger as a paramet
             );
             deployedGlobalCount = deployedGlobalPayload.length;
             logger.info(`[Deploy] Successfully deployed ${deployedGlobalCount} global command(s) according to Discord API response.`);
-        } catch (error) {
-            logger.error('[Deploy] FAILED to deploy global commands:', error);
-            if (error.rawError) { logger.error('[Deploy] Raw error data from Discord:', error.rawError); }
-            if (error.stack) { logger.error('[Deploy] Stack trace:', error.stack); }
-            // We might still want to return partial success if admin commands deployed
+        } else {
+            // If there are no commands to deploy, clear any existing ones.
+            logger.info("[Deploy] No global commands to deploy. Clearing all global commands.");
+            await rest.put(Routes.applicationCommands(clientId), { body: [] });
+            logger.info("[Deploy] Successfully cleared all global commands.");
         }
-    } else { // This means finalGlobalCommands is empty
-        logger.info("[Deploy] No global commands to deploy (either none were loaded, or all were filtered out).");
-        if (globalCommandsData.length === 0 && adminCommandsData.length === 0) {
-            logger.warn("[Deploy] All command lists are empty (admin and global). Attempting to clear global commands.");
+    } catch (error) {
+        // Check if the error is the specific duplicate name error from Discord.
+        if (error.code === 50035 && error.message.includes('duplicate')) {
+            logger.warn('[Deploy] Deployment failed due to a duplicate command name error. This is likely a Discord API state issue. Forcing a clear and retrying...');
             try {
-                logger.info(`[Deploy] Clearing ALL global commands as no commands were loaded at all.`);
+                // Clear all commands to resolve the state issue.
                 await rest.put(Routes.applicationCommands(clientId), { body: [] });
-                logger.info(`[Deploy] Successfully cleared ALL global commands.`);
-            } catch (error) {
-                logger.error(`[Deploy] Error clearing ALL global commands:`, error);
+                logger.info('[Deploy] Successfully cleared all global commands. Retrying deployment...');
+
+                // Retry the deployment now that commands are cleared.
+                if (finalGlobalCommands.length > 0) {
+                    const retryPayload = await rest.put(
+                        Routes.applicationCommands(clientId),
+                        { body: finalGlobalCommands }
+                    );
+                    deployedGlobalCount = retryPayload.length;
+                    logger.info(`[Deploy] Successfully re-deployed ${deployedGlobalCount} global command(s).`);
+                } else {
+                    logger.info('[Deploy] No global commands to re-deploy after clearing.');
+                }
+            } catch (retryError) {
+                logger.error('[Deploy] FAILED to deploy global commands on retry after clearing:', retryError);
             }
         } else {
-            logger.warn("[Deploy] No global commands are being deployed, but other commands (e.g., admin) might exist or global commands were filtered. Global commands will NOT be cleared automatically.");
+            // For any other kind of error, log it as before.
+            logger.error('[Deploy] FAILED to deploy global commands with a non-duplicate-name error:', error);
+            if (error.rawError) { logger.error('[Deploy] Raw error data from Discord:', error.rawError); }
+            if (error.stack) { logger.error('[Deploy] Stack trace:', error.stack); }
         }
     }
 

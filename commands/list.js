@@ -133,6 +133,15 @@ async function showWorldsList(interaction, page = 1, currentFilters = null, targ
     // Retained the detailed, original table generation and component building logic
     const { data, config } = utils.formatWorldsToTable(worlds, viewMode, 'public', timezoneOffset, targetUsername);
     let tableOutput = '```\n' + table(data, config) + '\n```';
+    const footer = `\n📊 Total worlds: ${totalWorlds}`;
+
+    // Truncate the table if the total message would be too long
+    if ((tableOutput + footer).length > 2000) {
+        const availableLength = 2000 - footer.length - 30; // Leave space for truncation message
+        let cutOff = tableOutput.lastIndexOf('\n', availableLength);
+        if (cutOff === -1) cutOff = availableLength;
+        tableOutput = tableOutput.substring(0, cutOff) + "\n... (list truncated)```";
+    }
 
     const components = [];
     // Navigation Row (using a utility for cleaner code)
@@ -163,7 +172,7 @@ async function showWorldsList(interaction, page = 1, currentFilters = null, targ
         components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('list_select_info').setPlaceholder('📋 Select a world for details').addOptions(selectOptions)));
     }
   
-    const finalContent = `${tableOutput}\n📊 Total worlds: ${totalWorlds}`;
+    const finalContent = tableOutput + footer;
     const finalOpts = { content: finalContent, components, flags: MessageFlags.Ephemeral };
     await interaction.editReply(finalOpts);
 }
