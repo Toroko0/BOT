@@ -297,7 +297,7 @@ module.exports = {
                 break;
             }
             case 'settings': {
-                const { getSettingsReplyOptions } = require('./settings.js');
+                const { getSettingsReplyOptions } = require('../utils/settings.js');
                 const replyOptions = await getSettingsReplyOptions(interaction.user.id);
                 await interaction.update(replyOptions);
                 break;

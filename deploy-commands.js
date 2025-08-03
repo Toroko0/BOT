@@ -15,7 +15,6 @@ async function deployCommands(logger) { // Renamed and added logger as a paramet
         throw new Error('[Deploy] Missing DISCORD_TOKEN or CLIENT_ID environment variables.');
     }
 
-    const adminCommandsData = [];
     const globalCommandsData = [];
     const commandsPath = path.join(__dirname, 'commands');
     const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
@@ -26,65 +25,23 @@ async function deployCommands(logger) { // Renamed and added logger as a paramet
         try {
             const command = require(filePath);
             if (command.data && typeof command.data.toJSON === 'function') {
-                if (command.data.name === 'admin') {
-                    adminCommandsData.push(command.data.toJSON());
-                    logger.debug(`[Deploy] Loaded ADMIN command: ${command.data.name}`);
-                } else {
-                    globalCommandsData.push(command.data.toJSON());
-                    logger.debug(`[Deploy] Loaded GLOBAL command: ${command.data.name}`);
-                }
+                globalCommandsData.push(command.data.toJSON());
+                logger.debug(`[Deploy] Loaded GLOBAL command: ${command.data.name}`);
             } else {
-                logger.warn(`[Deploy] Command at ${filePath} is missing a valid "data" property or toJSON method.`);
+                logger.warn(`[Deploy] Command at ${filePath} is missing a valid "data" or toJSON method.`);
             }
         } catch (error) {
             logger.error(`[Deploy] Failed to load command file ${file}:`, error);
         }
     }
-    logger.info(`[Deploy] Found ${adminCommandsData.length} admin command(s) and ${globalCommandsData.length} global command(s).`);
-    logger.info(`[Deploy] Admin commands to be deployed to guild: ${adminCommandsData.map(cmd => cmd.name).join(', ') || 'None'}`);
+    logger.info(`[Deploy] Found ${globalCommandsData.length} global command(s).`);
     logger.info(`[Deploy] Global commands initially loaded: ${globalCommandsData.map(cmd => cmd.name).join(', ') || 'None'}`);
 
     const rest = new REST({ version: '10' }).setToken(token);
-    let deployedAdminCount = 0;
     let deployedGlobalCount = 0;
 
-    // Deploy Admin (Guild-specific) Commands
-    if (guildId) {
-        if (adminCommandsData.length > 0) {
-            try {
-                logger.info(`[Deploy] Deploying ${adminCommandsData.length} admin command(s) to GUILD_ID: ${guildId}...`);
-                const adminData = await rest.put(
-                    Routes.applicationGuildCommands(clientId, guildId),
-                    { body: adminCommandsData }
-                );
-                logger.info(`[Deploy] Successfully deployed ${adminData.length} admin command(s) to GUILD_ID: ${guildId}.`);
-                deployedAdminCount = adminData.length;
-            } catch (error) {
-                logger.error(`[Deploy] Error deploying admin commands to GUILD_ID ${guildId}:`, error);
-            }
-        } else {
-            logger.info(`[Deploy] No admin commands found to deploy to GUILD_ID: ${guildId}.`);
-            // Attempt to clear existing guild commands if no admin commands are defined now
-            try {
-                logger.info(`[Deploy] Clearing existing admin commands from GUILD_ID: ${guildId} as no admin commands are currently defined.`);
-                await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: [] });
-                logger.info(`[Deploy] Successfully cleared admin commands from GUILD_ID: ${guildId}.`);
-            } catch (error) {
-                logger.error(`[Deploy] Error clearing admin commands from GUILD_ID ${guildId}:`, error);
-            }
-        }
-    } else {
-        if (adminCommandsData.length > 0) {
-            logger.warn('[Deploy] GUILD_ID is not set in .env. Admin commands will NOT be deployed.');
-            logger.warn('[Deploy] If you have admin commands, please set GUILD_ID in your .env file to deploy them to a specific server.');
-        } else {
-            logger.info('[Deploy] No admin commands found, and GUILD_ID is not set. Skipping admin command deployment.');
-        }
-    }
-
-    // Filter out 'admin' command from global deployment
-    const finalGlobalCommands = globalCommandsData.filter(cmd => cmd.name !== 'admin');
-    logger.info(`[Deploy] Final global commands for deployment after filtering 'admin': ${finalGlobalCommands.map(cmd => cmd.name).join(', ') || 'None'}`);
+    const finalGlobalCommands = globalCommandsData;
+    logger.info(`[Deploy] Final global commands for deployment: ${finalGlobalCommands.map(cmd => cmd.name).join(', ') || 'None'}`);
 
     // Deploy Global Commands
     try {
@@ -103,8 +60,14 @@ async function deployCommands(logger) { // Renamed and added logger as a paramet
             logger.info("[Deploy] Successfully cleared all global commands.");
         }
     } catch (error) {
-        // Check if the error is the specific duplicate name error from Discord.
-        if (error.code === 50035 && error.message.includes('duplicate')) {
+        // Check if the error is the specific duplicate name error from Discord by inspecting the raw error data.
+        const isDuplicateError = !!(error.code === 50035 &&
+                                  error.rawError?.errors &&
+                                  Object.values(error.rawError.errors).some(err =>
+                                    err._errors?.some(e => e.code === 'APPLICATION_COMMANDS_DUPLICATE_NAME')
+                                  ));
+
+        if (isDuplicateError) {
             logger.warn('[Deploy] Deployment failed due to a duplicate command name error. This is likely a Discord API state issue. Forcing a clear and retrying...');
             try {
                 // Clear all commands to resolve the state issue.

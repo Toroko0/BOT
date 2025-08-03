@@ -48,50 +48,6 @@ try {
      process.exit(1);
 }
 
-// --- Daily Tasks Setup ---
-async function removeExpiredWorldsOnStartup() {
-  try {
-    logger.info('[Startup] Removing expired worlds on startup.');
-    const removedCount = await db.removeExpiredWorlds();
-    logger.info(`[Startup] Removed ${removedCount} expired worlds.`);
-  } catch (error) {
-    logger.error('[Startup] Error removing expired worlds:', error);
-  }
-}
-
-function setupScheduledTasks() {
-  logger.info('[Scheduler] Setting up daily tasks.');
-  const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
-  const now = DateTime.utc();
-  const nextRunTime = now.plus({ days: 1 }).set({ hour: 0, minute: 5, second: 0, millisecond: 0 });
-  const msUntilNextRun = Math.max(0, nextRunTime.diff(now).as('milliseconds')); // Ensure non-negative
-
-  logger.info(`[Scheduler] Next daily tasks scheduled at ${nextRunTime.toISO()} (in ${Math.round(msUntilNextRun / 1000 / 60)} mins)`);
-
-  // Run startup tasks immediately
-  removeExpiredWorldsOnStartup(); // Don't await
-
-  // Schedule the first run
-  setTimeout(() => {
-    runDailyTasks();
-    // Schedule subsequent runs
-    setInterval(runDailyTasks, TWENTY_FOUR_HOURS_MS);
-  }, msUntilNextRun);
-}
-
-// Function to run daily tasks
-async function runDailyTasks() {
-  try {
-    logger.info(`[Scheduler] Running daily tasks at ${new Date().toISOString()}`);
-    // Remove expired worlds
-    const removedCount = await db.removeExpiredWorlds();
-    logger.info(`[Scheduler] Daily check removed ${removedCount} expired worlds.`);
-    // Daily update logic (if any needed besides expiry removal) could go here
-  } catch (error) {
-    logger.error('[Scheduler] Error running daily tasks:', error);
-  }
-}
-
 // --- Event Handlers ---
 
 // Client Ready Event
@@ -105,8 +61,6 @@ client.once(Events.ClientReady, async c => {
         logger.info('[Startup] Deploying slash commands in-process...');
         await deployCommands(logger); // Updated function call
         logger.info('[Startup] In-process slash command deployment complete.');
-
-        setupScheduledTasks();
 
     } catch (err) {
         logger.error('[Startup] FATAL: Error during startup process (migrations, command deployment, or schedulers):', err);
