@@ -98,7 +98,6 @@ async function deployCommands(logger) { // Renamed and added logger as a paramet
 
     return {
         success: true, // Overall script execution success, individual deployments might have failed
-        adminCount: deployedAdminCount,
         globalCount: deployedGlobalCount
     };
 }
