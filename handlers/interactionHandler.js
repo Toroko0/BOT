@@ -150,7 +150,9 @@ async function setupInteractionHandler(client) {
                 }
 
                 logger.info(`[Interaction Handler] Executing command: /${interaction.commandName} by ${interaction.user.tag} (${interaction.user.id})`);
+                logger.info(`[Interaction Handler] About to call execute for ${interaction.commandName}`);
                 await command.execute(interaction); // Command handles its own deferral/reply
+                logger.info(`[Interaction Handler] Finished execute for ${interaction.commandName}`);
             }
             // --- Component Handling (Buttons, Select Menus) ---
             else if (interaction.isMessageComponent()) { // Combined check for Button, SelectMenu, etc.
