@@ -50,6 +50,8 @@ try {
 
 // --- Event Handlers ---
 
+const cron = require('node-cron');
+
 // Client Ready Event
 client.once(Events.ClientReady, async c => {
     logger.info(`Logged in as ${c.user.tag}!`); // Keep this first log
@@ -61,6 +63,22 @@ client.once(Events.ClientReady, async c => {
         logger.info('[Startup] Deploying slash commands in-process...');
         await deployCommands(logger); // Updated function call
         logger.info('[Startup] In-process slash command deployment complete.');
+
+        // Schedule daily cleanup of expired worlds
+        cron.schedule('0 1 * * *', async () => {
+            logger.info('[Cron] Running daily expired worlds cleanup job...');
+            try {
+                const count = await db.removeExpiredWorlds();
+                if (count > 0) {
+                    logger.info(`[Cron] Successfully removed ${count} expired worlds.`);
+                } else {
+                    logger.info('[Cron] No expired worlds to remove.');
+                }
+            } catch (error) {
+                logger.error('[Cron] Error during expired worlds cleanup:', error);
+            }
+        });
+        logger.info('[Startup] Scheduled daily expired worlds cleanup job.');
 
     } catch (err) {
         logger.error('[Startup] FATAL: Error during startup process (migrations, command deployment, or schedulers):', err);

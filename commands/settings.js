@@ -1,8 +1,26 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
 const db = require('../database.js');
 const logger = require('../utils/logger.js');
 const { showWorldsList } = require('./list.js');
 const { getSettingsReplyOptions } = require('../utils/settings.js');
+
+async function showTimezoneModal(interaction) {
+    const modal = new ModalBuilder()
+        .setCustomId('settings_modal_timezone')
+        .setTitle('Set Your Timezone Offset');
+
+    const timezoneInput = new TextInputBuilder()
+        .setCustomId('timezone_offset')
+        .setLabel('UTC Offset (e.g., -5, 7.5, +2)')
+        .setPlaceholder('Enter a number from -12 to +14')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+    const actionRow = new ActionRowBuilder().addComponents(timezoneInput);
+    modal.addComponents(actionRow);
+
+    await interaction.showModal(modal);
+}
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -23,16 +41,28 @@ module.exports = {
             const replyOptions = await getSettingsReplyOptions(userId);
             await interaction.update(replyOptions);
         } else if (action === 'timezone') {
-            // In a real scenario, you'd show a modal here to get the timezone.
-            // For this example, we'll just cycle through a few timezones.
-            const currentPrefs = await db.getUserPreferences(userId);
-            const currentTimezone = currentPrefs.timezone_offset || 0.0;
-            const newTimezone = (currentTimezone + 1) % 13;
-            await db.updateUserTimezone(userId, newTimezone);
-            const replyOptions = await getSettingsReplyOptions(userId);
-            await interaction.update(replyOptions);
+            await showTimezoneModal(interaction);
         } else if (action === 'back') {
             await showWorldsList(interaction, 1, { added_by_username: interaction.user.username }, interaction.user.username);
         }
+    },
+    async handleModal(interaction) {
+        if (interaction.customId !== 'settings_modal_timezone') return;
+
+        const timezoneOffsetStr = interaction.fields.getTextInputValue('timezone_offset');
+        const timezoneOffset = parseFloat(timezoneOffsetStr);
+
+        if (isNaN(timezoneOffset) || timezoneOffset < -12 || timezoneOffset > 14) {
+            return interaction.reply({
+                content: '❌ Invalid timezone offset. Please enter a number between -12 and +14.',
+                ephemeral: true,
+            });
+        }
+
+        const userId = interaction.user.id;
+        await db.updateUserTimezone(userId, timezoneOffset);
+
+        const replyOptions = await getSettingsReplyOptions(userId);
+        await interaction.update(replyOptions);
     },
 };
