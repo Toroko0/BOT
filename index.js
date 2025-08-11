@@ -57,6 +57,16 @@ client.once(Events.ClientReady, async c => {
         await db.knex.migrate.latest();
         logger.info('[Startup] Database migrations complete.');
 
+        // --- NEW CODE BLOCK ---
+        logger.info('[Startup] Running one-time startup cleanup...');
+        const count = await db.removeExpiredWorlds();
+        if (count > 0) {
+            logger.info(`[Startup] Removed ${count} expired worlds during startup.`);
+        } else {
+            logger.info('[Startup] No expired worlds found on startup.');
+        }
+        // --- END OF NEW CODE BLOCK ---
+        
         // Schedule daily cleanup of expired worlds
         cron.schedule('0 1 * * *', async () => {
             logger.info('[Cron] Running daily expired worlds cleanup job...');
