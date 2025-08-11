@@ -3,6 +3,7 @@ const fs = require('fs');
 const knexConfig = require('./knexfile.js');
 const Knex = require('knex');
 const logger = require('./utils/logger.js');
+const { DateTime, Duration } = require('luxon');
 
 // --- Initialize Knex ---
 let knexInstance;
@@ -14,12 +15,10 @@ try {
     }
     knexInstance = Knex(knexConfig.development);
 
-    // Add event listener for query logging
     knexInstance.on('query', (queryData) => {
         logger.debug('[DB Query]', { sql: queryData.sql, bindings: queryData.bindings });
     });
 
-    // Test connection immediately after initialization
     knexInstance.raw('SELECT 1')
       .then(() => { logger.info("[DB] Knex connected (Early Check)."); })
       .catch((err) => { logger.error("[DB] FATAL: Knex connection failed (Early Check).", err); process.exit(1); });
@@ -40,9 +39,12 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = 
     const daysOwnedNum = Math.max(1, Math.min(parseInt(daysOwned, 10) || 1, 180));
     if (worldNameUpper.includes(' ')) { return { success: false, message: 'World names cannot contain spaces.' }; }
     if (normalizedCustomId === '') { normalizedCustomId = null; }
-    const now = new Date(); const daysLeft = 180 - daysOwnedNum; const expiryDate = new Date(now.getTime() + daysLeft * 24 * 60 * 60 * 1000); const expiryDateISO = expiryDate.toISOString();
 
-    // Pre-emptive check for existing world with the exact same name, lock type, and days owned.
+    const now = DateTime.utc().startOf('day');
+    const daysLeft = 180 - daysOwnedNum;
+    const expiryDate = now.plus({ days: daysLeft });
+    const expiryDateISO = expiryDate.toISO();
+
     const existingWorlds = await knexInstance('worlds')
         .where({
             name: worldNameUpper,
@@ -50,20 +52,26 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = 
         });
 
     if (existingWorlds.length > 0) {
-        const existingWorld = existingWorlds.find(w => w.days_owned === daysOwnedNum);
-        if (existingWorld) {
-            return { success: false, message: `A world named **${worldNameUpper}** with **${daysOwnedNum}** days owned and lock type **${normalizedLockType.charAt(0).toUpperCase()}** is already being tracked by **${existingWorld.added_by_username}**.` };
-        }
+        const existingWorld = existingWorlds[0];
+        return { success: false, message: `A world named **${worldNameUpper}** with lock type **${normalizedLockType.charAt(0).toUpperCase()}** is already being tracked by **${existingWorld.added_by_username}**.` };
     }
 
     try {
-        await knexInstance('worlds').insert({ name: worldNameUpper, days_owned: daysOwnedNum, expiry_date: expiryDateISO, lock_type: normalizedLockType, custom_id: normalizedCustomId, added_by_username: username });
+        await knexInstance('worlds').insert({
+            name: worldNameUpper,
+            days_owned: daysOwnedNum,
+            expiry_date: expiryDateISO,
+            lock_type: normalizedLockType,
+            custom_id: normalizedCustomId,
+            added_by_username: username,
+            added_date: DateTime.utc().toISO(),
+        });
         logger.info(`[DB] Added world ${worldNameUpper}`);
         return { success: true, message: `**${worldNameUpper}** added.` };
     } catch (error) {
         logger.error(`[DB] Error adding world ${worldNameUpper}:`, error);
         if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) {
-            if (error.message.includes('uq_worlds_name_days_lock')) { // New constraint name
+            if (error.message.includes('uq_worlds_name_days_lock')) {
                 return { success: false, message: `A world named **${worldNameUpper}** with the exact same days owned and lock type is already being tracked (database constraint).` };
             } else if (error.message.includes('worlds.uq_worlds_customid') && normalizedCustomId) {
                 return { success: false, message: `Custom ID **${normalizedCustomId}** already in use.` };
@@ -77,15 +85,33 @@ async function updateWorld(worldId, updatedData) {
     const { daysOwned, lockType, customId } = updatedData;
     const daysOwnedNum = Math.max(1, Math.min(parseInt(daysOwned, 10) || 1, 180));
     const normalizedLockType = String(lockType).toLowerCase() === 'o' ? 'outlock' : 'mainlock';
-    let normalizedCustomId = customId ? String(customId).trim().toUpperCase() : null; if (normalizedCustomId === '') normalizedCustomId = null;
-    const now = new Date(); const daysLeft = 180 - daysOwnedNum; const newExpiryDate = new Date(now.getTime() + daysLeft * 24 * 60 * 60 * 1000); const expiryDateISO = newExpiryDate.toISOString();
+    let normalizedCustomId = customId ? String(customId).trim().toUpperCase() : null;
+    if (normalizedCustomId === '') normalizedCustomId = null;
+
+    const now = DateTime.utc().startOf('day');
+    const daysLeft = 180 - daysOwnedNum;
+    const newExpiryDate = now.plus({ days: daysLeft });
+    const expiryDateISO = newExpiryDate.toISO();
+
     try {
-        const updateCount = await knexInstance('worlds').where({ id: worldId }).update({ days_owned: daysOwnedNum, expiry_date: expiryDateISO, lock_type: normalizedLockType, custom_id: normalizedCustomId });
+        const updateCount = await knexInstance('worlds')
+            .where({ id: worldId })
+            .update({
+                days_owned: daysOwnedNum,
+                expiry_date: expiryDateISO,
+                lock_type: normalizedLockType,
+                custom_id: normalizedCustomId
+            });
         if (updateCount === 0) throw new Error('World not found.');
-        logger.info(`[DB] Updated core details for world ${worldId}`); return true;
+        logger.info(`[DB] Updated core details for world ${worldId}`);
+        return true;
     } catch (error) {
         logger.error(`[DB] Error updating world ${worldId}:`, error);
-        if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) { if (error.message.includes('worlds.uq_worlds_customid') && normalizedCustomId) { throw new Error(`Custom ID **${normalizedCustomId}** already used.`); } }
+        if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) {
+            if (error.message.includes('worlds.uq_worlds_customid') && normalizedCustomId) {
+                throw new Error(`Custom ID **${normalizedCustomId}** already used.`);
+            }
+        }
         throw error;
     }
 }
@@ -111,11 +137,11 @@ async function getWorlds(page = 1, pageSize = 10) {
     logger.debug(`[DB] getWorlds raw rows fetched, page ${page}:`, worlds.map(w => ({ id: w.id, name: w.name })));
 
     const totalResult = await knexInstance('worlds')
-        .count({ total: '*' });
+      .count({ total: '*' });
 
     const totalCount = (totalResult && totalResult[0] && totalResult[0].total !== undefined)
-                       ? Number(totalResult[0].total)
-                       : 0;
+                         ? Number(totalResult[0].total)
+                         : 0;
 
     logger.debug(`[DB] getWorlds count query returned: ${totalCount}`);
 
@@ -154,11 +180,12 @@ async function findWorldByIdentifier(identifier) {
     catch (error) { logger.error(`[DB] Error in findWorldByIdentifier for "${identifier}":`, error); return null; }
 }
 
+// --- CORRECTED getFilteredWorlds FUNCTION ---
 async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10) {
     logger.debug(`[DB] getFilteredWorlds called - Filters: ${JSON.stringify(filters)}, Page: ${page}, PageSize: ${pageSize}`);
 
-    // Ensure filters is an object to prevent errors on property access
     const effectiveFilters = filters || {};
+    const nowUtc = DateTime.utc().startOf('day');
 
     try {
         let query = knexInstance('worlds').select('*');
@@ -186,26 +213,19 @@ async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10) {
 
         if (effectiveFilters.daysOwned !== undefined && effectiveFilters.daysOwned !== null) {
             const daysOwnedInput = parseInt(effectiveFilters.daysOwned);
-            if (!isNaN(daysOwnedInput)) {
-                if (daysOwnedInput === 180) {
-                    const todayEnd = new Date();
-                    todayEnd.setUTCHours(23, 59, 59, 999);
-                    query.andWhere('expiry_date', '<=', todayEnd.toISOString());
-                    countQueryBase.andWhere('expiry_date', '<=', todayEnd.toISOString());
-                } else if (daysOwnedInput >= 0 && daysOwnedInput < 180) {
-                    const targetDaysLeft = 180 - daysOwnedInput;
-                    const targetDate = new Date();
-                    targetDate.setUTCHours(0,0,0,0);
-                    targetDate.setUTCDate(targetDate.getUTCDate() + targetDaysLeft);
-                    const targetStartDateISO = targetDate.toISOString();
-                    const targetEndDate = new Date(targetDate);
-                    targetEndDate.setUTCDate(targetDate.getUTCDate() + 1);
-                    const targetEndDateISO = targetEndDate.toISOString();
-                    query.andWhere('expiry_date', '>=', targetStartDateISO)
-                         .andWhere('expiry_date', '<', targetEndDateISO);
-                    countQueryBase.andWhere('expiry_date', '>=', targetStartDateISO)
-                                  .andWhere('expiry_date', '<', targetEndDateISO);
-                }
+            if (!isNaN(daysOwnedInput) && daysOwnedInput >= 0 && daysOwnedInput <= 180) {
+                const targetDaysLeft = 180 - daysOwnedInput;
+                const targetExpiryDate = nowUtc.plus({ days: targetDaysLeft });
+                const targetExpiryDateISO = targetExpiryDate.toISO();
+
+                const nextDay = targetExpiryDate.plus({ days: 1 });
+                const nextDayISO = nextDay.toISO();
+
+                query.andWhere('expiry_date', '>=', targetExpiryDateISO)
+                     .andWhere('expiry_date', '<', nextDayISO);
+                
+                countQueryBase.andWhere('expiry_date', '>=', targetExpiryDateISO)
+                              .andWhere('expiry_date', '<', nextDayISO);
             }
         }
 
@@ -247,7 +267,28 @@ async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10) {
     }
 }
 
-async function removeExpiredWorlds() { try { const now = new Date(); now.setUTCHours(0, 0, 0, 0); const nowISO = now.toISOString(); const deletedCount = await knexInstance('worlds').where('expiry_date', '<', nowISO).del(); if (deletedCount > 0) logger.info(`[DB] Daily Task: Removed ${deletedCount} expired worlds (Expired before ${nowISO}).`); return deletedCount; } catch (error) { logger.error('[DB] Error removing expired worlds:', error); return 0; } }
+async function removeExpiredWorlds() {
+    try {
+        const now = DateTime.utc();
+        const nowISO = now.toISO();
+        
+        logger.debug(`[DB] Running cleanup query. Removing worlds with expiry_date < '${nowISO}'`);
+
+        const deletedCount = await knexInstance('worlds')
+            .where('expiry_date', '<', nowISO)
+            .del();
+        
+        if (deletedCount > 0) {
+            logger.info(`[DB] Daily Task: Removed ${deletedCount} expired worlds.`);
+        } else {
+            logger.info('[DB] Daily Task: No expired worlds to remove.');
+        }
+        return deletedCount;
+    } catch (error) {
+        logger.error('[DB] Error removing expired worlds:', error);
+        return 0;
+    }
+}
 
 async function getWorldCount() { try { const result = await knexInstance('worlds').count({ count: '*' }).first(); return result ? Number(result.count) : 0; } catch (error) { logger.error(`[DB] Error getting world count:`, error); return 0; } }
 
