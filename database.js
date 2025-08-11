@@ -180,7 +180,6 @@ async function findWorldByIdentifier(identifier) {
     catch (error) { logger.error(`[DB] Error in findWorldByIdentifier for "${identifier}":`, error); return null; }
 }
 
-// --- CORRECTED getFilteredWorlds FUNCTION ---
 async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10) {
     logger.debug(`[DB] getFilteredWorlds called - Filters: ${JSON.stringify(filters)}, Page: ${page}, PageSize: ${pageSize}`);
 
