@@ -1,9 +1,11 @@
+// /home/container/database.js
+
 const path = require('path');
 const fs = require('fs');
 const knexConfig = require('./knexfile.js');
 const Knex = require('knex');
 const logger = require('./utils/logger.js');
-const { DateTime, Duration } = require('luxon');
+const { DateTime } = require('luxon');
 
 // --- Initialize Knex ---
 let knexInstance;
@@ -20,12 +22,12 @@ try {
     });
 
     knexInstance.raw('SELECT 1')
-      .then(() => { logger.info("[DB] Knex connected (Early Check)."); })
-      .catch((err) => { logger.error("[DB] FATAL: Knex connection failed (Early Check).", err); process.exit(1); });
+        .then(() => { logger.info("[DB] Knex connected (Early Check)."); })
+        .catch((err) => { logger.error("[DB] FATAL: Knex connection failed (Early Check).", err); process.exit(1); });
 
 } catch (error) {
-     logger.error("[DB] FATAL: Error initializing Knex instance.", error);
-     process.exit(1);
+    logger.error("[DB] FATAL: Error initializing Knex instance.", error);
+    process.exit(1);
 }
 
 // --- Define ALL Functions FIRST ---
@@ -125,32 +127,32 @@ async function removeWorld(worldId) {
 }
 
 async function getWorlds(page = 1, pageSize = 10) {
-  const offset = (page - 1) * pageSize;
-  logger.debug(`[DB] Attempting to get worlds, page ${page}`);
-  try {
-    const worlds = await knexInstance('worlds')
-      .orderBy('expiry_date', 'asc')
-      .limit(pageSize)
-      .offset(offset)
-      .select('*');
+    const offset = (page - 1) * pageSize;
+    logger.debug(`[DB] Attempting to get worlds, page ${page}`);
+    try {
+        const worlds = await knexInstance('worlds')
+            .orderBy('expiry_date', 'asc')
+            .limit(pageSize)
+            .offset(offset)
+            .select('*');
 
-    logger.debug(`[DB] getWorlds raw rows fetched, page ${page}:`, worlds.map(w => ({ id: w.id, name: w.name })));
+        logger.debug(`[DB] getWorlds raw rows fetched, page ${page}:`, worlds.map(w => ({ id: w.id, name: w.name })));
 
-    const totalResult = await knexInstance('worlds')
-      .count({ total: '*' });
+        const totalResult = await knexInstance('worlds')
+            .count({ total: '*' });
 
-    const totalCount = (totalResult && totalResult[0] && totalResult[0].total !== undefined)
-                         ? Number(totalResult[0].total)
-                         : 0;
+        const totalCount = (totalResult && totalResult[0] && totalResult[0].total !== undefined)
+            ? Number(totalResult[0].total)
+            : 0;
 
-    logger.debug(`[DB] getWorlds count query returned: ${totalCount}`);
+        logger.debug(`[DB] getWorlds count query returned: ${totalCount}`);
 
-    return { worlds: worlds, total: totalCount };
+        return { worlds: worlds, total: totalCount };
 
-  } catch (error) {
-    logger.error(`[DB] Error getting worlds:`, error);
-    return { worlds: [], total: 0 };
-  }
+    } catch (error) {
+        logger.error(`[DB] Error getting worlds:`, error);
+        return { worlds: [], total: 0 };
+    }
 }
 
 async function getWorldById(worldId) {
@@ -221,7 +223,7 @@ async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10) {
                 const nextDayISO = nextDay.toISO();
 
                 query.andWhere('expiry_date', '>=', targetExpiryDateISO)
-                     .andWhere('expiry_date', '<', nextDayISO);
+                    .andWhere('expiry_date', '<', nextDayISO);
                 
                 countQueryBase.andWhere('expiry_date', '>=', targetExpiryDateISO)
                               .andWhere('expiry_date', '<', nextDayISO);
@@ -252,8 +254,8 @@ async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10) {
         const totalCount = totalResult ? Number(totalResult.total) : 0;
 
         query.orderBy('expiry_date', 'asc')
-             .limit(pageSize)
-             .offset((page - 1) * pageSize);
+            .limit(pageSize)
+            .offset((page - 1) * pageSize);
 
         const worlds = await query;
 
@@ -322,23 +324,23 @@ async function getLeaderboard(page = 1, pageSize = 10) {
 }
 
 async function addUser(userId, username) {
-  try {
-    const existingUser = await knexInstance('users').where({ id: userId }).first();
-    if (existingUser) {
-      if (existingUser.username !== username) {
-        await knexInstance('users').where({ id: userId }).update({ username: username });
-        logger.debug(`[DB] Updated username for user ${userId} to ${username}`);
-      }
-      return true;
-    } else {
-      await knexInstance('users').insert({
-        id: userId,
-        username: username,
-      });
-      logger.info(`[DB] Added new user ${userId} (${username})`);
-      return true;
-    }
-  } catch (error) { logger.error(`[DB] Error adding/updating user ${userId}:`, error); return false; }
+    try {
+        const existingUser = await knexInstance('users').where({ id: userId }).first();
+        if (existingUser) {
+            if (existingUser.username !== username) {
+                await knexInstance('users').where({ id: userId }).update({ username: username });
+                logger.debug(`[DB] Updated username for user ${userId} to ${username}`);
+            }
+            return true;
+        } else {
+            await knexInstance('users').insert({
+                id: userId,
+                username: username,
+            });
+            logger.info(`[DB] Added new user ${userId} (${username})`);
+            return true;
+        }
+    } catch (error) { logger.error(`[DB] Error adding/updating user ${userId}:`, error); return false; }
 }
 
 async function getUserPreferences(userId) {
@@ -414,28 +416,28 @@ async function getUserStats(username) {
 
 // --- Module Exports ---
 module.exports = {
-  knex: knexInstance,
-  initializeDatabase,
-  addWorld,
-  updateWorld,
-  removeWorld,
-  getWorlds,
-  getWorldById,
-  getWorldByName,
-  getWorldsByName,
-  getWorldByCustomId,
-  findWorldByIdentifier,
-  getFilteredWorlds,
-  searchWorlds: getFilteredWorlds,
-  removeExpiredWorlds,
-  getWorldCount,
-  getWorldLockStats,
-  getExpiringWorldCount,
-  getMostRecentWorld,
-  getLeaderboard,
-  addUser,
-  getUserPreferences,
-  updateUserTimezone,
-  updateUserViewMode,
-  getUserStats,
+    knex: knexInstance,
+    initializeDatabase,
+    addWorld,
+    updateWorld,
+    removeWorld,
+    getWorlds,
+    getWorldById,
+    getWorldByName,
+    getWorldsByName,
+    getWorldByCustomId,
+    findWorldByIdentifier,
+    getFilteredWorlds,
+    searchWorlds: getFilteredWorlds,
+    removeExpiredWorlds,
+    getWorldCount,
+    getWorldLockStats,
+    getExpiringWorldCount,
+    getMostRecentWorld,
+    getLeaderboard,
+    addUser,
+    getUserPreferences,
+    updateUserTimezone,
+    updateUserViewMode,
+    getUserStats,
 };
