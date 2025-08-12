@@ -1,5 +1,5 @@
 module.exports = {
-  PAGE_SIZE: 10, // Number of worlds per page in /list
+  PAGE_SIZE: 8, // Number of worlds per page in /list
   MAX_SELECT_OPTIONS: 25, // Discord limit for select menu options & autocomplete
 
   // Custom ID prefixes (Still useful for clarity if used internally)
