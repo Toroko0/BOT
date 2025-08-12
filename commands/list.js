@@ -25,7 +25,7 @@ async function showWorldsList(interaction, page = 1, filters = {}, listOwnerUser
         const content = effectiveListOwner === interaction.user.username
             ? "You haven't added any worlds yet. Use `/addworld` to start tracking."
             : `User **${effectiveListOwner}** has not added any worlds.`;
-        const opts = { content, components: [], ephemeral: true };
+        const opts = { content, components: [], flags: 1 << 6 };
         if (isUpdate) await interaction.editReply(opts); else await interaction.reply(opts);
         return;
     }
@@ -50,7 +50,7 @@ async function showWorldsList(interaction, page = 1, filters = {}, listOwnerUser
     components.push(paginationRow);
 
     const finalContent = `${tableOutput}\nPage ${safePage} of ${totalPages}`;
-    const finalOpts = { content: finalContent, components, ephemeral: true };
+    const finalOpts = { content: finalContent, components, flags: 1 << 6 };
     if (isUpdate) await interaction.editReply(finalOpts); else await interaction.reply(finalOpts);
 }
 

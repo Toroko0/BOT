@@ -283,12 +283,12 @@ function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset, targetU
       if (lockTypeDisplay === 'OUTLOCK') lockTypeDisplay = 'OUT';
 
         const row = [
-        world.name.toUpperCase(),
+        world.name.toUpperCase().substring(0, 15),
         days_owned.toString(),
         days_left > 0 ? days_left.toString() : 'EXP',
         displayExpiryDate,
         lockTypeDisplay,
-        world.added_by_username
+        (world.added_by_username || '').substring(0, 15)
         ];
         tableData.push(row);
     }
@@ -308,9 +308,9 @@ function formatWorldsToTable(worlds, viewMode, listType, timezoneOffset, targetU
 
 
         const row = [
-        `(${lockTypeChar}) ${world.name.toUpperCase()}`,
+        `(${lockTypeChar}) ${world.name.toUpperCase().substring(0, 12)}`,
         days_owned.toString(),
-        world.added_by_username
+        (world.added_by_username || '').substring(0, 15)
         ];
         tableData.push(row);
     }
