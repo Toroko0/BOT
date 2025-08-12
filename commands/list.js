@@ -1,8 +1,8 @@
 const path = require('path');
 const fs = require('fs');
-const knexConfig = require('./knexfile.js');
+const knexConfig = require('../knexfile.js');
 const Knex = require('knex');
-const logger = require('./utils/logger.js');
+const logger = require('../utils/logger.js');
 const { DateTime, Duration } = require('luxon');
 
 // --- Initialize Knex ---
