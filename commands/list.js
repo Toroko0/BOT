@@ -50,6 +50,7 @@ async function showWorldsList(interaction, page = 1, filters = {}, listOwnerUser
     components.push(paginationRow);
 
     const finalContent = `${tableOutput}\nPage ${safePage} of ${totalPages}`;
+    logger.info(`[list.js] Final content length: ${finalContent.length}`);
     const finalOpts = { content: finalContent, components, flags: 1 << 6 };
     if (isUpdate) await interaction.editReply(finalOpts); else await interaction.reply(finalOpts);
 }
