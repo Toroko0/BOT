@@ -220,7 +220,7 @@ async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10, options 
         const totalCount = totalResult ? Number(totalResult.total) : 0;
 
         // Default sort order
-        query.orderBy('days_owned', 'desc')
+        query.orderBy('expiry_date', 'asc')
              .orderByRaw('LENGTH(name) asc')
              .orderBy('lock_type', 'asc')
              .orderBy('name', 'asc');
