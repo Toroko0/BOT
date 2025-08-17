@@ -47,16 +47,6 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = 
     const expiryDate = now.plus({ days: daysLeft });
     const expiryDateISO = expiryDate.toISO();
 
-    const existingWorlds = await knexInstance('worlds')
-        .where({
-            name: worldNameUpper,
-            lock_type: normalizedLockType,
-        });
-
-    if (existingWorlds.length > 0) {
-        const existingWorld = existingWorlds[0];
-        return { success: false, message: `A world named **${worldNameUpper}** with lock type **${normalizedLockType.charAt(0).toUpperCase()}** is already being tracked by **${existingWorld.added_by_username}**.` };
-    }
 
     try {
         await knexInstance('worlds').insert({
@@ -303,18 +293,17 @@ async function getLeaderboard(page = 1, pageSize = 10) {
     const offset = (page - 1) * pageSize;
     logger.debug(`[DB] Attempting to get leaderboard, page ${page}`);
     try {
-        const leaderboard = await knexInstance('worlds')
-            .select('added_by_username')
-            .count('* as world_count')
-            .groupBy('added_by_username')
+        const leaderboard = await knexInstance('users')
+            .leftJoin('worlds', 'users.username', 'worlds.added_by_username')
+            .select('users.username as added_by_username')
+            .count('worlds.id as world_count')
+            .groupBy('users.username')
             .orderBy('world_count', 'desc')
             .limit(pageSize)
             .offset(offset);
 
-        const totalResult = await knexInstance('worlds').distinct('added_by_username').count({ total: '*' });
-        const totalCount = (totalResult && totalResult[0] && totalResult[0].total !== undefined)
-            ? Number(totalResult[0].total)
-            : 0;
+        const totalResult = await knexInstance('users').count({ total: '*' }).first();
+        const totalCount = totalResult ? Number(totalResult.total) : 0;
 
         return { leaderboard, total: totalCount };
     } catch (error) {
@@ -349,19 +338,104 @@ async function getUserPreferences(userId) {
         if (user) {
             return {
                 timezone_offset: user.timezone_offset,
-                view_mode: user.view_mode
+                view_mode: user.view_mode,
+                notifications_enabled: user.notifications_enabled,
+                notification_interval: user.notification_interval,
             };
         }
         return {
             timezone_offset: 0.0,
-            view_mode: 'pc'
+            view_mode: 'pc',
+            notifications_enabled: true,
+            notification_interval: 6,
         };
     } catch (error) {
         logger.error(`[DB] Error getting preferences for user ${userId}:`, error);
         return {
             timezone_offset: 0.0,
-            view_mode: 'pc'
+            view_mode: 'pc',
+            notifications_enabled: true,
+            notification_interval: 6,
         };
+    }
+}
+
+async function updateUserNotificationSettings(userId, { notifications_enabled, notification_interval }) {
+    try {
+        const updateData = {};
+        if (notifications_enabled !== undefined) {
+            updateData.notifications_enabled = notifications_enabled;
+        }
+        if (notification_interval !== undefined) {
+            const interval = parseInt(notification_interval, 10);
+            if (!isNaN(interval) && [6, 12, 24, 0].includes(interval)) {
+                updateData.notification_interval = interval;
+                if (interval === 0) {
+                    updateData.notifications_enabled = false;
+                } else {
+                    updateData.notifications_enabled = true;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        if (Object.keys(updateData).length > 0) {
+            await knexInstance('users').where({ id: userId }).update(updateData);
+            logger.info(`[DB] Updated notification settings for user ${userId}:`, updateData);
+        }
+        return true;
+    } catch (error) {
+        logger.error(`[DB] Error updating notification settings for user ${userId}:`, error);
+        return false;
+    }
+}
+
+async function addToWhitelist(username) {
+    try {
+        await knexInstance('whitelist').insert({ username });
+        logger.info(`[DB] Added ${username} to the whitelist.`);
+        return { success: true, message: `**${username}** has been added to the whitelist.` };
+    } catch (error) {
+        if (error.code === 'SQLITE_CONSTRAINT') {
+            return { success: false, message: `**${username}** is already on the whitelist.` };
+        }
+        logger.error(`[DB] Error adding to whitelist:`, error);
+        return { success: false, message: 'An error occurred while adding to the whitelist.' };
+    }
+}
+
+async function removeFromWhitelist(username) {
+    try {
+        const deletedCount = await knexInstance('whitelist').where({ username }).del();
+        if (deletedCount > 0) {
+            logger.info(`[DB] Removed ${username} from the whitelist.`);
+            return { success: true, message: `**${username}** has been removed from the whitelist.` };
+        } else {
+            return { success: false, message: `**${username}** is not on the whitelist.` };
+        }
+    } catch (error) {
+        logger.error(`[DB] Error removing from whitelist:`, error);
+        return { success: false, message: 'An error occurred while removing from the whitelist.' };
+    }
+}
+
+async function getWhitelist() {
+    try {
+        return await knexInstance('whitelist').select('username');
+    } catch (error) {
+        logger.error(`[DB] Error getting whitelist:`, error);
+        return [];
+    }
+}
+
+async function isWhitelisted(username) {
+    try {
+        const result = await knexInstance('whitelist').where({ username }).first();
+        return !!result;
+    } catch (error) {
+        logger.error(`[DB] Error checking whitelist:`, error);
+        return false;
     }
 }
 
@@ -414,6 +488,46 @@ async function getUserStats(username) {
     }
 }
 
+async function getRecentlyAddedWorldsSince(since, limit = 10) {
+    try {
+        return await knexInstance('worlds')
+            .where('added_date', '>', since)
+            .orderBy('added_date', 'desc')
+            .limit(limit);
+    } catch (error) {
+        logger.error(`[DB] Error getting recently added worlds:`, error);
+        return [];
+    }
+}
+
+async function getUsersToNotify() {
+    try {
+        const now = DateTime.utc();
+        return await knexInstance('users')
+            .where('notifications_enabled', true)
+            .andWhere(function() {
+                this.whereNull('last_notification_timestamp')
+                    .orWhereRaw('julianday(?) - julianday(last_notification_timestamp) > notification_interval / 24.0', [now.toISO()]);
+            });
+    } catch (error) {
+        logger.error(`[DB] Error getting users to notify:`, error);
+        return [];
+    }
+}
+
+async function updateLastNotificationTimestamp(userId, timestamp) {
+    try {
+        await knexInstance('users')
+            .where({ id: userId })
+            .update({ last_notification_timestamp: timestamp });
+        logger.debug(`[DB] Updated last notification timestamp for user ${userId}`);
+        return true;
+    } catch (error) {
+        logger.error(`[DB] Error updating last notification timestamp for user ${userId}:`, error);
+        return false;
+    }
+}
+
 // --- Module Exports ---
 module.exports = {
     knex: knexInstance,
@@ -440,4 +554,12 @@ module.exports = {
     updateUserTimezone,
     updateUserViewMode,
     getUserStats,
+    updateUserNotificationSettings,
+    getRecentlyAddedWorldsSince,
+    getUsersToNotify,
+    updateLastNotificationTimestamp,
+    addToWhitelist,
+    removeFromWhitelist,
+    getWhitelist,
+    isWhitelisted,
 };

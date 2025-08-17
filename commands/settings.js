@@ -46,6 +46,18 @@ module.exports = {
             await showWorldsList(interaction, 1, { added_by_username: interaction.user.username }, interaction.user.username);
         }
     },
+    async handleSelectMenu(interaction, params) {
+        const action = params[0];
+        if (action !== 'notifications') return;
+
+        const userId = interaction.user.id;
+        const interval = interaction.values[0];
+
+        await db.updateUserNotificationSettings(userId, { notification_interval: interval });
+
+        const replyOptions = await getSettingsReplyOptions(userId);
+        await interaction.update(replyOptions);
+    },
     async handleModal(interaction) {
         if (interaction.customId !== 'settings_modal_timezone') return;
 
