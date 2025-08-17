@@ -1,441 +1,390 @@
-const path = require('path');
-const fs = require('fs');
-const knexConfig = require('../knexfile.js');
-const Knex = require('knex');
+// list.js
+
+// Imports
+const {
+    SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, InteractionType, MessageFlags
+} = require('discord.js');
+const db = require('../database.js');
+const utils = require('../utils.js');
 const logger = require('../utils/logger.js');
-const { DateTime, Duration } = require('luxon');
+const { table } = require('table');
+const { showWorldInfo } = require('./info.js');
+const { showAddWorldModal } = require('../commands/addworld.js');
+const CONSTANTS = require('../utils/constants.js');
+const { DateTime } = require('luxon');
 
-// --- Initialize Knex ---
-let knexInstance;
-try {
-    const dataDir = path.join(__dirname, 'data');
-    if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir);
-        logger.info("[DB] Created data directory.");
+// --- Helper Functions for Modals ---
+
+/**
+ * Shows a simple modal with a single text input field.
+ * @param {import('discord.js').Interaction} interaction
+ * @param {'remove'|'share'|'unshare'|'info'} type
+ */
+async function showSimpleModal(interaction, type) {
+    const modalConfig = {
+        remove: { id: 'list_modal_remove', title: 'Remove World', label: 'World Name or Custom ID to Remove', placeholder: 'Case-insensitive world name or ID' },
+        share: { id: 'list_modal_share', title: 'Share World', label: 'World Name or Custom ID', placeholder: 'World to make public in this server' },
+        unshare: { id: 'list_modal_unshare', title: 'Unshare World', label: 'World Name or Custom ID', placeholder: 'World to make private from this server' },
+        info: { id: 'list_modal_info', title: 'Get World Info', label: 'World Name or Custom ID', placeholder: 'Enter a world name or ID' }
+    };
+
+    const config = modalConfig[type];
+    if (!config) {
+        logger.error(`[list.js] Invalid type passed to showSimpleModal: ${type}`);
+        return;
     }
-    knexInstance = Knex(knexConfig.development);
 
-    knexInstance.on('query', (queryData) => {
-        logger.debug('[DB Query]', { sql: queryData.sql, bindings: queryData.bindings });
+    const modal = new ModalBuilder().setCustomId(config.id).setTitle(config.title);
+    const textInput = new TextInputBuilder()
+        .setCustomId('identifier')
+        .setLabel(config.label)
+        .setPlaceholder(config.placeholder)
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+    modal.addComponents(new ActionRowBuilder().addComponents(textInput));
+    await interaction.showModal(modal);
+}
+
+/**
+ * Shows a modal for filtering the world list.
+ * @param {import('discord.js').Interaction} interaction
+ */
+async function showListFilterModal(interaction) {
+    const modal = new ModalBuilder()
+        .setCustomId('list_modal_filterapply')
+        .setTitle('Filter Worlds List');
+    modal.addComponents(
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('filter_prefix').setLabel('World Name Prefix (Optional)').setStyle(TextInputStyle.Short).setRequired(false)),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('filter_name_length_min').setLabel('Min Name Length (Optional, Number)').setStyle(TextInputStyle.Short).setRequired(false)),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('filter_name_length_max').setLabel('Max Name Length (Optional, Number)').setStyle(TextInputStyle.Short).setRequired(false)),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('filter_expiry_day').setLabel('Day of Expiry (e.g., Monday, Optional)').setPlaceholder('Full day name, case-insensitive').setStyle(TextInputStyle.Short).setRequired(false)),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('filter_days_owned').setLabel('Days Owned (0-180, Optional)').setPlaceholder('0 = 180 days left, 179 = 1 day left').setStyle(TextInputStyle.Short).setRequired(false))
+    );
+    await interaction.showModal(modal);
+}
+
+/**
+ * Shows a modal for exporting worlds.
+ * @param {import('discord.js').Interaction} interaction
+ */
+async function showExportModal(interaction) {
+    const modal = new ModalBuilder()
+        .setCustomId('list_modal_export')
+        .setTitle('Export Worlds');
+
+    modal.addComponents(
+        new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+                .setCustomId('export_prefix')
+                .setLabel('Prefix (Optional)')
+                .setStyle(TextInputStyle.Short)
+                .setRequired(false)
+        ),
+        new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+                .setCustomId('export_locktype')
+                .setLabel('Lock Type (Optional)')
+                .setStyle(TextInputStyle.Short)
+                .setRequired(false)
+        ),
+        new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+                .setCustomId('export_expiryday')
+                .setLabel('Expiry Day (Optional)')
+                .setPlaceholder('e.g., Monday')
+                .setStyle(TextInputStyle.Short)
+                .setRequired(false)
+        ),
+        new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+                .setCustomId('export_daysowned')
+                .setLabel('Days Owned (Optional)')
+                .setPlaceholder('0-180')
+                .setStyle(TextInputStyle.Short)
+                .setRequired(false)
+        )
+    );
+
+    await interaction.showModal(modal);
+}
+
+// --- Core List Display Function ---
+
+/**
+ * Displays a paginated list of worlds.
+ * @param {import('discord.js').Interaction} interaction
+ * @param {number} page
+ * @param {object} [currentFilters=null]
+ * @param {string} [targetUsername=null]
+ */
+async function showWorldsList(interaction, page = 1, currentFilters = null, targetUsername = null) {
+    const isUpdate = interaction.isMessageComponent() || interaction.type === InteractionType.ModalSubmit;
+    if (isUpdate && !interaction.deferred && !interaction.replied) {
+        try { await interaction.deferUpdate(); } catch (e) { logger.error(`[list.js] Defer update failed: ${e.message}`); return; }
+    } else if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    }
+
+    const userId = interaction.user.id;
+    const userPreferences = await db.getUserPreferences(userId);
+    const viewMode = userPreferences.view_mode || 'pc';
+    const timezoneOffset = userPreferences.timezone_offset || 0.0;
+
+    interaction.client.activeListFilters = interaction.client.activeListFilters || {};
+    if (currentFilters) {
+        interaction.client.activeListFilters[userId] = currentFilters;
+    } else {
+        delete interaction.client.activeListFilters[userId];
+    }
+    const effectiveFilters = currentFilters || interaction.client.activeListFilters[userId] || {};
+    const effectiveTargetUsername = targetUsername || effectiveFilters.added_by_username;
+
+    logger.info(`[list.js] showWorldsList called - Page: ${page}, Filters: ${JSON.stringify(effectiveFilters)}, Target: ${effectiveTargetUsername}`);
+
+    let dbResult = { worlds: [], total: 0 };
+    try {
+        dbResult = await db.getFilteredWorlds(effectiveFilters, page, CONSTANTS.PAGE_SIZE);
+    } catch (error) {
+        logger.error(`[list.js] Error fetching worlds:`, error?.stack || error);
+        const errorContent = { content: '❌ Sorry, I couldn\'t fetch the worlds list.', components: [], flags: MessageFlags.Ephemeral };
+        if (isUpdate) {
+            await interaction.editReply(errorContent);
+        } else {
+            await interaction.reply(errorContent);
+        }
+        return;
+    }
+
+    const worlds = dbResult.worlds || [];
+    const totalWorlds = dbResult.total || 0;
+    const totalPages = Math.max(1, Math.ceil(totalWorlds / CONSTANTS.PAGE_SIZE));
+    const safePage = Math.max(1, Math.min(page, totalPages));
+
+    const nowUtc = DateTime.utc().startOf('day');
+    worlds.forEach(world => {
+        const expiryDateUtc = DateTime.fromISO(world.expiry_date, { zone: 'utc' }).startOf('day');
+        const diff = expiryDateUtc.diff(nowUtc, 'days').toObject();
+        world.daysLeft = Math.floor(diff.days);
+        world.daysOwned = 180 - world.daysLeft;
+
+        if (world.daysLeft <= 0) {
+            world.daysLeft = 'EXP';
+            world.daysOwned = 180;
+        } else if (world.daysLeft > 180) {
+            world.daysLeft = 180;
+            world.daysOwned = 0;
+        }
     });
 
-    knexInstance.raw('SELECT 1')
-      .then(() => { logger.info("[DB] Knex connected (Early Check)."); })
-      .catch((err) => { logger.error("[DB] FATAL: Knex connection failed (Early Check).", err); process.exit(1); });
-
-} catch (error) {
-     logger.error("[DB] FATAL: Error initializing Knex instance.", error);
-     process.exit(1);
-}
-
-// --- Define ALL Functions FIRST ---
-
-function initializeDatabase() { return Promise.resolve(); }
-
-async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = null, username = null) {
-    const worldNameUpper = worldName.toUpperCase();
-    const normalizedLockType = String(lockType).toLowerCase() === 'o' || String(lockType).toLowerCase() === 'outlock' ? 'outlock' : 'mainlock';
-    let normalizedCustomId = customId ? String(customId).trim().toUpperCase() : null;
-    const daysOwnedNum = Math.max(1, Math.min(parseInt(daysOwned, 10) || 1, 180));
-    if (worldNameUpper.includes(' ')) { return { success: false, message: 'World names cannot contain spaces.' }; }
-    if (normalizedCustomId === '') { normalizedCustomId = null; }
-
-    const now = DateTime.utc().startOf('day');
-    const daysLeft = 180 - daysOwnedNum;
-    const expiryDate = now.plus({ days: daysLeft });
-    const expiryDateISO = expiryDate.toISO();
-
-    const existingWorlds = await knexInstance('worlds')
-        .where({
-            name: worldNameUpper,
-            lock_type: normalizedLockType,
+    if (worlds.length > 0) {
+        worlds.sort((a, b) => {
+            const daysOwnedA = a.daysOwned;
+            const daysOwnedB = b.daysOwned;
+            if (daysOwnedA !== daysOwnedB) return daysOwnedB - daysOwnedA;
+            const nameLengthDiff = a.name.length - b.name.length;
+            if (nameLengthDiff !== 0) return nameLengthDiff;
+            return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
         });
-
-    if (existingWorlds.length > 0) {
-        const existingWorld = existingWorlds[0];
-        return { success: false, message: `A world named **${worldNameUpper}** with lock type **${normalizedLockType.charAt(0).toUpperCase()}** is already being tracked by **${existingWorld.added_by_username}**.` };
     }
 
-    try {
-        await knexInstance('worlds').insert({
-            name: worldNameUpper,
-            days_owned: daysOwnedNum,
-            expiry_date: expiryDateISO,
-            lock_type: normalizedLockType,
-            custom_id: normalizedCustomId,
-            added_by_username: username,
-            added_date: DateTime.utc().toISO(),
-        });
-        logger.info(`[DB] Added world ${worldNameUpper}`);
-        return { success: true, message: `**${worldNameUpper}** added.` };
-    } catch (error) {
-        logger.error(`[DB] Error adding world ${worldNameUpper}:`, error);
-        if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) {
-            if (error.message.includes('uq_worlds_name_days_lock')) {
-                return { success: false, message: `A world named **${worldNameUpper}** with the exact same days owned and lock type is already being tracked (database constraint).` };
-            } else if (error.message.includes('worlds.uq_worlds_customid') && normalizedCustomId) {
-                return { success: false, message: `Custom ID **${normalizedCustomId}** already in use.` };
-            }
-        }
-        return { success: false, message: 'Failed to add world due to a database error.' };
-    }
-}
-
-async function updateWorld(worldId, updatedData) {
-    const { daysOwned, lockType, customId } = updatedData;
-    const daysOwnedNum = Math.max(1, Math.min(parseInt(daysOwned, 10) || 1, 180));
-    const normalizedLockType = String(lockType).toLowerCase() === 'o' ? 'outlock' : 'mainlock';
-    let normalizedCustomId = customId ? String(customId).trim().toUpperCase() : null;
-    if (normalizedCustomId === '') normalizedCustomId = null;
-
-    const now = DateTime.utc().startOf('day');
-    const daysLeft = 180 - daysOwnedNum;
-    const newExpiryDate = now.plus({ days: daysLeft });
-    const expiryDateISO = newExpiryDate.toISO();
-
-    try {
-        const updateCount = await knexInstance('worlds')
-            .where({ id: worldId })
-            .update({
-                days_owned: daysOwnedNum,
-                expiry_date: expiryDateISO,
-                lock_type: normalizedLockType,
-                custom_id: normalizedCustomId
-            });
-        if (updateCount === 0) throw new Error('World not found.');
-        logger.info(`[DB] Updated core details for world ${worldId}`);
-        return true;
-    } catch (error) {
-        logger.error(`[DB] Error updating world ${worldId}:`, error);
-        if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) {
-            if (error.message.includes('worlds.uq_worlds_customid') && normalizedCustomId) {
-                throw new Error(`Custom ID **${normalizedCustomId}** already used.`);
-            }
-        }
-        throw error;
-    }
-}
-
-async function removeWorld(worldId) {
-    try {
-        const deletedCount = await knexInstance('worlds').where({ id: worldId }).del();
-        if (deletedCount > 0) { logger.info(`[DB] Removed world ${worldId}`); return true; }
-        else { logger.warn(`[DB] removeWorld: World ${worldId} not found.`); return false; }
-    } catch (error) { logger.error(`[DB] Error removing world ${worldId}:`, error); return false; }
-}
-
-async function getWorlds(page = 1, pageSize = 10) {
-  const offset = (page - 1) * pageSize;
-  logger.debug(`[DB] Attempting to get worlds, page ${page}`);
-  try {
-    const worlds = await knexInstance('worlds')
-      .orderBy('expiry_date', 'asc')
-      .limit(pageSize)
-      .offset(offset)
-      .select('*');
-
-    logger.debug(`[DB] getWorlds raw rows fetched, page ${page}:`, worlds.map(w => ({ id: w.id, name: w.name })));
-
-    const totalResult = await knexInstance('worlds')
-      .count({ total: '*' });
-
-    const totalCount = (totalResult && totalResult[0] && totalResult[0].total !== undefined)
-                         ? Number(totalResult[0].total)
-                         : 0;
-
-    logger.debug(`[DB] getWorlds count query returned: ${totalCount}`);
-
-    return { worlds: worlds, total: totalCount };
-
-  } catch (error) {
-    logger.error(`[DB] Error getting worlds:`, error);
-    return { worlds: [], total: 0 };
-  }
-}
-
-async function getWorldById(worldId) {
-    try { const world = await knexInstance('worlds').where('id', worldId).first(); return world || null; }
-    catch (error) { logger.error(`[DB] Error getting world by ID ${worldId}:`, error); return null; }
-}
-
-async function getWorldByName(worldName) {
-    try { const world = await knexInstance('worlds').whereRaw('lower(name) = lower(?)', [worldName]).first(); return world || null; }
-    catch (error) { logger.error(`[DB] Error getting world by name "${worldName}":`, error); return null; }
-}
-
-async function getWorldsByName(worldName) {
-    try { const worlds = await knexInstance('worlds').whereRaw('lower(name) = lower(?)', [worldName]); return worlds; }
-    catch (error) { logger.error(`[DB] Error getting worlds by name "${worldName}":`, error); return []; }
-}
-
-async function getWorldByCustomId(customId) {
-    if (!customId) return null;
-    try { const world = await knexInstance('worlds').whereRaw('lower(custom_id) = lower(?)', [customId]).first(); return world || null; }
-    catch (error) { logger.error(`[DB] Error getting world by custom ID "${customId}":`, error); return null; }
-}
-
-async function findWorldByIdentifier(identifier) {
-    if (!identifier) return null; const identifierUpper = identifier.toUpperCase();
-    try { let world = await getWorldByName(identifierUpper); if (world) return world; world = await getWorldByCustomId(identifierUpper); if (world) return world; return null; }
-    catch (error) { logger.error(`[DB] Error in findWorldByIdentifier for "${identifier}":`, error); return null; }
-}
-
-async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10) {
-    logger.debug(`[DB] getFilteredWorlds called - Filters: ${JSON.stringify(filters)}, Page: ${page}, PageSize: ${pageSize}`);
-
-    const effectiveFilters = filters || {};
-    const nowUtc = DateTime.utc().startOf('day');
-
-    try {
-        let query = knexInstance('worlds').select('*');
-        let countQueryBase = knexInstance('worlds');
-
-        if (effectiveFilters.prefix) {
-            const prefixLower = effectiveFilters.prefix.toLowerCase();
-            query.andWhereRaw('lower(name) LIKE ?', [`${prefixLower}%`]);
-            countQueryBase.andWhereRaw('lower(name) LIKE ?', [`${prefixLower}%`]);
-        }
-
-        if (effectiveFilters.lockType === 'mainlock' || effectiveFilters.lockType === 'outlock') {
-            query.andWhere('lock_type', effectiveFilters.lockType);
-            countQueryBase.andWhere('lock_type', effectiveFilters.lockType);
-        }
-
-        if (effectiveFilters.expiryDay) {
-            const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
-            const dayNum = dayMap[effectiveFilters.expiryDay.toLowerCase()];
-            if (dayNum !== undefined) {
-                query.andWhereRaw("strftime('%w', date(expiry_date)) = ?", [dayNum.toString()]);
-                countQueryBase.andWhereRaw("strftime('%w', date(expiry_date)) = ?", [dayNum.toString()]);
-            }
-        }
-
-        if (effectiveFilters.daysOwned !== undefined && effectiveFilters.daysOwned !== null) {
-            const daysOwnedInput = parseInt(effectiveFilters.daysOwned);
-            if (!isNaN(daysOwnedInput) && daysOwnedInput >= 0 && daysOwnedInput <= 180) {
-                const targetDaysLeft = 180 - daysOwnedInput;
-                const targetExpiryDate = nowUtc.plus({ days: targetDaysLeft });
-                const targetExpiryDateISO = targetExpiryDate.toISO();
-
-                const nextDay = targetExpiryDate.plus({ days: 1 });
-                const nextDayISO = nextDay.toISO();
-
-                query.andWhere('expiry_date', '>=', targetExpiryDateISO)
-                     .andWhere('expiry_date', '<', nextDayISO);
-                
-                countQueryBase.andWhere('expiry_date', '>=', targetExpiryDateISO)
-                              .andWhere('expiry_date', '<', nextDayISO);
-            }
-        }
-
-        if (effectiveFilters.nameLengthMin !== undefined && effectiveFilters.nameLengthMin !== null) {
-            const minLength = parseInt(effectiveFilters.nameLengthMin);
-            if (!isNaN(minLength) && minLength > 0) {
-                query.andWhereRaw('LENGTH(name) >= ?', [minLength]);
-                countQueryBase.andWhereRaw('LENGTH(name) >= ?', [minLength]);
-            }
-        }
-        if (effectiveFilters.nameLengthMax !== undefined && effectiveFilters.nameLengthMax !== null) {
-            const maxLength = parseInt(effectiveFilters.nameLengthMax);
-            if (!isNaN(maxLength) && maxLength > 0) {
-                query.andWhereRaw('LENGTH(name) <= ?', [maxLength]);
-                countQueryBase.andWhereRaw('LENGTH(name) <= ?', [maxLength]);
-            }
-        }
-
-        if (effectiveFilters.added_by_username) {
-            query.andWhere('added_by_username', effectiveFilters.added_by_username);
-            countQueryBase.andWhere('added_by_username', effectiveFilters.added_by_username);
-        }
-
-        const totalResult = await countQueryBase.count({ total: '*' }).first();
-        const totalCount = totalResult ? Number(totalResult.total) : 0;
-
-        query.orderBy('expiry_date', 'asc')
-             .limit(pageSize)
-             .offset((page - 1) * pageSize);
-
-        const worlds = await query;
-
-        logger.debug(`[DB] getFilteredWorlds returning ${worlds.length} worlds, total: ${totalCount}`);
-        return { worlds: worlds, total: totalCount };
-
-    } catch (error) {
-        logger.error(`[DB] Error in getFilteredWorlds (Filters: ${JSON.stringify(filters)}, Page: ${page}):`, error);
-        return { worlds: [], total: 0 };
-    }
-}
-
-async function removeExpiredWorlds() {
-    try {
-        const now = DateTime.utc();
-        const nowISO = now.toISO();
-        
-        logger.debug(`[DB] Running cleanup query. Removing worlds with expiry_date < '${nowISO}'`);
-
-        const deletedCount = await knexInstance('worlds')
-            .where('expiry_date', '<', nowISO)
-            .del();
-        
-        if (deletedCount > 0) {
-            logger.info(`[DB] Daily Task: Removed ${deletedCount} expired worlds.`);
+    if (worlds.length === 0) {
+        let emptyMsg = `No worlds found.`;
+        if (effectiveFilters && Object.keys(effectiveFilters).length > 0) {
+            emptyMsg = `No worlds match your filters. Try adjusting them.`;
         } else {
-            logger.info('[DB] Daily Task: No expired worlds to remove.');
+            emptyMsg = "The list is empty. Use `/addworld` or the button below to add a world!";
         }
-        return deletedCount;
-    } catch (error) {
-        logger.error('[DB] Error removing expired worlds:', error);
-        return 0;
+
+        const emptyRow = new ActionRowBuilder();
+        emptyRow.addComponents(
+            new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add World').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('list_button_filtershow').setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary)
+        );
+
+        const opts = { content: emptyMsg, components: [emptyRow], flags: MessageFlags.Ephemeral };
+        await interaction.editReply(opts);
+        return;
     }
+
+    const { data, config } = utils.formatWorldsToTable(worlds, viewMode, 'public', timezoneOffset, effectiveTargetUsername);
+    let tableOutput = '```\n' + table(data, config) + '\n```';
+    const footer = `\n📊 Total worlds: ${totalWorlds} | Page ${safePage} of ${totalPages}`;
+
+    if ((tableOutput + footer).length > 2000) {
+        const availableLength = 2000 - footer.length - 30;
+        let cutOff = tableOutput.lastIndexOf('\n', availableLength);
+        if (cutOff === -1) cutOff = availableLength;
+        tableOutput = tableOutput.substring(0, cutOff) + "\n... (list truncated)```";
+    }
+
+    const components = [];
+    components.push(utils.createPaginationRow(`list_button_page`, safePage, totalPages));
+
+    const isOwnList = effectiveTargetUsername ? effectiveTargetUsername.toLowerCase() === interaction.user.username.toLowerCase() : true;
+    const actionRow1 = new ActionRowBuilder();
+    actionRow1.addComponents(
+        new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add').setStyle(ButtonStyle.Success).setDisabled(!isOwnList),
+        new ButtonBuilder().setCustomId('list_button_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger).setDisabled(!isOwnList),
+        new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('list_button_export').setLabel('📄 Export').setStyle(ButtonStyle.Secondary)
+    );
+    components.push(actionRow1);
+
+    const actionRow2 = new ActionRowBuilder();
+    actionRow2.addComponents(
+        new ButtonBuilder().setCustomId('list_button_filtershow').setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('settings_button_show').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary)
+    );
+    components.push(actionRow2);
+
+    if (viewMode === 'pc' && worlds.length > 0) {
+        const selectOptions = worlds.slice(0, 25).map(world => utils.createWorldSelectOption(world, timezoneOffset));
+        components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('list_select_info').setPlaceholder('📋 Select a world for details').addOptions(selectOptions)));
+    }
+
+    const finalContent = tableOutput + footer;
+    const finalOpts = { content: finalContent, components, ephemeral: true };
+    await interaction.editReply(finalOpts);
 }
 
-async function getWorldCount() { try { const result = await knexInstance('worlds').count({ count: '*' }).first(); return result ? Number(result.count) : 0; } catch (error) { logger.error(`[DB] Error getting world count:`, error); return 0; } }
-
-async function getWorldLockStats() { try { const stats = await knexInstance('worlds').select('lock_type').count({ count: '*' }).groupBy('lock_type'); const result = { mainlock: 0, outlock: 0 }; stats.forEach(row => { if (row.lock_type === 'mainlock') result.mainlock = Number(row.count); else if (row.lock_type === 'outlock') result.outlock = Number(row.count); }); return result; } catch (error) { logger.error(`[DB] Error getting lock stats:`, error); return { mainlock: 0, outlock: 0 }; } }
-
-async function getExpiringWorldCount(days = 7) { try { const targetDate = new Date(); targetDate.setUTCDate(targetDate.getUTCDate() + parseInt(days)); targetDate.setUTCHours(23, 59, 59, 999); const targetDateISO = targetDate.toISOString(); const nowISO = new Date().toISOString(); const result = await knexInstance('worlds').andWhere('expiry_date', '<=', targetDateISO).andWhere('expiry_date', '>=', nowISO).count({ count: '*' }).first(); return result ? Number(result.count) : 0; } catch (error) { logger.error(`[DB] Error getting expiring world count (in ${days} days):`, error); return 0; } }
-
-async function getMostRecentWorld() { try { const world = await knexInstance('worlds').orderBy('added_date', 'desc').select('name', 'added_date').first(); return world || null; } catch (error) { logger.error(`[DB] Error getting most recent world:`, error); return null; } }
-
-async function getLeaderboard(page = 1, pageSize = 10) {
-    const offset = (page - 1) * pageSize;
-    logger.debug(`[DB] Attempting to get leaderboard, page ${page}`);
-    try {
-        const leaderboard = await knexInstance('worlds')
-            .select('added_by_username')
-            .count('* as world_count')
-            .groupBy('added_by_username')
-            .orderBy('world_count', 'desc')
-            .limit(pageSize)
-            .offset(offset);
-
-        const totalResult = await knexInstance('worlds').distinct('added_by_username').count({ total: '*' });
-        const totalCount = (totalResult && totalResult[0] && totalResult[0].total !== undefined)
-            ? Number(totalResult[0].total)
-            : 0;
-
-        return { leaderboard, total: totalCount };
-    } catch (error) {
-        logger.error(`[DB] Error getting leaderboard:`, error);
-        return { leaderboard: [], total: 0 };
-    }
-}
-
-async function addUser(userId, username) {
-  try {
-    const existingUser = await knexInstance('users').where({ id: userId }).first();
-    if (existingUser) {
-      if (existingUser.username !== username) {
-        await knexInstance('users').where({ id: userId }).update({ username: username });
-        logger.debug(`[DB] Updated username for user ${userId} to ${username}`);
-      }
-      return true;
-    } else {
-      await knexInstance('users').insert({
-        id: userId,
-        username: username,
-      });
-      logger.info(`[DB] Added new user ${userId} (${username})`);
-      return true;
-    }
-  } catch (error) { logger.error(`[DB] Error adding/updating user ${userId}:`, error); return false; }
-}
-
-async function getUserPreferences(userId) {
-    try {
-        const user = await knexInstance('users').where({ id: userId }).first();
-        if (user) {
-            return {
-                timezone_offset: user.timezone_offset,
-                view_mode: user.view_mode
-            };
-        }
-        return {
-            timezone_offset: 0.0,
-            view_mode: 'pc'
-        };
-    } catch (error) {
-        logger.error(`[DB] Error getting preferences for user ${userId}:`, error);
-        return {
-            timezone_offset: 0.0,
-            view_mode: 'pc'
-        };
-    }
-}
-
-async function updateUserTimezone(userId, timezoneOffset) {
-    try {
-        const offset = parseFloat(timezoneOffset);
-        if (isNaN(offset) || offset < -12.0 || offset > 14.0) {
-            return false;
-        }
-        await knexInstance('users').where({ id: userId }).update({ timezone_offset: offset });
-        logger.info(`[DB] Updated timezone for user ${userId} to ${offset}`);
-        return true;
-    } catch (error) {
-        logger.error(`[DB] Error updating timezone for user ${userId}:`, error);
-        return false;
-    }
-}
-
-async function updateUserViewMode(userId, viewMode) {
-    try {
-        if (viewMode !== 'pc' && viewMode !== 'phone') {
-            return false;
-        }
-        await knexInstance('users').where({ id: userId }).update({ view_mode: viewMode });
-        logger.info(`[DB] Updated view mode for user ${userId} to ${viewMode}`);
-        return true;
-    } catch (error) {
-        logger.error(`[DB] Error updating view mode for user ${userId}:`, error);
-        return false;
-    }
-}
-
-async function getUserStats(username) {
-    try {
-        const totalWorlds = await knexInstance('worlds').where('added_by_username', username).count({ count: '*' }).first();
-        const lockStats = await knexInstance('worlds').where('added_by_username', username).select('lock_type').count({ count: '*' }).groupBy('lock_type');
-        const result = {
-            totalWorlds: totalWorlds ? Number(totalWorlds.count) : 0,
-            mainlock: 0,
-            outlock: 0,
-        };
-        lockStats.forEach(row => {
-            if (row.lock_type === 'mainlock') result.mainlock = Number(row.count);
-            else if (row.lock_type === 'outlock') result.outlock = Number(row.count);
-        });
-        return result;
-    } catch (error) {
-        logger.error(`[DB] Error getting stats for user ${username}:`, error);
-        return { totalWorlds: 0, mainlock: 0, outlock: 0 };
-    }
-}
-
-// --- Module Exports ---
 module.exports = {
-  knex: knexInstance,
-  initializeDatabase,
-  addWorld,
-  updateWorld,
-  removeWorld,
-  getWorlds,
-  getWorldById,
-  getWorldByName,
-  getWorldsByName,
-  getWorldByCustomId,
-  findWorldByIdentifier,
-  getFilteredWorlds,
-  searchWorlds: getFilteredWorlds,
-  removeExpiredWorlds,
-  getWorldCount,
-  getWorldLockStats,
-  getExpiringWorldCount,
-  getMostRecentWorld,
-  getLeaderboard,
-  addUser,
-  getUserPreferences,
-  updateUserTimezone,
-  updateUserViewMode,
-  getUserStats,
+    data: new SlashCommandBuilder()
+        .setName('list')
+        .setDescription('View the tracked Growtopia worlds.')
+        .addUserOption(option =>
+            option.setName('user')
+                .setDescription('Filter the list by a specific user.')
+                .setRequired(false)),
+
+    async execute(interaction) {
+        logger.info(`[list.js] Entered execute function for /list, User: ${interaction.user.tag}, Interaction ID: ${interaction.id}`);
+        const targetUser = interaction.options.getUser('user');
+        const username = targetUser ? targetUser.username : null;
+        const filters = username ? { added_by_username: username } : {};
+        await showWorldsList(interaction, 1, filters, username);
+    },
+
+    async handleButton(interaction, params) {
+        const cooldown = utils.checkCooldown(interaction.user.id, 'list_button');
+        if (cooldown.onCooldown) { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, ephemeral: true }); return; }
+
+        const [action, ...args] = params;
+        const userActiveFilters = interaction.client.activeListFilters?.[interaction.user.id] || {};
+        const targetUsername = userActiveFilters?.added_by_username;
+
+        // Export button logic → open modal
+        if (action === 'export') {
+            await showExportModal(interaction);
+            return;
+        }
+
+        // Page navigation logic
+        if (action === 'page') {
+            const direction = args[0];
+            let currentPage = parseInt(args[1], 10);
+            if (direction === 'prev') currentPage--;
+            else if (direction === 'next') currentPage++;
+            await showWorldsList(interaction, currentPage, userActiveFilters, targetUsername);
+            return;
+        }
+
+        // All other button actions
+        switch (action) {
+            case 'remove':
+            case 'info':
+                await showSimpleModal(interaction, action);
+                break;
+            case 'add':
+                await showAddWorldModal(interaction);
+                break;
+            case 'filtershow':
+                await showListFilterModal(interaction);
+                break;
+            case 'settings': {
+                const { getSettingsReplyOptions } = require('../utils/settings.js');
+                const replyOptions = await getSettingsReplyOptions(interaction.user.id);
+                await interaction.update(replyOptions);
+                break;
+            }
+            default:
+                logger.warn(`[list.js] Unknown button action: ${action}`);
+                if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
+                break;
+        }
+    },
+
+    async handleSelectMenu(interaction, params) {
+        const cooldown = utils.checkCooldown(interaction.user.id, 'list_select');
+        if (cooldown.onCooldown) { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, ephemeral: true }); return; }
+
+        const [action] = params;
+        if (action === 'info') {
+            await interaction.deferUpdate();
+            if (!interaction.values || interaction.values.length === 0) return;
+            const worldId = parseInt(interaction.values[0], 10);
+            const world = await db.getWorldById(worldId);
+            if (!world) {
+                return interaction.editReply({ content: '❌ World not found.' });
+            }
+            await showWorldInfo(interaction, world);
+        }
+    },
+
+    async handleModal(interaction, params) {
+        const [action] = params;
+
+        if (action === 'filterapply') {
+            await interaction.deferUpdate();
+            const filters = utils.parseFilterModal(interaction);
+            logger.info(`[list.js] Applying filters: ${JSON.stringify(filters)}`);
+            const targetUsername = filters.added_by_username;
+            await showWorldsList(interaction, 1, filters, targetUsername);
+            return;
+        }
+
+        if (action === 'export') {
+            await interaction.deferReply({ ephemeral: true });
+
+            const filters = {
+                prefix: interaction.fields.getTextInputValue('export_prefix') || undefined,
+                locktype: interaction.fields.getTextInputValue('export_locktype') || undefined,
+                expiryday: interaction.fields.getTextInputValue('export_expiryday') || undefined,
+                daysowned: interaction.fields.getTextInputValue('export_daysowned') || undefined
+            };
+
+            const { worlds } = await db.getFilteredWorlds(filters, 1, 10000);
+
+            if (!worlds || worlds.length === 0) {
+                await interaction.editReply({ content: '❌ No worlds match your export filters.' });
+                return;
+            }
+
+            let exportText = "```\n";
+            worlds.forEach(world => {
+                const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
+                const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
+                exportText += `(${lockChar}) ${world.name.toUpperCase()}${customIdPart}\n`;
+            });
+            exportText += "```";
+
+            if (exportText.length > 2000) {
+                let cutOff = exportText.lastIndexOf('\n', 1990);
+                if (cutOff === -1) cutOff = 1990;
+                exportText = exportText.substring(0, cutOff) + "\n... (list truncated)```";
+            }
+
+            await interaction.editReply({ content: exportText });
+            return;
+        }
+
+        const identifier = interaction.fields.getTextInputValue('identifier');
+        if (!identifier) {
+            logger.error(`[list.js] Modal action '${action}' submitted without an 'identifier' field.`);
+            return interaction.reply({ content: 'There was an error processing this form. The required field was missing.', flags: MessageFlags.Ephemeral });
+        }
+
+        if (action !== 'remove') await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        const world = await db.findWorldByIdentifier(identifier);
+    }
 };
