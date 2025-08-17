@@ -47,16 +47,6 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = 
     const expiryDate = now.plus({ days: daysLeft });
     const expiryDateISO = expiryDate.toISO();
 
-    const existingWorlds = await knexInstance('worlds')
-        .where({
-            name: worldNameUpper,
-            lock_type: normalizedLockType,
-        });
-
-    if (existingWorlds.length > 0) {
-        const existingWorld = existingWorlds[0];
-        return { success: false, message: `A world named **${worldNameUpper}** with lock type **${normalizedLockType.charAt(0).toUpperCase()}** is already being tracked by **${existingWorld.added_by_username}**.` };
-    }
 
     try {
         await knexInstance('worlds').insert({
@@ -401,6 +391,54 @@ async function updateUserNotificationSettings(userId, { notifications_enabled, n
     }
 }
 
+async function addToWhitelist(username) {
+    try {
+        await knexInstance('whitelist').insert({ username });
+        logger.info(`[DB] Added ${username} to the whitelist.`);
+        return { success: true, message: `**${username}** has been added to the whitelist.` };
+    } catch (error) {
+        if (error.code === 'SQLITE_CONSTRAINT') {
+            return { success: false, message: `**${username}** is already on the whitelist.` };
+        }
+        logger.error(`[DB] Error adding to whitelist:`, error);
+        return { success: false, message: 'An error occurred while adding to the whitelist.' };
+    }
+}
+
+async function removeFromWhitelist(username) {
+    try {
+        const deletedCount = await knexInstance('whitelist').where({ username }).del();
+        if (deletedCount > 0) {
+            logger.info(`[DB] Removed ${username} from the whitelist.`);
+            return { success: true, message: `**${username}** has been removed from the whitelist.` };
+        } else {
+            return { success: false, message: `**${username}** is not on the whitelist.` };
+        }
+    } catch (error) {
+        logger.error(`[DB] Error removing from whitelist:`, error);
+        return { success: false, message: 'An error occurred while removing from the whitelist.' };
+    }
+}
+
+async function getWhitelist() {
+    try {
+        return await knexInstance('whitelist').select('username');
+    } catch (error) {
+        logger.error(`[DB] Error getting whitelist:`, error);
+        return [];
+    }
+}
+
+async function isWhitelisted(username) {
+    try {
+        const result = await knexInstance('whitelist').where({ username }).first();
+        return !!result;
+    } catch (error) {
+        logger.error(`[DB] Error checking whitelist:`, error);
+        return false;
+    }
+}
+
 async function updateUserTimezone(userId, timezoneOffset) {
     try {
         const offset = parseFloat(timezoneOffset);
@@ -520,4 +558,8 @@ module.exports = {
     getRecentlyAddedWorldsSince,
     getUsersToNotify,
     updateLastNotificationTimestamp,
+    addToWhitelist,
+    removeFromWhitelist,
+    getWhitelist,
+    isWhitelisted,
 };

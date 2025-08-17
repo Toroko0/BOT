@@ -61,6 +61,14 @@ async function setupInteractionHandler(client) {
         // Ignore interactions from bots
         if (interaction.user.bot) return;
 
+        // Whitelist check
+        if (interaction.commandName !== 'whitelist' && interaction.user.id !== process.env.OWNER_ID) {
+            const isWhitelisted = await db.isWhitelisted(interaction.user.username);
+            if (!isWhitelisted) {
+                return safeReplyEphemeral(interaction, 'You are not authorized to use this bot.');
+            }
+        }
+
         // --- Global Rate Limiting ---
         if (interaction.user && client.cooldowns instanceof Map) {
             const now = Date.now();
