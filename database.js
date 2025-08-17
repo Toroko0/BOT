@@ -172,61 +172,62 @@ async function findWorldByIdentifier(identifier) {
     catch (error) { logger.error(`[DB] Error in findWorldByIdentifier for "${identifier}":`, error); return null; }
 }
 
-function applyFilters(query, filters) {
-    const nowUtc = DateTime.utc().startOf('day');
-
-    if (filters.prefix) {
-        query.andWhereRaw('lower(name) LIKE ?', [`${filters.prefix.toLowerCase()}%`]);
-    }
-    if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') {
-        query.andWhere('lock_type', filters.lockType);
-    }
-    if (filters.expiryDay) {
-        const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
-        const dayNum = dayMap[filters.expiryDay.toLowerCase()];
-        if (dayNum !== undefined) {
-            query.andWhereRaw("strftime('%w', date(expiry_date)) = ?", [dayNum.toString()]);
-        }
-    }
-    if (filters.daysOwned !== undefined && filters.daysOwned !== null) {
-        const daysOwnedInput = parseInt(filters.daysOwned);
-        if (!isNaN(daysOwnedInput) && daysOwnedInput >= 0 && daysOwnedInput <= 180) {
-            const targetDaysLeft = 180 - daysOwnedInput;
-            const targetExpiryDate = nowUtc.plus({ days: targetDaysLeft });
-            const nextDay = targetExpiryDate.plus({ days: 1 });
-            query.andWhere('expiry_date', '>=', targetExpiryDate.toISO()).andWhere('expiry_date', '<', nextDay.toISO());
-        }
-    }
-    if (filters.nameLengthMin !== undefined && filters.nameLengthMin !== null) {
-        const minLength = parseInt(filters.nameLengthMin);
-        if (!isNaN(minLength) && minLength > 0) {
-            query.andWhereRaw('LENGTH(name) >= ?', [minLength]);
-        }
-    }
-    if (filters.nameLengthMax !== undefined && filters.nameLengthMax !== null) {
-        const maxLength = parseInt(filters.nameLengthMax);
-        if (!isNaN(maxLength) && maxLength > 0) {
-            query.andWhereRaw('LENGTH(name) <= ?', [maxLength]);
-        }
-    }
-    if (filters.added_by_username) {
-        query.andWhere('added_by_username', filters.added_by_username);
-    }
-}
-
-async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10) {
-    logger.debug(`[DB] getFilteredWorlds called - Filters: ${JSON.stringify(filters)}, Page: ${page}, PageSize: ${pageSize}`);
+async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10, options = {}) {
+    logger.debug(`[DB] getFilteredWorlds called - Filters: ${JSON.stringify(filters)}, Page: ${page}, PageSize: ${pageSize}, Options: ${JSON.stringify(options)}`);
     try {
-        let countQuery = knexInstance('worlds');
-        applyFilters(countQuery, filters);
-        const totalResult = await countQuery.count({ total: '*' }).first();
+        const query = knexInstance('worlds');
+        const nowUtc = DateTime.utc().startOf('day');
+
+        if (filters.prefix) {
+            query.andWhereRaw('lower(name) LIKE ?', [`${filters.prefix.toLowerCase()}%`]);
+        }
+        if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') {
+            query.andWhere('lock_type', filters.lockType);
+        }
+        if (filters.expiryDay) {
+            const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
+            const dayNum = dayMap[filters.expiryDay.toLowerCase()];
+            if (dayNum !== undefined) {
+                query.andWhereRaw("strftime('%w', date(expiry_date)) = ?", [dayNum.toString()]);
+            }
+        }
+        if (filters.daysOwned !== undefined && filters.daysOwned !== null) {
+            const daysOwnedInput = parseInt(filters.daysOwned);
+            if (!isNaN(daysOwnedInput) && daysOwnedInput >= 0 && daysOwnedInput <= 180) {
+                const targetDaysLeft = 180 - daysOwnedInput;
+                const targetExpiryDate = nowUtc.plus({ days: targetDaysLeft });
+                const nextDay = targetExpiryDate.plus({ days: 1 });
+                query.andWhere('expiry_date', '>=', targetExpiryDate.toISO()).andWhere('expiry_date', '<', nextDay.toISO());
+            }
+        }
+        if (filters.nameLengthMin !== undefined && filters.nameLengthMin !== null) {
+            const minLength = parseInt(filters.nameLengthMin);
+            if (!isNaN(minLength) && minLength > 0) {
+                query.andWhereRaw('LENGTH(name) >= ?', [minLength]);
+            }
+        }
+        if (filters.nameLengthMax !== undefined && filters.nameLengthMax !== null) {
+            const maxLength = parseInt(filters.nameLengthMax);
+            if (!isNaN(maxLength) && maxLength > 0) {
+                query.andWhereRaw('LENGTH(name) <= ?', [maxLength]);
+            }
+        }
+        if (filters.added_by_username) {
+            query.andWhere('added_by_username', filters.added_by_username);
+        }
+
+        const totalResult = await query.clone().count({ total: '*' }).first();
         const totalCount = totalResult ? Number(totalResult.total) : 0;
 
-        let dataQuery = knexInstance('worlds').select('*');
-        applyFilters(dataQuery, filters);
-        dataQuery.orderBy('expiry_date', 'asc').limit(pageSize).offset((page - 1) * pageSize);
+        // Default sort order
+        query.orderBy('days_owned', 'desc')
+             .orderByRaw('LENGTH(name) asc')
+             .orderBy('lock_type', 'asc')
+             .orderBy('name', 'asc');
 
-        const worlds = await dataQuery;
+        query.limit(pageSize).offset((page - 1) * pageSize);
+
+        const worlds = await query.select('*');
 
         logger.debug(`[DB] getFilteredWorlds returning ${worlds.length} worlds, total: ${totalCount}`);
         return { worlds, total: totalCount };
