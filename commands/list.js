@@ -128,17 +128,6 @@ async function fetchAndPrepareWorlds(filters, page) {
         }
     });
 
-    if (worlds.length > 0) {
-        worlds.sort((a, b) => {
-            const daysOwnedA = a.daysOwned;
-            const daysOwnedB = b.daysOwned;
-            if (daysOwnedA !== daysOwnedB) return daysOwnedB - daysOwnedA;
-            const nameLengthDiff = a.name.length - b.name.length;
-            if (nameLengthDiff !== 0) return nameLengthDiff;
-            return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
-        });
-    }
-
     return { worlds, total };
 }
 
