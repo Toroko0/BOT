@@ -39,14 +39,15 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = 
     const normalizedLockType = String(lockType).toLowerCase() === 'o' || String(lockType).toLowerCase() === 'outlock' ? 'outlock' : 'mainlock';
     let normalizedCustomId = customId ? String(customId).trim().toUpperCase() : null;
     const daysOwnedNum = Math.max(1, Math.min(parseInt(daysOwned, 10) || 1, 180));
-    if (worldNameUpper.includes(' ')) { return { success: false, message: 'World names cannot contain spaces.' }; }
+    if (worldNameUpper.includes(' ')) {
+        throw new Error('World names cannot contain spaces.');
+    }
     if (normalizedCustomId === '') { normalizedCustomId = null; }
 
     const now = DateTime.utc().startOf('day');
     const daysLeft = 180 - daysOwnedNum;
     const expiryDate = now.plus({ days: daysLeft });
     const expiryDateISO = expiryDate.toISO();
-
 
     try {
         await knexInstance('worlds').insert({
@@ -59,17 +60,16 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = 
             added_date: DateTime.utc().toISO(),
         });
         logger.info(`[DB] Added world ${worldNameUpper}`);
-        return { success: true, message: `**${worldNameUpper}** added.` };
     } catch (error) {
         logger.error(`[DB] Error adding world ${worldNameUpper}:`, error);
         if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) {
             if (error.message.includes('uq_worlds_name_days_lock')) {
-                return { success: false, message: `A world named **${worldNameUpper}** with the exact same days owned and lock type is already being tracked (database constraint).` };
+                throw new Error(`A world named **${worldNameUpper}** with the exact same days owned and lock type is already being tracked.`);
             } else if (error.message.includes('worlds.uq_worlds_customid') && normalizedCustomId) {
-                return { success: false, message: `Custom ID **${normalizedCustomId}** already in use.` };
+                throw new Error(`Custom ID **${normalizedCustomId}** already in use.`);
             }
         }
-        return { success: false, message: 'Failed to add world due to a database error.' };
+        throw new Error('Failed to add world due to a database error.');
     }
 }
 
@@ -172,86 +172,64 @@ async function findWorldByIdentifier(identifier) {
     catch (error) { logger.error(`[DB] Error in findWorldByIdentifier for "${identifier}":`, error); return null; }
 }
 
-async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10) {
-    logger.debug(`[DB] getFilteredWorlds called - Filters: ${JSON.stringify(filters)}, Page: ${page}, PageSize: ${pageSize}`);
-
-    const effectiveFilters = filters || {};
+function applyFilters(query, filters) {
     const nowUtc = DateTime.utc().startOf('day');
 
+    if (filters.prefix) {
+        query.andWhereRaw('lower(name) LIKE ?', [`${filters.prefix.toLowerCase()}%`]);
+    }
+    if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') {
+        query.andWhere('lock_type', filters.lockType);
+    }
+    if (filters.expiryDay) {
+        const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
+        const dayNum = dayMap[filters.expiryDay.toLowerCase()];
+        if (dayNum !== undefined) {
+            query.andWhereRaw("strftime('%w', date(expiry_date)) = ?", [dayNum.toString()]);
+        }
+    }
+    if (filters.daysOwned !== undefined && filters.daysOwned !== null) {
+        const daysOwnedInput = parseInt(filters.daysOwned);
+        if (!isNaN(daysOwnedInput) && daysOwnedInput >= 0 && daysOwnedInput <= 180) {
+            const targetDaysLeft = 180 - daysOwnedInput;
+            const targetExpiryDate = nowUtc.plus({ days: targetDaysLeft });
+            const nextDay = targetExpiryDate.plus({ days: 1 });
+            query.andWhere('expiry_date', '>=', targetExpiryDate.toISO()).andWhere('expiry_date', '<', nextDay.toISO());
+        }
+    }
+    if (filters.nameLengthMin !== undefined && filters.nameLengthMin !== null) {
+        const minLength = parseInt(filters.nameLengthMin);
+        if (!isNaN(minLength) && minLength > 0) {
+            query.andWhereRaw('LENGTH(name) >= ?', [minLength]);
+        }
+    }
+    if (filters.nameLengthMax !== undefined && filters.nameLengthMax !== null) {
+        const maxLength = parseInt(filters.nameLengthMax);
+        if (!isNaN(maxLength) && maxLength > 0) {
+            query.andWhereRaw('LENGTH(name) <= ?', [maxLength]);
+        }
+    }
+    if (filters.added_by_username) {
+        query.andWhere('added_by_username', filters.added_by_username);
+    }
+}
+
+async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10) {
+    logger.debug(`[DB] getFilteredWorlds called - Filters: ${JSON.stringify(filters)}, Page: ${page}, PageSize: ${pageSize}`);
     try {
-        let query = knexInstance('worlds').select('*');
-        let countQueryBase = knexInstance('worlds');
-
-        if (effectiveFilters.prefix) {
-            const prefixLower = effectiveFilters.prefix.toLowerCase();
-            query.andWhereRaw('lower(name) LIKE ?', [`${prefixLower}%`]);
-            countQueryBase.andWhereRaw('lower(name) LIKE ?', [`${prefixLower}%`]);
-        }
-
-        if (effectiveFilters.lockType === 'mainlock' || effectiveFilters.lockType === 'outlock') {
-            query.andWhere('lock_type', effectiveFilters.lockType);
-            countQueryBase.andWhere('lock_type', effectiveFilters.lockType);
-        }
-
-        if (effectiveFilters.expiryDay) {
-            const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
-            const dayNum = dayMap[effectiveFilters.expiryDay.toLowerCase()];
-            if (dayNum !== undefined) {
-                query.andWhereRaw("strftime('%w', date(expiry_date)) = ?", [dayNum.toString()]);
-                countQueryBase.andWhereRaw("strftime('%w', date(expiry_date)) = ?", [dayNum.toString()]);
-            }
-        }
-
-        if (effectiveFilters.daysOwned !== undefined && effectiveFilters.daysOwned !== null) {
-            const daysOwnedInput = parseInt(effectiveFilters.daysOwned);
-            if (!isNaN(daysOwnedInput) && daysOwnedInput >= 0 && daysOwnedInput <= 180) {
-                const targetDaysLeft = 180 - daysOwnedInput;
-                const targetExpiryDate = nowUtc.plus({ days: targetDaysLeft });
-                const targetExpiryDateISO = targetExpiryDate.toISO();
-
-                const nextDay = targetExpiryDate.plus({ days: 1 });
-                const nextDayISO = nextDay.toISO();
-
-                query.andWhere('expiry_date', '>=', targetExpiryDateISO)
-                    .andWhere('expiry_date', '<', nextDayISO);
-                
-                countQueryBase.andWhere('expiry_date', '>=', targetExpiryDateISO)
-                              .andWhere('expiry_date', '<', nextDayISO);
-            }
-        }
-
-        if (effectiveFilters.nameLengthMin !== undefined && effectiveFilters.nameLengthMin !== null) {
-            const minLength = parseInt(effectiveFilters.nameLengthMin);
-            if (!isNaN(minLength) && minLength > 0) {
-                query.andWhereRaw('LENGTH(name) >= ?', [minLength]);
-                countQueryBase.andWhereRaw('LENGTH(name) >= ?', [minLength]);
-            }
-        }
-        if (effectiveFilters.nameLengthMax !== undefined && effectiveFilters.nameLengthMax !== null) {
-            const maxLength = parseInt(effectiveFilters.nameLengthMax);
-            if (!isNaN(maxLength) && maxLength > 0) {
-                query.andWhereRaw('LENGTH(name) <= ?', [maxLength]);
-                countQueryBase.andWhereRaw('LENGTH(name) <= ?', [maxLength]);
-            }
-        }
-
-        if (effectiveFilters.added_by_username) {
-            query.andWhere('added_by_username', effectiveFilters.added_by_username);
-            countQueryBase.andWhere('added_by_username', effectiveFilters.added_by_username);
-        }
-
-        const totalResult = await countQueryBase.count({ total: '*' }).first();
+        let countQuery = knexInstance('worlds');
+        applyFilters(countQuery, filters);
+        const totalResult = await countQuery.count({ total: '*' }).first();
         const totalCount = totalResult ? Number(totalResult.total) : 0;
 
-        query.orderBy('expiry_date', 'asc')
-            .limit(pageSize)
-            .offset((page - 1) * pageSize);
+        let dataQuery = knexInstance('worlds').select('*');
+        applyFilters(dataQuery, filters);
+        dataQuery.orderBy('expiry_date', 'asc').limit(pageSize).offset((page - 1) * pageSize);
 
-        const worlds = await query;
+        const worlds = await dataQuery;
 
         logger.debug(`[DB] getFilteredWorlds returning ${worlds.length} worlds, total: ${totalCount}`);
-        return { worlds: worlds, total: totalCount };
-
+        return { worlds, total: totalCount };
     } catch (error) {
         logger.error(`[DB] Error in getFilteredWorlds (Filters: ${JSON.stringify(filters)}, Page: ${page}):`, error);
         return { worlds: [], total: 0 };
@@ -285,7 +263,20 @@ async function getWorldCount() { try { const result = await knexInstance('worlds
 
 async function getWorldLockStats() { try { const stats = await knexInstance('worlds').select('lock_type').count({ count: '*' }).groupBy('lock_type'); const result = { mainlock: 0, outlock: 0 }; stats.forEach(row => { if (row.lock_type === 'mainlock') result.mainlock = Number(row.count); else if (row.lock_type === 'outlock') result.outlock = Number(row.count); }); return result; } catch (error) { logger.error(`[DB] Error getting lock stats:`, error); return { mainlock: 0, outlock: 0 }; } }
 
-async function getExpiringWorldCount(days = 7) { try { const targetDate = new Date(); targetDate.setUTCDate(targetDate.getUTCDate() + parseInt(days)); targetDate.setUTCHours(23, 59, 59, 999); const targetDateISO = targetDate.toISOString(); const nowISO = new Date().toISOString(); const result = await knexInstance('worlds').andWhere('expiry_date', '<=', targetDateISO).andWhere('expiry_date', '>=', nowISO).count({ count: '*' }).first(); return result ? Number(result.count) : 0; } catch (error) { logger.error(`[DB] Error getting expiring world count (in ${days} days):`, error); return 0; } }
+async function getExpiringWorldCount(days = 7) {
+    try {
+        const now = DateTime.utc();
+        const targetDate = now.plus({ days });
+        const result = await knexInstance('worlds')
+            .where('expiry_date', '>=', now.toISO())
+            .andWhere('expiry_date', '<=', targetDate.toISO())
+            .count({ count: '*' }).first();
+        return result ? Number(result.count) : 0;
+    } catch (error) {
+        logger.error(`[DB] Error getting expiring world count (in ${days} days):`, error);
+        return 0;
+    }
+}
 
 async function getMostRecentWorld() { try { const world = await knexInstance('worlds').orderBy('added_date', 'desc').select('name', 'added_date').first(); return world || null; } catch (error) { logger.error(`[DB] Error getting most recent world:`, error); return null; } }
 
@@ -293,15 +284,17 @@ async function getLeaderboard(page = 1, pageSize = 10) {
     const offset = (page - 1) * pageSize;
     logger.debug(`[DB] Attempting to get leaderboard, page ${page}`);
     try {
-        const leaderboard = await knexInstance('users')
+        const subquery = knexInstance('users')
             .leftJoin('worlds', 'users.username', 'worlds.added_by_username')
             .select('users.username as added_by_username')
             .count('worlds.id as world_count')
             .groupBy('users.username')
             .orderBy('world_count', 'desc')
             .limit(pageSize)
-            .offset(offset);
+            .offset(offset)
+            .as('leaderboard');
 
+        const leaderboard = await knexInstance.from(subquery);
         const totalResult = await knexInstance('users').count({ total: '*' }).first();
         const totalCount = totalResult ? Number(totalResult.total) : 0;
 
@@ -395,28 +388,25 @@ async function addToWhitelist(username) {
     try {
         await knexInstance('whitelist').insert({ username });
         logger.info(`[DB] Added ${username} to the whitelist.`);
-        return { success: true, message: `**${username}** has been added to the whitelist.` };
     } catch (error) {
         if (error.code === 'SQLITE_CONSTRAINT') {
-            return { success: false, message: `**${username}** is already on the whitelist.` };
+            throw new Error(`**${username}** is already on the whitelist.`);
         }
         logger.error(`[DB] Error adding to whitelist:`, error);
-        return { success: false, message: 'An error occurred while adding to the whitelist.' };
+        throw new Error('An error occurred while adding to the whitelist.');
     }
 }
 
 async function removeFromWhitelist(username) {
     try {
         const deletedCount = await knexInstance('whitelist').where({ username }).del();
-        if (deletedCount > 0) {
-            logger.info(`[DB] Removed ${username} from the whitelist.`);
-            return { success: true, message: `**${username}** has been removed from the whitelist.` };
-        } else {
-            return { success: false, message: `**${username}** is not on the whitelist.` };
+        if (deletedCount === 0) {
+            throw new Error(`**${username}** is not on the whitelist.`);
         }
+        logger.info(`[DB] Removed ${username} from the whitelist.`);
     } catch (error) {
         logger.error(`[DB] Error removing from whitelist:`, error);
-        return { success: false, message: 'An error occurred while removing from the whitelist.' };
+        throw new Error('An error occurred while removing from the whitelist.');
     }
 }
 
