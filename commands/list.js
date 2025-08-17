@@ -18,13 +18,11 @@ const { DateTime } = require('luxon');
 /**
  * Shows a simple modal with a single text input field.
  * @param {import('discord.js').Interaction} interaction
- * @param {'remove'|'share'|'unshare'|'info'} type
+ * @param {'remove'|'info'} type
  */
 async function showSimpleModal(interaction, type) {
     const modalConfig = {
         remove: { id: 'list_modal_remove', title: 'Remove World', label: 'World Name or Custom ID to Remove', placeholder: 'Case-insensitive world name or ID' },
-        share: { id: 'list_modal_share', title: 'Share World', label: 'World Name or Custom ID', placeholder: 'World to make public in this server' },
-        unshare: { id: 'list_modal_unshare', title: 'Unshare World', label: 'World Name or Custom ID', placeholder: 'World to make private from this server' },
         info: { id: 'list_modal_info', title: 'Get World Info', label: 'World Name or Custom ID', placeholder: 'Enter a world name or ID' }
     };
 
@@ -110,6 +108,101 @@ async function showExportModal(interaction) {
 
 // --- Core List Display Function ---
 
+async function fetchAndPrepareWorlds(filters, page) {
+    const dbResult = await db.getFilteredWorlds(filters, page, CONSTANTS.PAGE_SIZE);
+    const { worlds, total } = dbResult;
+
+    const nowUtc = DateTime.utc().startOf('day');
+    worlds.forEach(world => {
+        const expiryDateUtc = DateTime.fromISO(world.expiry_date, { zone: 'utc' }).startOf('day');
+        const diff = expiryDateUtc.diff(nowUtc, 'days').toObject();
+        world.daysLeft = Math.floor(diff.days);
+        world.daysOwned = 180 - world.daysLeft;
+
+        if (world.daysLeft <= 0) {
+            world.daysLeft = 'EXP';
+            world.daysOwned = 180;
+        } else if (world.daysLeft > 180) {
+            world.daysLeft = 180;
+            world.daysOwned = 0;
+        }
+    });
+
+    if (worlds.length > 0) {
+        worlds.sort((a, b) => {
+            const daysOwnedA = a.daysOwned;
+            const daysOwnedB = b.daysOwned;
+            if (daysOwnedA !== daysOwnedB) return daysOwnedB - daysOwnedA;
+            const nameLengthDiff = a.name.length - b.name.length;
+            if (nameLengthDiff !== 0) return nameLengthDiff;
+            return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+        });
+    }
+
+    return { worlds, total };
+}
+
+function buildReply(interaction, worlds, totalWorlds, page, viewMode, timezoneOffset, targetUsername) {
+    const totalPages = Math.max(1, Math.ceil(totalWorlds / CONSTANTS.PAGE_SIZE));
+    const safePage = Math.max(1, Math.min(page, totalPages));
+
+    if (worlds.length === 0) {
+        let emptyMsg = `No worlds found.`;
+        if (targetUsername) {
+            emptyMsg = `No worlds found for user \`${targetUsername}\`.`;
+        } else {
+            emptyMsg = "The list is empty. Use `/addworld` or the button below to add a world!";
+        }
+
+        const emptyRow = new ActionRowBuilder();
+        emptyRow.addComponents(
+            new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add World').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('list_button_filtershow').setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary)
+        );
+
+        return { content: emptyMsg, components: [emptyRow], ephemeral: true };
+    }
+
+    const { data, config } = utils.formatWorldsToTable(worlds, viewMode, 'public', timezoneOffset, targetUsername);
+    let tableOutput = '```\n' + table(data, config) + '\n```';
+    const footer = `\n📊 Total worlds: ${totalWorlds} | Page ${safePage} of ${totalPages}`;
+
+    if ((tableOutput + footer).length > 2000) {
+        const availableLength = 2000 - footer.length - 30;
+        let cutOff = tableOutput.lastIndexOf('\n', availableLength);
+        if (cutOff === -1) cutOff = availableLength;
+        tableOutput = tableOutput.substring(0, cutOff) + "\n... (list truncated)```";
+    }
+
+    const components = [];
+    components.push(utils.createPaginationRow(`list_button_page`, safePage, totalPages));
+
+    const isOwnList = targetUsername ? targetUsername.toLowerCase() === interaction.user.username.toLowerCase() : true;
+    const actionRow1 = new ActionRowBuilder();
+    actionRow1.addComponents(
+        new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add').setStyle(ButtonStyle.Success).setDisabled(!isOwnList),
+        new ButtonBuilder().setCustomId('list_button_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger).setDisabled(!isOwnList),
+        new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('list_button_export').setLabel('📄 Export').setStyle(ButtonStyle.Secondary)
+    );
+    components.push(actionRow1);
+
+    const actionRow2 = new ActionRowBuilder();
+    actionRow2.addComponents(
+        new ButtonBuilder().setCustomId('list_button_filtershow').setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('settings_button_show').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary)
+    );
+    components.push(actionRow2);
+
+    if (viewMode === 'pc' && worlds.length > 0) {
+        const selectOptions = worlds.slice(0, 25).map(world => utils.createWorldSelectOption(world, timezoneOffset));
+        components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('list_select_info').setPlaceholder('📋 Select a world for details').addOptions(selectOptions)));
+    }
+
+    const finalContent = tableOutput + footer;
+    return { content: finalContent, components, ephemeral: true };
+}
+
 /**
  * Displays a paginated list of worlds.
  * @param {import('discord.js').Interaction} interaction
@@ -141,110 +234,15 @@ async function showWorldsList(interaction, page = 1, currentFilters = null, targ
 
     logger.info(`[list.js] showWorldsList called - Page: ${page}, Filters: ${JSON.stringify(effectiveFilters)}, Target: ${effectiveTargetUsername}`);
 
-    let dbResult = { worlds: [], total: 0 };
     try {
-        dbResult = await db.getFilteredWorlds(effectiveFilters, page, CONSTANTS.PAGE_SIZE);
+        const { worlds, total } = await fetchAndPrepareWorlds(effectiveFilters, page);
+        const replyOptions = buildReply(interaction, worlds, total, page, viewMode, timezoneOffset, effectiveTargetUsername);
+        await interaction.editReply(replyOptions);
     } catch (error) {
-        logger.error(`[list.js] Error fetching worlds:`, error?.stack || error);
-        const errorContent = { content: '❌ Sorry, I couldn\'t fetch the worlds list.', components: [], flags: MessageFlags.Ephemeral };
-        if (isUpdate) {
-            await interaction.editReply(errorContent);
-        } else {
-            await interaction.reply(errorContent);
-        }
-        return;
+        logger.error(`[list.js] Error fetching or building worlds list:`, error?.stack || error);
+        const errorContent = { content: '❌ Sorry, I couldn\'t fetch the worlds list.', components: [], ephemeral: true };
+        await interaction.editReply(errorContent);
     }
-
-    const worlds = dbResult.worlds || [];
-    const totalWorlds = dbResult.total || 0;
-    const totalPages = Math.max(1, Math.ceil(totalWorlds / CONSTANTS.PAGE_SIZE));
-    const safePage = Math.max(1, Math.min(page, totalPages));
-
-    const nowUtc = DateTime.utc().startOf('day');
-    worlds.forEach(world => {
-        const expiryDateUtc = DateTime.fromISO(world.expiry_date, { zone: 'utc' }).startOf('day');
-        const diff = expiryDateUtc.diff(nowUtc, 'days').toObject();
-        world.daysLeft = Math.floor(diff.days);
-        world.daysOwned = 180 - world.daysLeft;
-
-        if (world.daysLeft <= 0) {
-            world.daysLeft = 'EXP';
-            world.daysOwned = 180;
-        } else if (world.daysLeft > 180) {
-            world.daysLeft = 180;
-            world.daysOwned = 0;
-        }
-    });
-
-    if (worlds.length > 0) {
-        worlds.sort((a, b) => {
-            const daysOwnedA = a.daysOwned;
-            const daysOwnedB = b.daysOwned;
-            if (daysOwnedA !== daysOwnedB) return daysOwnedB - daysOwnedA;
-            const nameLengthDiff = a.name.length - b.name.length;
-            if (nameLengthDiff !== 0) return nameLengthDiff;
-            return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
-        });
-    }
-
-    if (worlds.length === 0) {
-        let emptyMsg = `No worlds found.`;
-        if (effectiveFilters && Object.keys(effectiveFilters).length > 0) {
-            emptyMsg = `No worlds match your filters. Try adjusting them.`;
-        } else {
-            emptyMsg = "The list is empty. Use `/addworld` or the button below to add a world!";
-        }
-
-        const emptyRow = new ActionRowBuilder();
-        emptyRow.addComponents(
-            new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add World').setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId('list_button_filtershow').setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary)
-        );
-
-        const opts = { content: emptyMsg, components: [emptyRow], flags: MessageFlags.Ephemeral };
-        await interaction.editReply(opts);
-        return;
-    }
-
-    const { data, config } = utils.formatWorldsToTable(worlds, viewMode, 'public', timezoneOffset, effectiveTargetUsername);
-    let tableOutput = '```\n' + table(data, config) + '\n```';
-    const footer = `\n📊 Total worlds: ${totalWorlds} | Page ${safePage} of ${totalPages}`;
-
-    if ((tableOutput + footer).length > 2000) {
-        const availableLength = 2000 - footer.length - 30;
-        let cutOff = tableOutput.lastIndexOf('\n', availableLength);
-        if (cutOff === -1) cutOff = availableLength;
-        tableOutput = tableOutput.substring(0, cutOff) + "\n... (list truncated)```";
-    }
-
-    const components = [];
-    components.push(utils.createPaginationRow(`list_button_page`, safePage, totalPages));
-
-    const isOwnList = effectiveTargetUsername ? effectiveTargetUsername.toLowerCase() === interaction.user.username.toLowerCase() : true;
-    const actionRow1 = new ActionRowBuilder();
-    actionRow1.addComponents(
-        new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add').setStyle(ButtonStyle.Success).setDisabled(!isOwnList),
-        new ButtonBuilder().setCustomId('list_button_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger).setDisabled(!isOwnList),
-        new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('list_button_export').setLabel('📄 Export').setStyle(ButtonStyle.Secondary)
-    );
-    components.push(actionRow1);
-
-    const actionRow2 = new ActionRowBuilder();
-    actionRow2.addComponents(
-        new ButtonBuilder().setCustomId('list_button_filtershow').setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('settings_button_show').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary)
-    );
-    components.push(actionRow2);
-
-    if (viewMode === 'pc' && worlds.length > 0) {
-        const selectOptions = worlds.slice(0, 25).map(world => utils.createWorldSelectOption(world, timezoneOffset));
-        components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('list_select_info').setPlaceholder('📋 Select a world for details').addOptions(selectOptions)));
-    }
-
-    const finalContent = tableOutput + footer;
-    const finalOpts = { content: finalContent, components, ephemeral: true };
-    await interaction.editReply(finalOpts);
 }
 
 module.exports = {
@@ -257,6 +255,11 @@ module.exports = {
                 .setRequired(false)),
 
     async execute(interaction) {
+        const cooldown = utils.checkCooldown(interaction.user.id, 'list');
+        if (cooldown.onCooldown) {
+            await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds before using this command again.`, ephemeral: true });
+            return;
+        }
         logger.info(`[list.js] Entered execute function for /list, User: ${interaction.user.tag}, Interaction ID: ${interaction.id}`);
         const targetUser = interaction.options.getUser('user');
         const username = targetUser ? targetUser.username : null;
@@ -352,10 +355,12 @@ module.exports = {
                 daysowned: interaction.fields.getTextInputValue('export_daysowned') || undefined
             };
 
-            const { worlds } = await db.getFilteredWorlds(filters, 1, 10000);
+            const { worlds } = await db.getFilteredWorlds(filters, 1, 1000);
 
             if (!worlds || worlds.length === 0) {
                 await interaction.editReply({ content: '❌ No worlds match your export filters.' });
+            } else if (worlds.length >= 1000) {
+                await interaction.editReply({ content: '⚠️ Your export request matched over 1000 worlds. Please use more specific filters to reduce the result size.' });
                 return;
             }
 
@@ -383,8 +388,36 @@ module.exports = {
             return interaction.reply({ content: 'There was an error processing this form. The required field was missing.', flags: MessageFlags.Ephemeral });
         }
 
-        if (action !== 'remove') await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         const world = await db.findWorldByIdentifier(identifier);
+
+        if (!world) {
+            return interaction.editReply({ content: `❌ World \`${identifier}\` not found.` });
+        }
+
+        switch (action) {
+            case 'remove': {
+                // For security, only the user who added the world can remove it.
+                if (world.added_by_username && world.added_by_username.toLowerCase() !== interaction.user.username.toLowerCase()) {
+                    return interaction.editReply({ content: '❌ You can only remove worlds that you have added.' });
+                }
+                const success = await db.removeWorld(world.id);
+                if (success) {
+                    await interaction.editReply({ content: `✅ World **${world.name}** has been removed.` });
+                } else {
+                    await interaction.editReply({ content: `❌ Failed to remove world **${world.name}**.` });
+                }
+                break;
+            }
+            case 'info': {
+                await showWorldInfo(interaction, world);
+                break;
+            }
+            default:
+                logger.warn(`[list.js] Unknown modal action: ${action}`);
+                await interaction.editReply({ content: 'Unknown action.' });
+                break;
+        }
     }
 };
