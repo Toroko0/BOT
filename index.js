@@ -83,6 +83,41 @@ client.once(Events.ClientReady, async c => {
         });
         logger.info('[Startup] Scheduled daily expired worlds cleanup job.');
 
+        // Schedule hourly notification job
+        cron.schedule('0 * * * *', async () => {
+            logger.info('[Cron] Running hourly notification job...');
+            try {
+                const usersToNotify = await db.getUsersToNotify();
+                if (usersToNotify.length === 0) {
+                    logger.info('[Cron] No users to notify.');
+                    return;
+                }
+
+                for (const user of usersToNotify) {
+                    const lastNotified = user.last_notification_timestamp || DateTime.utc().minus({ hours: user.notification_interval }).toISO();
+                    const newWorlds = await db.getRecentlyAddedWorldsSince(lastNotified);
+
+                    if (newWorlds.length > 0) {
+                        const userDM = await client.users.fetch(user.id);
+                        if (userDM) {
+                            let message = `**Last ${newWorlds.length} worlds added to the list**\n\n`;
+                            newWorlds.forEach(world => {
+                                const lockType = world.lock_type === 'mainlock' ? '(M)' : '(O)';
+                                const customId = world.custom_id ? ` (ID: ${world.custom_id})` : '';
+                                message += `${lockType} ${world.name} ${world.days_owned} Days, BY ${world.added_by_username}${customId}\n`;
+                            });
+                            await userDM.send(message);
+                            await db.updateLastNotificationTimestamp(user.id, DateTime.utc().toISO());
+                            logger.info(`[Cron] Sent notification to ${user.username}`);
+                        }
+                    }
+                }
+            } catch (error) {
+                logger.error('[Cron] Error during notification job:', error);
+            }
+        });
+        logger.info('[Startup] Scheduled hourly notification job.');
+
     } catch (err) {
         logger.error('[Startup] FATAL: Error during startup process (migrations or schedulers):', err);
         process.exit(1);

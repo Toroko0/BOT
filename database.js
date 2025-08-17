@@ -303,18 +303,17 @@ async function getLeaderboard(page = 1, pageSize = 10) {
     const offset = (page - 1) * pageSize;
     logger.debug(`[DB] Attempting to get leaderboard, page ${page}`);
     try {
-        const leaderboard = await knexInstance('worlds')
-            .select('added_by_username')
-            .count('* as world_count')
-            .groupBy('added_by_username')
+        const leaderboard = await knexInstance('users')
+            .leftJoin('worlds', 'users.username', 'worlds.added_by_username')
+            .select('users.username as added_by_username')
+            .count('worlds.id as world_count')
+            .groupBy('users.username')
             .orderBy('world_count', 'desc')
             .limit(pageSize)
             .offset(offset);
 
-        const totalResult = await knexInstance('worlds').distinct('added_by_username').count({ total: '*' });
-        const totalCount = (totalResult && totalResult[0] && totalResult[0].total !== undefined)
-            ? Number(totalResult[0].total)
-            : 0;
+        const totalResult = await knexInstance('users').count({ total: '*' }).first();
+        const totalCount = totalResult ? Number(totalResult.total) : 0;
 
         return { leaderboard, total: totalCount };
     } catch (error) {
@@ -349,19 +348,56 @@ async function getUserPreferences(userId) {
         if (user) {
             return {
                 timezone_offset: user.timezone_offset,
-                view_mode: user.view_mode
+                view_mode: user.view_mode,
+                notifications_enabled: user.notifications_enabled,
+                notification_interval: user.notification_interval,
             };
         }
         return {
             timezone_offset: 0.0,
-            view_mode: 'pc'
+            view_mode: 'pc',
+            notifications_enabled: true,
+            notification_interval: 6,
         };
     } catch (error) {
         logger.error(`[DB] Error getting preferences for user ${userId}:`, error);
         return {
             timezone_offset: 0.0,
-            view_mode: 'pc'
+            view_mode: 'pc',
+            notifications_enabled: true,
+            notification_interval: 6,
         };
+    }
+}
+
+async function updateUserNotificationSettings(userId, { notifications_enabled, notification_interval }) {
+    try {
+        const updateData = {};
+        if (notifications_enabled !== undefined) {
+            updateData.notifications_enabled = notifications_enabled;
+        }
+        if (notification_interval !== undefined) {
+            const interval = parseInt(notification_interval, 10);
+            if (!isNaN(interval) && [6, 12, 24, 0].includes(interval)) {
+                updateData.notification_interval = interval;
+                if (interval === 0) {
+                    updateData.notifications_enabled = false;
+                } else {
+                    updateData.notifications_enabled = true;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        if (Object.keys(updateData).length > 0) {
+            await knexInstance('users').where({ id: userId }).update(updateData);
+            logger.info(`[DB] Updated notification settings for user ${userId}:`, updateData);
+        }
+        return true;
+    } catch (error) {
+        logger.error(`[DB] Error updating notification settings for user ${userId}:`, error);
+        return false;
     }
 }
 
@@ -414,6 +450,46 @@ async function getUserStats(username) {
     }
 }
 
+async function getRecentlyAddedWorldsSince(since, limit = 10) {
+    try {
+        return await knexInstance('worlds')
+            .where('added_date', '>', since)
+            .orderBy('added_date', 'desc')
+            .limit(limit);
+    } catch (error) {
+        logger.error(`[DB] Error getting recently added worlds:`, error);
+        return [];
+    }
+}
+
+async function getUsersToNotify() {
+    try {
+        const now = DateTime.utc();
+        return await knexInstance('users')
+            .where('notifications_enabled', true)
+            .andWhere(function() {
+                this.whereNull('last_notification_timestamp')
+                    .orWhereRaw('julianday(?) - julianday(last_notification_timestamp) > notification_interval / 24.0', [now.toISO()]);
+            });
+    } catch (error) {
+        logger.error(`[DB] Error getting users to notify:`, error);
+        return [];
+    }
+}
+
+async function updateLastNotificationTimestamp(userId, timestamp) {
+    try {
+        await knexInstance('users')
+            .where({ id: userId })
+            .update({ last_notification_timestamp: timestamp });
+        logger.debug(`[DB] Updated last notification timestamp for user ${userId}`);
+        return true;
+    } catch (error) {
+        logger.error(`[DB] Error updating last notification timestamp for user ${userId}:`, error);
+        return false;
+    }
+}
+
 // --- Module Exports ---
 module.exports = {
     knex: knexInstance,
@@ -440,4 +516,8 @@ module.exports = {
     updateUserTimezone,
     updateUserViewMode,
     getUserStats,
+    updateUserNotificationSettings,
+    getRecentlyAddedWorldsSince,
+    getUsersToNotify,
+    updateLastNotificationTimestamp,
 };
