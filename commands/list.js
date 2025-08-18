@@ -128,17 +128,6 @@ async function fetchAndPrepareWorlds(filters, page) {
         }
     });
 
-    if (worlds.length > 0) {
-        worlds.sort((a, b) => {
-            const daysOwnedA = a.daysOwned;
-            const daysOwnedB = b.daysOwned;
-            if (daysOwnedA !== daysOwnedB) return daysOwnedB - daysOwnedA;
-            const nameLengthDiff = a.name.length - b.name.length;
-            if (nameLengthDiff !== 0) return nameLengthDiff;
-            return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
-        });
-    }
-
     return { worlds, total };
 }
 
@@ -160,7 +149,7 @@ function buildReply(interaction, worlds, totalWorlds, page, viewMode, timezoneOf
             new ButtonBuilder().setCustomId('list_button_filtershow').setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary)
         );
 
-        return { content: emptyMsg, components: [emptyRow], ephemeral: true };
+        return { content: emptyMsg, components: [emptyRow], flags: MessageFlags.Ephemeral };
     }
 
     const { data, config } = utils.formatWorldsToTable(worlds, viewMode, 'public', timezoneOffset, targetUsername);
@@ -200,7 +189,55 @@ function buildReply(interaction, worlds, totalWorlds, page, viewMode, timezoneOf
     }
 
     const finalContent = tableOutput + footer;
-    return { content: finalContent, components, ephemeral: true };
+    return { content: finalContent, components, flags: MessageFlags.Ephemeral };
+}
+
+async function exportWorlds(interaction, filters, sortBy) {
+    logger.info(`[list.js] Exporting worlds with filters: ${JSON.stringify(filters)} and sort: ${sortBy}`);
+
+    const { worlds } = await db.getFilteredWorlds(filters, 1, 1000, { sortBy });
+
+    if (!worlds || worlds.length === 0) {
+        await interaction.editReply({ content: '❌ No worlds match your export filters.', components: [] });
+        return;
+    }
+    if (worlds.length >= 1000) {
+        await interaction.editReply({ content: '⚠️ Your export request matched over 1000 worlds. Please use more specific filters to reduce the result size.', components: [] });
+        return;
+    }
+
+    let exportText = "```\n";
+    worlds.forEach(world => {
+        const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
+        const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
+        const line = `(${lockChar}) ${world.name.toUpperCase()} ${world.days_owned}${customIdPart}\n`;
+        exportText += line;
+    });
+    exportText += "```";
+
+    if (exportText.length <= 2000) {
+        await interaction.editReply({ content: exportText, components: [] });
+    } else {
+        const messages = [];
+        let currentMessage = "```\n";
+        const lines = exportText.substring(4, exportText.length - 4).split('\n');
+
+        for (const line of lines) {
+            if (currentMessage.length + line.length + 4 > 2000) {
+                currentMessage += "```";
+                messages.push(currentMessage);
+                currentMessage = "```\n";
+            }
+            currentMessage += line + "\n";
+        }
+        currentMessage += "```";
+        messages.push(currentMessage);
+
+        await interaction.editReply({ content: messages[0], components: [] });
+        for (let i = 1; i < messages.length; i++) {
+            await interaction.followUp({ content: messages[i], ephemeral: true });
+        }
+    }
 }
 
 /**
@@ -240,7 +277,7 @@ async function showWorldsList(interaction, page = 1, currentFilters = null, targ
         await interaction.editReply(replyOptions);
     } catch (error) {
         logger.error(`[list.js] Error fetching or building worlds list:`, error?.stack || error);
-        const errorContent = { content: '❌ Sorry, I couldn\'t fetch the worlds list.', components: [], ephemeral: true };
+        const errorContent = { content: '❌ Sorry, I couldn\'t fetch the worlds list.', components: [], flags: MessageFlags.Ephemeral };
         await interaction.editReply(errorContent);
     }
 }
@@ -257,7 +294,7 @@ module.exports = {
     async execute(interaction) {
         const cooldown = utils.checkCooldown(interaction.user.id, 'list');
         if (cooldown.onCooldown) {
-            await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds before using this command again.`, ephemeral: true });
+            await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds before using this command again.`, flags: MessageFlags.Ephemeral });
             return;
         }
         logger.info(`[list.js] Entered execute function for /list, User: ${interaction.user.tag}, Interaction ID: ${interaction.id}`);
@@ -269,13 +306,13 @@ module.exports = {
 
     async handleButton(interaction, params) {
         const cooldown = utils.checkCooldown(interaction.user.id, 'list_button');
-        if (cooldown.onCooldown) { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, ephemeral: true }); return; }
+        if (cooldown.onCooldown) { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, flags: MessageFlags.Ephemeral }); return; }
 
         const [action, ...args] = params;
         const userActiveFilters = interaction.client.activeListFilters?.[interaction.user.id] || {};
         const targetUsername = userActiveFilters?.added_by_username;
 
-        // Export button logic → open modal
+        // Export button logic
         if (action === 'export') {
             await showExportModal(interaction);
             return;
@@ -318,7 +355,7 @@ module.exports = {
 
     async handleSelectMenu(interaction, params) {
         const cooldown = utils.checkCooldown(interaction.user.id, 'list_select');
-        if (cooldown.onCooldown) { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, ephemeral: true }); return; }
+        if (cooldown.onCooldown) { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, flags: MessageFlags.Ephemeral }); return; }
 
         const [action] = params;
         if (action === 'info') {
@@ -346,39 +383,23 @@ module.exports = {
         }
 
         if (action === 'export') {
-            await interaction.deferReply({ ephemeral: true });
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+            const locktypeInput = (interaction.fields.getTextInputValue('export_locktype') || '').toUpperCase();
+            const locktype = locktypeInput === 'M' ? 'mainlock' : (locktypeInput === 'O' ? 'outlock' : undefined);
+
+            const daysOwnedInput = interaction.fields.getTextInputValue('export_daysowned');
+            const daysOwned = daysOwnedInput ? parseInt(daysOwnedInput, 10) : undefined;
 
             const filters = {
                 prefix: interaction.fields.getTextInputValue('export_prefix') || undefined,
-                locktype: interaction.fields.getTextInputValue('export_locktype') || undefined,
+                locktype: locktype,
                 expiryday: interaction.fields.getTextInputValue('export_expiryday') || undefined,
-                daysowned: interaction.fields.getTextInputValue('export_daysowned') || undefined
+                daysowned: isNaN(daysOwned) ? undefined : daysOwned,
             };
+            logger.info(`[list.js] Export filters: ${JSON.stringify(filters)}`);
 
-            const { worlds } = await db.getFilteredWorlds(filters, 1, 1000);
-
-            if (!worlds || worlds.length === 0) {
-                await interaction.editReply({ content: '❌ No worlds match your export filters.' });
-            } else if (worlds.length >= 1000) {
-                await interaction.editReply({ content: '⚠️ Your export request matched over 1000 worlds. Please use more specific filters to reduce the result size.' });
-                return;
-            }
-
-            let exportText = "```\n";
-            worlds.forEach(world => {
-                const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
-                const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
-                exportText += `(${lockChar}) ${world.name.toUpperCase()}${customIdPart}\n`;
-            });
-            exportText += "```";
-
-            if (exportText.length > 2000) {
-                let cutOff = exportText.lastIndexOf('\n', 1990);
-                if (cutOff === -1) cutOff = 1990;
-                exportText = exportText.substring(0, cutOff) + "\n... (list truncated)```";
-            }
-
-            await interaction.editReply({ content: exportText });
+            await exportWorlds(interaction, filters, 'default');
             return;
         }
 
