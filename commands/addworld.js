@@ -99,26 +99,19 @@ module.exports = {
 
       // Add the world
       logger.info('[addworld.js] Calling db.addWorld');
-      const result = await db.addWorld(
-        worldName,
-        daysOwned || 1, // Default to 1 if not provided
-        lockType || 'mainlock', // Default to mainlock if not provided
-        customId,
-        interaction.user.username
-      );
-      logger.info('[addworld.js] db.addWorld returned', result);
-
-      if (result.success) {
+      try {
+        await db.addWorld(
+          worldName,
+          daysOwned || 1,
+          lockType || 'mainlock',
+          customId,
+          interaction.user.username
+        );
         invalidateSearchCache();
-        await interaction.reply({ ...replyOpts, content: `✅ ${result.message}` }); // Use message from DB function
-      } else {
-        logger.error('[addworld.js] Add world via slash failed:', result.message);
-        if (result.message.includes('is already being tracked by')) {
-            await interaction.reply({ ...replyOpts, content: `❌ ${result.message}` });
-            await performSearch(interaction, { prefix: worldName });
-        } else {
-            await interaction.reply({ ...replyOpts, content: `❌ ${result.message || 'Failed to add world.'}` }); // Show specific error
-        }
+        await interaction.reply({ ...replyOpts, content: `✅ World **${worldName.toUpperCase()}** has been added.` });
+      } catch (error) {
+        logger.error('[addworld.js] Add world via slash failed:', error.message);
+        await interaction.reply({ ...replyOpts, content: `❌ ${error.message}` });
       }
     } else {
       // If no world name provided in slash command, show the modal
@@ -174,41 +167,25 @@ module.exports = {
         const normalizedLockType = lockTypeStr === 'O' ? 'outlock' : 'mainlock';
 
         try {
-          const result = await db.addWorld(
-            worldName,
-            daysOwned, // Use validated number
-            normalizedLockType,
-            customId || null, // Pass null if empty
-            interaction.user.username
-          );
+            await db.addWorld(
+                worldName,
+                daysOwned,
+                normalizedLockType,
+                customId || null,
+                interaction.user.username
+            );
 
-          if (result.success) {
             invalidateSearchCache();
-            const row = new ActionRowBuilder()
-              .addComponents(
+            const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
-                  .setCustomId('list_button_view_1')
-                  .setLabel('View Worlds')
-                  .setStyle(ButtonStyle.Primary)
-              );
-            await interaction.reply({ ...replyOpts, content: `✅ ${result.message}`, components: [row] });
-          } else {
-            // This case might be redundant if db.addWorld throws errors for all failures
-            logger.error('[addworld.js] Add world via modal failed (result.success false):', result.message);
-            if (result.message.includes('is already being tracked by')) {
-                await interaction.reply({ ...replyOpts, content: `❌ ${result.message}` });
-                await performSearch(interaction, { prefix: worldName });
-            } else {
-                await interaction.reply({ ...replyOpts, content: `❌ ${result.message || 'Failed to add world.'}` });
-            }
-          }
+                    .setCustomId('list_button_view_1')
+                    .setLabel('View Worlds')
+                    .setStyle(ButtonStyle.Primary)
+            );
+            await interaction.reply({ ...replyOpts, content: `✅ World **${worldName.toUpperCase()}** has been added.`, components: [row] });
         } catch (error) {
-          logger.error('[addworld.js] Error during addWorld via modal:', error);
-          if (error.message && error.message.includes('SQLITE_CONSTRAINT: UNIQUE constraint failed: worlds.name')) {
-            await interaction.reply({ ...replyOpts, content: "❌ A world with this name already exists. Please choose a different name." });
-          } else {
-            await interaction.reply({ ...replyOpts, content: '❌ An unexpected error occurred while adding the world. Please try again later.' });
-          }
+            logger.error('[addworld.js] Error during addWorld via modal:', error.message);
+            await interaction.reply({ ...replyOpts, content: `❌ ${error.message}` });
         }
      } else {
          logger.warn(`[addworld.js] Received unknown modal action: ${action}`);

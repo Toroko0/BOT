@@ -4,6 +4,7 @@
 const {
     SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, InteractionType, MessageFlags
 } = require('discord.js');
+const { ownerId } = require('../config.json');
 const db = require('../database.js');
 const utils = require('../utils.js');
 const logger = require('../utils/logger.js');
@@ -331,6 +332,20 @@ module.exports = {
         // All other button actions
         switch (action) {
             case 'remove':
+                if (args[0] === 'confirm') {
+                    const worldId = parseInt(args[1], 10);
+                    const success = await db.removeWorld(worldId);
+                    if (success) {
+                        await interaction.update({ content: `✅ World has been removed.`, components: [] });
+                    } else {
+                        await interaction.update({ content: `❌ Failed to remove world.`, components: [] });
+                    }
+                } else if (args[0] === 'cancel') {
+                    await interaction.update({ content: '❌ Removal cancelled.', components: [] });
+                } else {
+                    await showSimpleModal(interaction, 'remove');
+                }
+                break;
             case 'info':
                 await showSimpleModal(interaction, action);
                 break;
@@ -419,16 +434,27 @@ module.exports = {
 
         switch (action) {
             case 'remove': {
-                // For security, only the user who added the world can remove it.
-                if (world.added_by_username && world.added_by_username.toLowerCase() !== interaction.user.username.toLowerCase()) {
+                const isOwner = interaction.user.id === ownerId;
+                if (!isOwner && world.added_by_username && world.added_by_username.toLowerCase() !== interaction.user.username.toLowerCase()) {
                     return interaction.editReply({ content: '❌ You can only remove worlds that you have added.' });
                 }
-                const success = await db.removeWorld(world.id);
-                if (success) {
-                    await interaction.editReply({ content: `✅ World **${world.name}** has been removed.` });
-                } else {
-                    await interaction.editReply({ content: `❌ Failed to remove world **${world.name}**.` });
-                }
+
+                const confirmButton = new ButtonBuilder()
+                    .setCustomId(`list_button_remove_confirm_${world.id}`)
+                    .setLabel('Confirm')
+                    .setStyle(ButtonStyle.Danger);
+
+                const cancelButton = new ButtonBuilder()
+                    .setCustomId('list_button_remove_cancel')
+                    .setLabel('Cancel')
+                    .setStyle(ButtonStyle.Secondary);
+
+                const row = new ActionRowBuilder().addComponents(confirmButton, cancelButton);
+
+                await interaction.editReply({
+                    content: `Are you sure you want to remove the world **${world.name}**?`,
+                    components: [row],
+                });
                 break;
             }
             case 'info': {

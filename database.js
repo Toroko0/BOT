@@ -175,20 +175,20 @@ async function findWorldByIdentifier(identifier) {
 async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10, options = {}) {
     logger.debug(`[DB] getFilteredWorlds called - Filters: ${JSON.stringify(filters)}, Page: ${page}, PageSize: ${pageSize}, Options: ${JSON.stringify(options)}`);
     try {
-        const query = knexInstance('worlds');
+        let query = knexInstance('worlds');
         const nowUtc = DateTime.utc().startOf('day');
 
         if (filters.prefix) {
-            query.andWhereRaw('lower(name) LIKE ?', [`${filters.prefix.toLowerCase()}%`]);
+            query = query.whereRaw('lower(name) LIKE ?', [`${filters.prefix.toLowerCase()}%`]);
         }
         if (filters.lockType === 'mainlock' || filters.lockType === 'outlock') {
-            query.andWhere('lock_type', filters.lockType);
+            query = query.where('lock_type', filters.lockType);
         }
         if (filters.expiryDay) {
             const dayMap = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6 };
             const dayNum = dayMap[filters.expiryDay.toLowerCase()];
             if (dayNum !== undefined) {
-                query.andWhereRaw("strftime('%w', date(expiry_date)) = ?", [dayNum.toString()]);
+                query = query.whereRaw("strftime('%w', date(expiry_date)) = ?", [dayNum.toString()]);
             }
         }
         if (filters.daysOwned !== undefined && filters.daysOwned !== null) {
@@ -197,35 +197,35 @@ async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10, options 
                 const targetDaysLeft = 180 - daysOwnedInput;
                 const targetExpiryDate = nowUtc.plus({ days: targetDaysLeft });
                 const nextDay = targetExpiryDate.plus({ days: 1 });
-                query.andWhere('expiry_date', '>=', targetExpiryDate.toISO()).andWhere('expiry_date', '<', nextDay.toISO());
+                query = query.where('expiry_date', '>=', targetExpiryDate.toISO()).andWhere('expiry_date', '<', nextDay.toISO());
             }
         }
         if (filters.nameLengthMin !== undefined && filters.nameLengthMin !== null) {
             const minLength = parseInt(filters.nameLengthMin);
             if (!isNaN(minLength) && minLength > 0) {
-                query.andWhereRaw('LENGTH(name) >= ?', [minLength]);
+                query = query.whereRaw('LENGTH(name) >= ?', [minLength]);
             }
         }
         if (filters.nameLengthMax !== undefined && filters.nameLengthMax !== null) {
             const maxLength = parseInt(filters.nameLengthMax);
             if (!isNaN(maxLength) && maxLength > 0) {
-                query.andWhereRaw('LENGTH(name) <= ?', [maxLength]);
+                query = query.whereRaw('LENGTH(name) <= ?', [maxLength]);
             }
         }
         if (filters.added_by_username) {
-            query.andWhere('added_by_username', filters.added_by_username);
+            query = query.where('added_by_username', filters.added_by_username);
         }
 
         const totalResult = await query.clone().count({ total: '*' }).first();
         const totalCount = totalResult ? Number(totalResult.total) : 0;
 
         // Default sort order
-        query.orderBy('expiry_date', 'asc')
+        query = query.orderBy('expiry_date', 'asc')
              .orderByRaw('LENGTH(name) asc')
              .orderBy('lock_type', 'asc')
              .orderBy('name', 'asc');
 
-        query.limit(pageSize).offset((page - 1) * pageSize);
+        query = query.limit(pageSize).offset((page - 1) * pageSize);
 
         const worlds = await query.select('*');
 
