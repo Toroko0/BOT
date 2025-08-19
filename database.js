@@ -61,8 +61,10 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = 
             added_date: DateTime.utc().toISO(),
         });
         logger.info(`[DB] Added world ${worldNameUpper}`);
-        const expiryDays = 181 - daysOwnedNum;
-        return { success: true, message: `World **${worldNameUpper}** has been added and will expire in ${expiryDays} days.` };
+        const expiryDays = 180 - daysOwnedNum;
+        const dayString = expiryDays === 1 ? 'day' : 'days';
+        const expiryMessage = expiryDays > 0 ? `in ${expiryDays} ${dayString}` : 'today';
+        return { success: true, message: `World **${worldNameUpper}** has been added and will expire ${expiryMessage}.` };
     } catch (error) {
         logger.error(`[DB] Error adding world ${worldNameUpper}:`, error);
         if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) {
@@ -500,11 +502,13 @@ async function getUsersToNotify() {
     try {
         const now = DateTime.utc();
         return await knexInstance('users')
-            .where('notifications_enabled', true)
+            .join('whitelist', 'users.username', '=', 'whitelist.username')
+            .where('users.notifications_enabled', true)
             .andWhere(function() {
-                this.whereNull('last_notification_timestamp')
-                    .orWhereRaw('julianday(?) - julianday(last_notification_timestamp) > notification_interval / 24.0', [now.toISO()]);
-            });
+                this.whereNull('users.last_notification_timestamp')
+                    .orWhereRaw('julianday(?) - julianday(users.last_notification_timestamp) > users.notification_interval / 24.0', [now.toISO()]);
+            })
+            .select('users.*');
     } catch (error) {
         logger.error(`[DB] Error getting users to notify:`, error);
         return [];

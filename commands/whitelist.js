@@ -35,11 +35,19 @@ module.exports = {
         const username = interaction.options.getString('username');
 
         if (subcommand === 'add') {
-            const result = await db.addToWhitelist(username);
-            await interaction.reply({ content: result.message, ephemeral: true });
+            try {
+                await db.addToWhitelist(username);
+                await interaction.reply({ content: `**${username}** has been added to the whitelist.`, ephemeral: true });
+            } catch (error) {
+                await interaction.reply({ content: `❌ ${error.message}`, ephemeral: true });
+            }
         } else if (subcommand === 'remove') {
-            const result = await db.removeFromWhitelist(username);
-            await interaction.reply({ content: result.message, ephemeral: true });
+            try {
+                await db.removeFromWhitelist(username);
+                await interaction.reply({ content: `**${username}** has been removed from the whitelist.`, ephemeral: true });
+            } catch (error) {
+                await interaction.reply({ content: `❌ ${error.message}`, ephemeral: true });
+            }
         } else if (subcommand === 'list') {
             const whitelist = await db.getWhitelist();
             if (whitelist.length === 0) {
