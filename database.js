@@ -39,8 +39,9 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = 
     const normalizedLockType = String(lockType).toLowerCase() === 'o' || String(lockType).toLowerCase() === 'outlock' ? 'outlock' : 'mainlock';
     let normalizedCustomId = customId ? String(customId).trim().toUpperCase() : null;
     const daysOwnedNum = Math.max(1, Math.min(parseInt(daysOwned, 10) || 1, 180));
+
     if (worldNameUpper.includes(' ')) {
-        throw new Error('World names cannot contain spaces.');
+        return { success: false, message: 'World names cannot contain spaces.' };
     }
     if (normalizedCustomId === '') { normalizedCustomId = null; }
 
@@ -60,16 +61,26 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = 
             added_date: DateTime.utc().toISO(),
         });
         logger.info(`[DB] Added world ${worldNameUpper}`);
+        const expiryDays = 181 - daysOwnedNum;
+        return { success: true, message: `World **${worldNameUpper}** has been added and will expire in ${expiryDays} days.` };
     } catch (error) {
         logger.error(`[DB] Error adding world ${worldNameUpper}:`, error);
         if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) {
-            if (error.message.includes('uq_worlds_name_days_lock')) {
-                throw new Error(`A world named **${worldNameUpper}** with the exact same days owned and lock type is already being tracked.`);
-            } else if (error.message.includes('worlds.uq_worlds_customid') && normalizedCustomId) {
-                throw new Error(`Custom ID **${normalizedCustomId}** already in use.`);
+            // Handle the specific constraint from the error log
+            if (error.message.includes('worlds.name, worlds.expiry_date, worlds.lock_type')) {
+                return { success: false, message: `A world named **${worldNameUpper}** with the same expiry date and lock type already exists.` };
             }
+            // Handle legacy or other potential constraints
+            if (error.message.includes('uq_worlds_name_days_lock')) {
+                return { success: false, message: `A world named **${worldNameUpper}** with the exact same days owned and lock type is already being tracked.` };
+            }
+            if (error.message.includes('worlds.uq_worlds_customid') && normalizedCustomId) {
+                return { success: false, message: `Custom ID **${normalizedCustomId}** already in use.` };
+            }
+            // Fallback for other unique constraint errors
+            return { success: false, message: 'This world conflicts with an existing one (e.g., same name or custom ID).' };
         }
-        throw new Error('Failed to add world due to a database error.');
+        return { success: false, message: 'Failed to add world due to a database error.' };
     }
 }
 
@@ -200,16 +211,10 @@ async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10, options 
                 query.andWhere('expiry_date', '>=', targetExpiryDate.toISO()).andWhere('expiry_date', '<', nextDay.toISO());
             }
         }
-        if (filters.nameLengthMin !== undefined && filters.nameLengthMin !== null) {
-            const minLength = parseInt(filters.nameLengthMin);
-            if (!isNaN(minLength) && minLength > 0) {
-                query.andWhereRaw('LENGTH(name) >= ?', [minLength]);
-            }
-        }
-        if (filters.nameLengthMax !== undefined && filters.nameLengthMax !== null) {
-            const maxLength = parseInt(filters.nameLengthMax);
-            if (!isNaN(maxLength) && maxLength > 0) {
-                query.andWhereRaw('LENGTH(name) <= ?', [maxLength]);
+        if (filters.nameLength !== undefined && filters.nameLength !== null) {
+            const length = parseInt(filters.nameLength);
+            if (!isNaN(length) && length > 0) {
+                query.andWhereRaw('LENGTH(name) = ?', [length]);
             }
         }
         if (filters.added_by_username) {

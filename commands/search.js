@@ -21,16 +21,16 @@ async function showSearchModal(interaction) {
     .setTitle('🔍 Advanced World Search');
 
   const prefixInput = new TextInputBuilder().setCustomId('prefix').setLabel('World Name Prefix (optional)').setStyle(TextInputStyle.Short).setRequired(false);
+  const lengthInput = new TextInputBuilder().setCustomId('length').setLabel('Exact World Name Length (optional)').setStyle(TextInputStyle.Short).setRequired(false);
   const lockTypeInput = new TextInputBuilder().setCustomId('lockType').setLabel('Lock Type (M/O) (optional)').setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(1);
   const expiryDayInput = new TextInputBuilder().setCustomId('expiryDay').setLabel('Expiry Day (e.g., Monday) (optional)').setStyle(TextInputStyle.Short).setRequired(false);
-  // const expiringDaysInput = new TextInputBuilder().setCustomId('expiringDays').setLabel('Expiring Within Days (0-180) (opt.)').setStyle(TextInputStyle.Short).setRequired(false);
   const daysOwnedInput = new TextInputBuilder().setCustomId('search_days_owned').setLabel('Days Owned (0-180) (opt.)').setStyle(TextInputStyle.Short).setRequired(false);
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(prefixInput),
+    new ActionRowBuilder().addComponents(lengthInput),
     new ActionRowBuilder().addComponents(lockTypeInput),
     new ActionRowBuilder().addComponents(expiryDayInput),
-    // new ActionRowBuilder().addComponents(expiringDaysInput),
     new ActionRowBuilder().addComponents(daysOwnedInput)
   );
 
@@ -168,23 +168,24 @@ module.exports = {
     .addStringOption(option => option.setName('expiryday').setDescription('Filter by day of the week the world expires').setRequired(false)
         .addChoices( { name: 'Monday', value: 'monday' }, { name: 'Tuesday', value: 'tuesday' }, { name: 'Wednesday', value: 'wednesday' }, { name: 'Thursday', value: 'thursday' }, { name: 'Friday', value: 'friday' }, { name: 'Saturday', value: 'saturday' }, { name: 'Sunday', value: 'sunday' } ))
     // .addIntegerOption(option => option.setName('expiringdays').setDescription('Filter worlds expiring within this many days').setRequired(false).setMinValue(0).setMaxValue(180)),
-    .addIntegerOption(option => option.setName('daysowned').setDescription('Filter by exact days owned (0-180)').setRequired(false).setMinValue(0).setMaxValue(180)),
+    .addIntegerOption(option => option.setName('daysowned').setDescription('Filter by exact days owned (0-180)').setRequired(false).setMinValue(0).setMaxValue(180))
+    .addIntegerOption(option => option.setName('length').setDescription('Filter by exact world name length').setRequired(false).setMinValue(1)),
 
   async execute(interaction) {
     const prefix = interaction.options.getString('prefix');
     const lockType = interaction.options.getString('locktype');
     const expiryDay = interaction.options.getString('expiryday');
-    // const expiringDays = interaction.options.getInteger('expiringdays');
     const daysOwned = interaction.options.getInteger('daysowned');
-    const hasFilters = prefix || lockType || expiryDay || daysOwned !== null;
+    const length = interaction.options.getInteger('length');
+    const hasFilters = prefix || lockType || expiryDay || daysOwned !== null || length !== null;
 
     if (hasFilters) {
       const filters = { showPublic: false }; // Default to private search
       if (prefix) filters.prefix = prefix;
       if (lockType) filters.lockType = lockType;
       if (expiryDay) filters.expiryDay = expiryDay;
-      // if (expiringDays !== null) filters.expiringDays = expiringDays;
       if (daysOwned !== null) filters.daysOwned = daysOwned;
+      if (length !== null) filters.nameLength = length;
       await performSearch(interaction, filters); // Handles deferral
     } else {
       await showSearchModal(interaction); // Show modal if no filters given
@@ -277,9 +278,9 @@ module.exports = {
       const replyOpts = { flags: 1 << 6 };
       if (action === 'submit') {
           const prefix = interaction.fields.getTextInputValue('prefix');
+          const lengthStr = interaction.fields.getTextInputValue('length');
           const lockTypeInput = interaction.fields.getTextInputValue('lockType');
           const expiryDay = interaction.fields.getTextInputValue('expiryDay');
-          // const expiringDays = interaction.fields.getTextInputValue('expiringDays');
           const daysOwnedStr = interaction.fields.getTextInputValue('search_days_owned');
 
           let lockType = null; const lockTypeUpper = lockTypeInput?.trim().toUpperCase();
@@ -296,7 +297,16 @@ module.exports = {
               else { await interaction.reply({ ...replyOpts, content: "❌ Invalid Expiry Day (use full name)." }); return; }
           }
 
-          // if (expiringDays?.trim()) { const days = parseInt(expiringDays.trim()); if (!isNaN(days) && days >= 0 && days <= 180) { filters.expiringDays = days; } else { await interaction.reply({ ...replyOpts, content: "❌ Invalid 'Expiring Within Days' (0-180)." }); return; } }
+          if (lengthStr?.trim()) {
+              const length = parseInt(lengthStr.trim());
+              if (!isNaN(length) && length > 0) {
+                  filters.nameLength = length;
+              } else {
+                  await interaction.reply({ ...replyOpts, content: "❌ Invalid 'Length' (must be a positive number)." });
+                  return;
+              }
+          }
+
           if (daysOwnedStr?.trim()) {
               const daysOwned = parseInt(daysOwnedStr.trim());
               if (!isNaN(daysOwned) && daysOwned >= 0 && daysOwned <= 180) {
