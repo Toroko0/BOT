@@ -10,6 +10,7 @@ const logger = require('../utils/logger.js');
 const { table } = require('table');
 const { showWorldInfo } = require('./info.js');
 const { showAddWorldModal } = require('../commands/addworld.js');
+const { showSearchModal } = require('../commands/search.js');
 const CONSTANTS = require('../utils/constants.js');
 const { DateTime } = require('luxon');
 
@@ -43,23 +44,6 @@ async function showSimpleModal(interaction, type) {
     await interaction.showModal(modal);
 }
 
-/**
- * Shows a modal for filtering the world list.
- * @param {import('discord.js').Interaction} interaction
- */
-async function showListFilterModal(interaction) {
-    const modal = new ModalBuilder()
-        .setCustomId('list_modal_filterapply')
-        .setTitle('Filter Worlds List');
-    modal.addComponents(
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('filter_prefix').setLabel('World Name Prefix (Optional)').setStyle(TextInputStyle.Short).setRequired(false)),
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('filter_name_length_min').setLabel('Min Name Length (Optional, Number)').setStyle(TextInputStyle.Short).setRequired(false)),
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('filter_name_length_max').setLabel('Max Name Length (Optional, Number)').setStyle(TextInputStyle.Short).setRequired(false)),
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('filter_expiry_day').setLabel('Day of Expiry (e.g., Monday, Optional)').setPlaceholder('Full day name, case-insensitive').setStyle(TextInputStyle.Short).setRequired(false)),
-        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('filter_days_owned').setLabel('Days Owned (0-180, Optional)').setPlaceholder('0 = 180 days left, 179 = 1 day left').setStyle(TextInputStyle.Short).setRequired(false))
-    );
-    await interaction.showModal(modal);
-}
 
 /**
  * Shows a modal for exporting worlds.
@@ -338,7 +322,7 @@ module.exports = {
                 await showAddWorldModal(interaction);
                 break;
             case 'filtershow':
-                await showListFilterModal(interaction);
+                await showSearchModal(interaction);
                 break;
             case 'settings': {
                 const { getSettingsReplyOptions } = require('../utils/settings.js');
@@ -373,15 +357,6 @@ module.exports = {
     async handleModal(interaction, params) {
         const [action] = params;
 
-        if (action === 'filterapply') {
-            await interaction.deferUpdate();
-            const filters = utils.parseFilterModal(interaction);
-            logger.info(`[list.js] Applying filters: ${JSON.stringify(filters)}`);
-            const targetUsername = filters.added_by_username;
-            await showWorldsList(interaction, 1, filters, targetUsername);
-            return;
-        }
-
         if (action === 'export') {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -393,9 +368,9 @@ module.exports = {
 
             const filters = {
                 prefix: interaction.fields.getTextInputValue('export_prefix') || undefined,
-                locktype: locktype,
-                expiryday: interaction.fields.getTextInputValue('export_expiryday') || undefined,
-                daysowned: isNaN(daysOwned) ? undefined : daysOwned,
+                lockType: locktype,
+                expiryDay: interaction.fields.getTextInputValue('export_expiryday') || undefined,
+                daysOwned: isNaN(daysOwned) ? undefined : daysOwned,
             };
             logger.info(`[list.js] Export filters: ${JSON.stringify(filters)}`);
 
