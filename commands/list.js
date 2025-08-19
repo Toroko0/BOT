@@ -190,11 +190,22 @@ async function exportWorlds(interaction, filters, sortBy) {
         return;
     }
 
+    const nowUtc = DateTime.utc().startOf('day');
     let exportText = "```\n";
     worlds.forEach(world => {
+        const expiryDateUtc = DateTime.fromISO(world.expiry_date, { zone: 'utc' }).startOf('day');
+        const diff = expiryDateUtc.diff(nowUtc, 'days').toObject();
+        const daysLeft = Math.floor(diff.days);
+        let currentDaysOwned = 180 - daysLeft;
+        if (daysLeft <= 0) {
+            currentDaysOwned = 180;
+        } else if (daysLeft > 180) {
+            currentDaysOwned = 0;
+        }
+
         const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
         const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
-        const line = `(${lockChar}) ${world.name.toUpperCase()} ${world.days_owned}${customIdPart}\n`;
+        const line = `(${lockChar}) ${world.name.toUpperCase()} ${currentDaysOwned}${customIdPart}\n`;
         exportText += line;
     });
     exportText += "```";
