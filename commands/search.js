@@ -15,10 +15,13 @@ function invalidateSearchCache() {
 }
 
 // Function to show the advanced search modal
-async function showSearchModal(interaction) {
+async function showSearchModal(interaction, isPublic = true) {
+  const modalId = isPublic ? 'search_modal_submit_public' : 'search_modal_submit_private';
+  const title = isPublic ? '🔍 Search All Worlds' : '🔍 Search Your Worlds';
+
   const modal = new ModalBuilder()
-    .setCustomId('search_modal_submit') // Use the ID handled by search.js modal handler
-    .setTitle('🔍 Advanced World Search');
+    .setCustomId(modalId)
+    .setTitle(title);
 
   const prefixInput = new TextInputBuilder().setCustomId('prefix').setLabel('World Name Prefix (optional)').setStyle(TextInputStyle.Short).setRequired(false);
   const lengthInput = new TextInputBuilder().setCustomId('length').setLabel('Exact World Name Length (optional)').setStyle(TextInputStyle.Short).setRequired(false);
@@ -58,12 +61,10 @@ async function performSearch(interaction, filters) {
   }
 
   try {
-      // Add guildId to filters if searching public worlds (currently defaults to private)
-      if (filters.showPublic) {
-        filters.guildId = interaction.guildId;
-      } else {
-        filters.added_by_username = interaction.user.username;
-      }
+      // No longer automatically adding added_by_username filter here.
+      // It's expected to be in the `filters` object if a private search is intended.
+      logger.info(`[search.js] Performing search with filters: ${JSON.stringify(filters)}`);
+
 
       // Fetch only the first page and total count initially
       const { worlds: firstPageWorlds, total: totalMatchingWorlds } = await db.getFilteredWorlds(filters, 1, CONSTANTS.PAGE_SIZE);
@@ -115,8 +116,18 @@ async function displaySearchResults(interaction, filters, currentPageWorlds, tot
 
   // Build Components
   const components = [];
+  const scopeRow = new ActionRowBuilder();
   const navRow = new ActionRowBuilder();
   const actionRow = new ActionRowBuilder();
+
+  const isPublicSearch = !filters.added_by_username;
+
+  scopeRow.addComponents(
+      new ButtonBuilder().setCustomId('search_button_toggle_public').setLabel('🌐 Search All Worlds').setStyle(ButtonStyle.Success).setDisabled(isPublicSearch),
+      new ButtonBuilder().setCustomId('search_button_toggle_private').setLabel('👤 Search My Worlds').setStyle(ButtonStyle.Primary).setDisabled(!isPublicSearch)
+  );
+  components.push(scopeRow);
+
 
    navRow.addComponents(
      new ButtonBuilder().setCustomId(`search_button_prev_${page}`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Primary).setDisabled(page <= 1),
@@ -128,7 +139,7 @@ async function displaySearchResults(interaction, filters, currentPageWorlds, tot
 
   actionRow.addComponents(
     new ButtonBuilder().setCustomId('list_button_view_private_1').setLabel('Back to List').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('search_button_new').setLabel('New Search').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`search_button_new_${isPublicSearch ? 'public' : 'private'}`).setLabel('New Search').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('search_button_export_all').setLabel('📄 Export All Names').setStyle(ButtonStyle.Success)
   );
   components.push(actionRow);
@@ -160,18 +171,22 @@ async function displaySearchResults(interaction, filters, currentPageWorlds, tot
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('search')
-    .setDescription('Search your tracked worlds with filters')
+    .setDescription('Search for worlds with advanced filters.')
+    .addBooleanOption(option =>
+        option.setName('public')
+            .setDescription("Set to false to search only your own worlds. Defaults to true (everyone's).")
+            .setRequired(false))
     .addStringOption(option => option.setName('prefix').setDescription('Filter by world name prefix').setRequired(false))
     .addStringOption(option => option.setName('locktype').setDescription('Filter by lock type (M/O)').setRequired(false)
         .addChoices({ name: 'Main Lock (M)', value: 'mainlock' }, { name: 'Out Lock (O)', value: 'outlock' })
     )
     .addStringOption(option => option.setName('expiryday').setDescription('Filter by day of the week the world expires').setRequired(false)
         .addChoices( { name: 'Monday', value: 'monday' }, { name: 'Tuesday', value: 'tuesday' }, { name: 'Wednesday', value: 'wednesday' }, { name: 'Thursday', value: 'thursday' }, { name: 'Friday', value: 'friday' }, { name: 'Saturday', value: 'saturday' }, { name: 'Sunday', value: 'sunday' } ))
-    // .addIntegerOption(option => option.setName('expiringdays').setDescription('Filter worlds expiring within this many days').setRequired(false).setMinValue(0).setMaxValue(180)),
     .addIntegerOption(option => option.setName('daysowned').setDescription('Filter by exact days owned (0-180)').setRequired(false).setMinValue(0).setMaxValue(180))
     .addIntegerOption(option => option.setName('length').setDescription('Filter by exact world name length').setRequired(false).setMinValue(1)),
 
   async execute(interaction) {
+    const isPublic = interaction.options.getBoolean('public') ?? true;
     const prefix = interaction.options.getString('prefix');
     const lockType = interaction.options.getString('locktype');
     const expiryDay = interaction.options.getString('expiryday');
@@ -180,15 +195,19 @@ module.exports = {
     const hasFilters = prefix || lockType || expiryDay || daysOwned !== null || length !== null;
 
     if (hasFilters) {
-      const filters = { showPublic: false }; // Default to private search
-      if (prefix) filters.prefix = prefix;
-      if (lockType) filters.lockType = lockType;
-      if (expiryDay) filters.expiryDay = expiryDay;
-      if (daysOwned !== null) filters.daysOwned = daysOwned;
-      if (length !== null) filters.nameLength = length;
-      await performSearch(interaction, filters); // Handles deferral
+        const filters = {};
+        if (!isPublic) {
+            filters.added_by_username = interaction.user.username;
+        }
+        if (prefix) filters.prefix = prefix;
+        if (lockType) filters.lockType = lockType;
+        if (expiryDay) filters.expiryDay = expiryDay;
+        if (daysOwned !== null) filters.daysOwned = daysOwned;
+        if (length !== null) filters.nameLength = length;
+
+        await performSearch(interaction, filters);
     } else {
-      await showSearchModal(interaction); // Show modal if no filters given
+        await showSearchModal(interaction, isPublic);
     }
   },
 
@@ -200,7 +219,11 @@ module.exports = {
     if (cooldown.onCooldown) { await interaction.reply({ ...replyOpts, content: `⏱️ Wait ${cooldown.timeLeft}s.` }); return; }
     logger.debug(`[search.js] Button action: ${action}, page: ${currentPage}, customId: ${interaction.customId}`);
 
-    if (action === 'new') { await showSearchModal(interaction); return; } // Show modal for new search
+    if (action === 'new') {
+        const isPublic = params[1] === 'public';
+        await showSearchModal(interaction, isPublic);
+        return;
+    }
 
     const cacheKey = interaction.message?.id;
     if (!cacheKey) { logger.warn("[search.js] No message ID for cache key."); await interaction.reply({ ...replyOpts, content: "❌ Cannot retrieve search results." }); return; }
@@ -210,6 +233,18 @@ module.exports = {
     const { filters: cachedFilters, totalWorlds: cachedTotalWorlds } = cachedData;
     let targetPage = currentPage;
 
+    if (action === 'toggle_public' || action === 'toggle_private') {
+        const newFilters = { ...cachedFilters };
+        if (action === 'toggle_public') {
+            delete newFilters.added_by_username;
+        } else { // toggle_private
+            newFilters.added_by_username = interaction.user.username;
+        }
+        await performSearch(interaction, newFilters);
+        return;
+    }
+
+
     if (action === 'prev') {
         targetPage = Math.max(1, currentPage - 1);
     } else if (action === 'next') {
@@ -217,9 +252,11 @@ module.exports = {
     } else if (action === 'refresh') {
         logger.info(`[search.js] Refreshing search with filters: ${JSON.stringify(cachedFilters)}`);
         if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate(); // Ensure deferral
-        // Fetch page 1 for refresh
-        const { worlds: refreshedPageOneWorlds } = await db.getFilteredWorlds(cachedFilters, 1, CONSTANTS.PAGE_SIZE);
-        await displaySearchResults(interaction, cachedFilters, refreshedPageOneWorlds, cachedTotalWorlds, 1, true);
+        // Refresh uses the first page of results
+        const { worlds: refreshedWorlds, total: refreshedTotal } = await db.getFilteredWorlds(cachedFilters, 1, CONSTANTS.PAGE_SIZE);
+        // Update cache with new total
+        searchCache.set(cacheKey, { filters: cachedFilters, totalWorlds: refreshedTotal });
+        await displaySearchResults(interaction, cachedFilters, refreshedWorlds, refreshedTotal, 1, true);
         return;
     } else if (action === 'page') {
         await interaction.deferUpdate(); return;
@@ -274,9 +311,11 @@ module.exports = {
   },
 
   async handleModal(interaction, params) {
-      const action = params[0]; // Should be 'submit'
+      const [action, scope] = params; // e.g., 'submit', 'public'
       const replyOpts = { flags: 1 << 6 };
+
       if (action === 'submit') {
+          const isPublic = scope === 'public';
           const prefix = interaction.fields.getTextInputValue('prefix');
           const lengthStr = interaction.fields.getTextInputValue('length');
           const lockTypeInput = interaction.fields.getTextInputValue('lockType');
@@ -286,7 +325,11 @@ module.exports = {
           let lockType = null; const lockTypeUpper = lockTypeInput?.trim().toUpperCase();
           if (lockTypeUpper === 'M') lockType = 'mainlock'; else if (lockTypeUpper === 'O') lockType = 'outlock'; else if (lockTypeUpper !== '') { await interaction.reply({ ...replyOpts, content: "❌ Invalid Lock Type (M/O or blank)." }); return; }
 
-          const filters = { showPublic: false };
+          const filters = {};
+          if (!isPublic) {
+              filters.added_by_username = interaction.user.username;
+          }
+
           if (prefix?.trim()) filters.prefix = prefix.trim();
           if (lockType) filters.lockType = lockType;
 
