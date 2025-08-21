@@ -333,7 +333,8 @@ module.exports = {
                 await showAddWorldModal(interaction);
                 break;
             case 'filtershow':
-                await showSearchModal(interaction);
+                // We want the filter button on the list page to always open the public search modal.
+                await showSearchModal(interaction, true);
                 break;
             case 'settings': {
                 const { getSettingsReplyOptions } = require('../utils/settings.js');
@@ -405,10 +406,13 @@ module.exports = {
 
         switch (action) {
             case 'remove': {
-                // For security, only the user who added the world can remove it.
-                if (world.added_by_username && world.added_by_username.toLowerCase() !== interaction.user.username.toLowerCase()) {
+                const isOwner = interaction.user.id === process.env.OWNER_ID;
+                const isOriginalAdder = world.added_by_username && world.added_by_username.toLowerCase() === interaction.user.username.toLowerCase();
+
+                if (!isOwner && !isOriginalAdder) {
                     return interaction.editReply({ content: '❌ You can only remove worlds that you have added.' });
                 }
+
                 const success = await db.removeWorld(world.id);
                 if (success) {
                     await interaction.editReply({ content: `✅ World **${world.name}** has been removed.` });
