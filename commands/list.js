@@ -148,28 +148,28 @@ function buildReply(interaction, worlds, totalWorlds, page, viewMode, timezoneOf
     }
 
     const components = [];
-    components.push(utils.createPaginationRow(`list_button_page`, safePage, totalPages));
+    components.push(utils.createPaginationRow('list', safePage, totalPages));
 
     const isOwnList = targetUsername ? targetUsername.toLowerCase() === interaction.user.username.toLowerCase() : true;
     const actionRow1 = new ActionRowBuilder();
     actionRow1.addComponents(
-        new ButtonBuilder().setCustomId('list_button_add').setLabel('➕ Add').setStyle(ButtonStyle.Success).setDisabled(!isOwnList),
-        new ButtonBuilder().setCustomId('list_button_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger).setDisabled(!isOwnList),
-        new ButtonBuilder().setCustomId('list_button_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('list_button_export').setLabel('📄 Export').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('list_add').setLabel('➕ Add').setStyle(ButtonStyle.Success).setDisabled(!isOwnList),
+        new ButtonBuilder().setCustomId('list_remove').setLabel('🗑️ Remove').setStyle(ButtonStyle.Danger).setDisabled(!isOwnList),
+        new ButtonBuilder().setCustomId('list_info').setLabel('ℹ️ Info').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('list_export').setLabel('📄 Export').setStyle(ButtonStyle.Secondary)
     );
     components.push(actionRow1);
 
     const actionRow2 = new ActionRowBuilder();
     actionRow2.addComponents(
-        new ButtonBuilder().setCustomId('list_button_filtershow').setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('settings_button_show').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('list_filtershow').setLabel('🔍 Filter').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('settings_show').setLabel('⚙️ Settings').setStyle(ButtonStyle.Secondary)
     );
     components.push(actionRow2);
 
     if (viewMode === 'pc' && worlds.length > 0) {
         const selectOptions = worlds.slice(0, 25).map(world => utils.createWorldSelectOption(world, timezoneOffset));
-        components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('list_select_info').setPlaceholder('📋 Select a world for details').addOptions(selectOptions)));
+        components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('list_info').setPlaceholder('📋 Select a world for details').addOptions(selectOptions)));
     }
 
     const finalContent = tableOutput + footer;
@@ -204,8 +204,8 @@ async function exportWorlds(interaction, filters, sortBy) {
         }
 
         const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
-        const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
-        const line = `(${lockChar}) ${world.name.toUpperCase()} ${currentDaysOwned}${customIdPart}\n`;
+        const notePart = world.note ? ` (${world.note})` : '';
+        const line = `(${lockChar}) ${world.name.toUpperCase()} ${currentDaysOwned}${notePart}\n`;
         exportText += line;
     });
     exportText += "```";
@@ -307,24 +307,29 @@ module.exports = {
         const userActiveFilters = interaction.client.activeListFilters?.[interaction.user.id] || {};
         const targetUsername = userActiveFilters?.added_by_username;
 
-        // Export button logic
-        if (action === 'export') {
-            await showExportModal(interaction);
-            return;
+        let currentPage = 1;
+        if (['prev', 'next', 'view'].includes(action)) {
+            currentPage = parseInt(args[0] || '1', 10);
         }
 
-        // Page navigation logic
-        if (action === 'page') {
-            const direction = args[0];
-            let currentPage = parseInt(args[1], 10);
-            if (direction === 'prev') currentPage--;
-            else if (direction === 'next') currentPage++;
-            await showWorldsList(interaction, currentPage, userActiveFilters, targetUsername);
-            return;
-        }
-
-        // All other button actions
         switch (action) {
+            case 'prev':
+                await showWorldsList(interaction, currentPage - 1, userActiveFilters, targetUsername);
+                break;
+            case 'next':
+                await showWorldsList(interaction, currentPage + 1, userActiveFilters, targetUsername);
+                break;
+            case 'view': {
+                const scope = args[0]; // 'private' or public (absent)
+                const page = parseInt(args[1] || '1');
+                const filters = scope === 'private' ? { added_by_username: interaction.user.username } : {};
+                const user = scope === 'private' ? interaction.user.username : null;
+                await showWorldsList(interaction, page, filters, user);
+                break;
+            }
+            case 'page': // This is the disabled button showing the current page, do nothing.
+                await interaction.deferUpdate();
+                break;
             case 'remove':
             case 'info':
                 await showSimpleModal(interaction, action);
@@ -333,10 +338,15 @@ module.exports = {
                 await showAddWorldModal(interaction);
                 break;
             case 'filtershow':
-                // We want the filter button on the list page to always open the public search modal.
                 await showSearchModal(interaction, true);
                 break;
+            case 'export':
+                await showExportModal(interaction);
+                break;
             case 'settings': {
+                // This button ID is now settings_show, handled by settings.js
+                // This case can be removed if we ensure no old buttons are active
+                // For safety, we can route it.
                 const { getSettingsReplyOptions } = require('../utils/settings.js');
                 const replyOptions = await getSettingsReplyOptions(interaction.user.id);
                 await interaction.update(replyOptions);

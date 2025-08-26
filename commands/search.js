@@ -123,24 +123,24 @@ async function displaySearchResults(interaction, filters, currentPageWorlds, tot
   const isPublicSearch = !filters.added_by_username;
 
   scopeRow.addComponents(
-      new ButtonBuilder().setCustomId('search_button_toggle_public').setLabel('🌐 Search All Worlds').setStyle(ButtonStyle.Success).setDisabled(isPublicSearch),
-      new ButtonBuilder().setCustomId('search_button_toggle_private').setLabel('👤 Search My Worlds').setStyle(ButtonStyle.Primary).setDisabled(!isPublicSearch)
+      new ButtonBuilder().setCustomId('search_toggle_public').setLabel('🌐 Search All Worlds').setStyle(ButtonStyle.Success).setDisabled(isPublicSearch),
+      new ButtonBuilder().setCustomId('search_toggle_private').setLabel('👤 Search My Worlds').setStyle(ButtonStyle.Primary).setDisabled(!isPublicSearch)
   );
   components.push(scopeRow);
 
 
    navRow.addComponents(
-     new ButtonBuilder().setCustomId(`search_button_prev_${page}`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Primary).setDisabled(page <= 1),
-     new ButtonBuilder().setCustomId(`search_button_page_${page}`).setLabel(`Page ${page}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
-     new ButtonBuilder().setCustomId(`search_button_next_${page}`).setLabel('Next ➡️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages),
-     new ButtonBuilder().setCustomId(`search_button_refresh_${page}`).setLabel('🔄').setStyle(ButtonStyle.Success)
+     new ButtonBuilder().setCustomId(`search_prev_${page}`).setLabel('⬅️ Prev').setStyle(ButtonStyle.Primary).setDisabled(page <= 1),
+     new ButtonBuilder().setCustomId(`search_page_${page}`).setLabel(`Page ${page}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
+     new ButtonBuilder().setCustomId(`search_next_${page}`).setLabel('Next ➡️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages),
+     new ButtonBuilder().setCustomId(`search_refresh_${page}`).setLabel('🔄').setStyle(ButtonStyle.Success)
    );
    components.push(navRow);
 
   actionRow.addComponents(
-    new ButtonBuilder().setCustomId('list_button_view_private_1').setLabel('Back to List').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(`search_button_new_${isPublicSearch ? 'public' : 'private'}`).setLabel('New Search').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('search_button_export_all').setLabel('📄 Export All Names').setStyle(ButtonStyle.Success)
+    new ButtonBuilder().setCustomId('list_view_private_1').setLabel('Back to List').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`search_new_${isPublicSearch ? 'public' : 'private'}`).setLabel('New Search').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('search_exportall').setLabel('📄 Export All Names').setStyle(ButtonStyle.Success)
   );
   components.push(actionRow);
 
@@ -212,16 +212,54 @@ module.exports = {
   },
 
   async handleButton(interaction, params) {
-    const action = params[0];
-    const currentPage = parseInt(params[1] || '1');
+    const [action, ...args] = params;
     const replyOpts = { flags: 1 << 6 };
     const cooldown = utils.checkCooldown(interaction.user.id, 'search_btn', 1);
     if (cooldown.onCooldown) { await interaction.reply({ ...replyOpts, content: `⏱️ Wait ${cooldown.timeLeft}s.` }); return; }
-    logger.debug(`[search.js] Button action: ${action}, page: ${currentPage}, customId: ${interaction.customId}`);
+    logger.debug(`[search.js] Button action: ${action}, args: [${args}], customId: ${interaction.customId}`);
 
     if (action === 'new') {
-        const isPublic = params[1] === 'public';
+        const isPublic = args[0] === 'public';
         await showSearchModal(interaction, isPublic);
+        return;
+    }
+
+    if (action === 'exportall') {
+        await interaction.deferReply({ ephemeral: true });
+        const cacheKeyForExport = interaction.message?.id;
+        if (!cacheKeyForExport) {
+            logger.warn("[search.js] Export All: No message ID for cache key.");
+            await interaction.editReply({ content: "❌ Cannot retrieve search session for export." });
+            return;
+        }
+        const cachedDataForExport = searchCache.get(cacheKeyForExport);
+        if (!cachedDataForExport || !cachedDataForExport.filters) {
+            logger.warn(`[search.js] Export All: Cache miss or no filters for key: ${cacheKeyForExport}`);
+            await interaction.editReply({ content: "Search session expired or filters not found. Please perform a new search to export.", components: [] });
+            return;
+        }
+        const { filters: exportFilters } = cachedDataForExport;
+        const { worlds: allMatchingWorlds } = await db.getFilteredWorlds(exportFilters, 1, 10000);
+
+        if (!allMatchingWorlds || allMatchingWorlds.length === 0) {
+            await interaction.editReply({ content: 'No names to export for the current filters.' });
+            return;
+        }
+
+        let exportText = "```\n";
+        allMatchingWorlds.forEach(world => {
+            const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
+            const notePart = world.note ? ` (${world.note})` : '';
+            exportText += `(${lockChar}) ${world.name.toUpperCase()}${notePart}\n`;
+        });
+        exportText += "```";
+
+        if (exportText.length > 2000) {
+            let cutOff = exportText.lastIndexOf('\n', 1990);
+            if (cutOff === -1) cutOff = 1990;
+            exportText = exportText.substring(0, cutOff) + "\n... (list truncated)```";
+        }
+        await interaction.editReply({ content: exportText });
         return;
     }
 
@@ -231,19 +269,20 @@ module.exports = {
     if (!cachedData) { logger.warn(`[search.js] Cache miss for key: ${cacheKey}`); await interaction.update({ content: "Search results expired. Please search again.", components: [], embeds: [], flags: 1 << 6 }); return; }
 
     const { filters: cachedFilters, totalWorlds: cachedTotalWorlds } = cachedData;
+    let currentPage = parseInt(args[0] || '1');
     let targetPage = currentPage;
 
-    if (action === 'toggle_public' || action === 'toggle_private') {
+    if (action === 'toggle') {
+        const scope = args[0]; // 'public' or 'private'
         const newFilters = { ...cachedFilters };
-        if (action === 'toggle_public') {
+        if (scope === 'public') {
             delete newFilters.added_by_username;
-        } else { // toggle_private
+        } else { // private
             newFilters.added_by_username = interaction.user.username;
         }
         await performSearch(interaction, newFilters);
         return;
     }
-
 
     if (action === 'prev') {
         targetPage = Math.max(1, currentPage - 1);
@@ -251,61 +290,21 @@ module.exports = {
         targetPage = Math.min(Math.ceil(cachedTotalWorlds / CONSTANTS.PAGE_SIZE) || 1, currentPage + 1);
     } else if (action === 'refresh') {
         logger.info(`[search.js] Refreshing search with filters: ${JSON.stringify(cachedFilters)}`);
-        if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate(); // Ensure deferral
-        // Refresh uses the first page of results
+        if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
         const { worlds: refreshedWorlds, total: refreshedTotal } = await db.getFilteredWorlds(cachedFilters, 1, CONSTANTS.PAGE_SIZE);
-        // Update cache with new total
         searchCache.set(cacheKey, { filters: cachedFilters, totalWorlds: refreshedTotal });
         await displaySearchResults(interaction, cachedFilters, refreshedWorlds, refreshedTotal, 1, true);
         return;
     } else if (action === 'page') {
-        await interaction.deferUpdate(); return;
-    } else if (action === 'export_all') {
-        await interaction.deferReply({ ephemeral: true });
-        const cacheKeyForExport = interaction.message?.id; // Re-fetch cache key as it's a new interaction context
-        if (!cacheKeyForExport) {
-             logger.warn("[search.js] Export All: No message ID for cache key.");
-             await interaction.editReply({ content: "❌ Cannot retrieve search session for export."});
-             return;
-        }
-        const cachedDataForExport = searchCache.get(cacheKeyForExport);
-        if (!cachedDataForExport || !cachedDataForExport.filters) {
-            logger.warn(`[search.js] Export All: Cache miss or no filters for key: ${cacheKeyForExport}`);
-            await interaction.editReply({ content: "Search session expired or filters not found. Please perform a new search to export.", components: []});
-            return;
-        }
-        const { filters: exportFilters } = cachedDataForExport;
-
-        const { worlds: allMatchingWorlds } = await db.getFilteredWorlds(exportFilters, 1, 10000);
-
-        if (!allMatchingWorlds || allMatchingWorlds.length === 0) {
-            await interaction.editReply({ content: 'No names to export for the current filters.', ephemeral: true });
-            return;
-        }
-
-        let exportText = "```\n";
-        allMatchingWorlds.forEach(world => {
-            const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
-            const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
-            exportText += `(${lockChar}) ${world.name.toUpperCase()}${customIdPart}\n`;
-        });
-        exportText += "```";
-
-        if (exportText.length > 2000) {
-            let cutOff = exportText.lastIndexOf('\n', 1990);
-            if (cutOff === -1) cutOff = 1990;
-            exportText = exportText.substring(0, cutOff) + "\n... (list truncated)```";
-        }
-        await interaction.editReply({ content: exportText, ephemeral: true });
-        return; // End export_all logic
-
+        await interaction.deferUpdate();
+        return;
     } else {
         logger.warn(`[search.js] Unknown search button action: ${action}`);
-        await interaction.reply({ ...replyOpts, content: "Unknown search action." }); return;
+        await interaction.reply({ ...replyOpts, content: "Unknown search action." });
+        return;
     }
 
     if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
-    // Fetch the specific page needed for 'prev'/'next'
     const { worlds: newPageWorlds } = await db.getFilteredWorlds(cachedFilters, targetPage, CONSTANTS.PAGE_SIZE);
     await displaySearchResults(interaction, cachedFilters, newPageWorlds, cachedTotalWorlds, targetPage, true);
   },

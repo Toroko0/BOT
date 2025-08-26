@@ -34,16 +34,16 @@ try {
 
 function initializeDatabase() { return Promise.resolve(); }
 
-async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = null, username = null) {
+async function addWorld(worldName, daysOwned, lockType = 'mainlock', note = null, username = null) {
     const worldNameUpper = worldName.toUpperCase();
     const normalizedLockType = String(lockType).toLowerCase() === 'o' || String(lockType).toLowerCase() === 'outlock' ? 'outlock' : 'mainlock';
-    let normalizedCustomId = customId ? String(customId).trim().toUpperCase() : null;
+    let normalizedNote = note ? String(note).trim().toUpperCase() : null;
     const daysOwnedNum = Math.max(1, Math.min(parseInt(daysOwned, 10) || 1, 180));
 
     if (worldNameUpper.includes(' ')) {
         return { success: false, message: 'World names cannot contain spaces.' };
     }
-    if (normalizedCustomId === '') { normalizedCustomId = null; }
+    if (normalizedNote === '') { normalizedNote = null; }
 
     const now = DateTime.utc().startOf('day');
     const daysLeft = 180 - daysOwnedNum;
@@ -51,20 +51,20 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = 
     const expiryDateISO = expiryDate.toISO();
 
     try {
-        await knexInstance('worlds').insert({
+        const [newWorld] = await knexInstance('worlds').insert({
             name: worldNameUpper,
             days_owned: daysOwnedNum,
             expiry_date: expiryDateISO,
             lock_type: normalizedLockType,
-            custom_id: normalizedCustomId,
+            note: normalizedNote,
             added_by_username: username,
             added_date: DateTime.utc().toISO(),
-        });
+        }).returning('*');
         logger.info(`[DB] Added world ${worldNameUpper}`);
         const expiryDays = 180 - daysOwnedNum;
         const dayString = expiryDays === 1 ? 'day' : 'days';
         const expiryMessage = expiryDays > 0 ? `in ${expiryDays} ${dayString}` : 'today';
-        return { success: true, message: `World **${worldNameUpper}** has been added and will expire ${expiryMessage}.` };
+        return { success: true, message: `World **${worldNameUpper}** has been added and will expire ${expiryMessage}.`, world: newWorld };
     } catch (error) {
         logger.error(`[DB] Error adding world ${worldNameUpper}:`, error);
         if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) {
@@ -76,22 +76,22 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', customId = 
             if (error.message.includes('uq_worlds_name_days_lock')) {
                 return { success: false, message: `A world named **${worldNameUpper}** with the exact same days owned and lock type is already being tracked.` };
             }
-            if (error.message.includes('worlds.uq_worlds_customid') && normalizedCustomId) {
-                return { success: false, message: `Custom ID **${normalizedCustomId}** already in use.` };
+            if (error.message.includes('worlds.uq_worlds_note') && normalizedNote) {
+                return { success: false, message: `Note **${normalizedNote}** already in use.` };
             }
             // Fallback for other unique constraint errors
-            return { success: false, message: 'This world conflicts with an existing one (e.g., same name or custom ID).' };
+            return { success: false, message: 'This world conflicts with an existing one (e.g., same name or note).' };
         }
         return { success: false, message: 'Failed to add world due to a database error.' };
     }
 }
 
 async function updateWorld(worldId, updatedData) {
-    const { daysOwned, lockType, customId } = updatedData;
+    const { daysOwned, lockType, note } = updatedData;
     const daysOwnedNum = Math.max(1, Math.min(parseInt(daysOwned, 10) || 1, 180));
     const normalizedLockType = String(lockType).toLowerCase() === 'o' ? 'outlock' : 'mainlock';
-    let normalizedCustomId = customId ? String(customId).trim().toUpperCase() : null;
-    if (normalizedCustomId === '') normalizedCustomId = null;
+    let normalizedNote = note ? String(note).trim().toUpperCase() : null;
+    if (normalizedNote === '') normalizedNote = null;
 
     const now = DateTime.utc().startOf('day');
     const daysLeft = 180 - daysOwnedNum;
@@ -105,7 +105,7 @@ async function updateWorld(worldId, updatedData) {
                 days_owned: daysOwnedNum,
                 expiry_date: expiryDateISO,
                 lock_type: normalizedLockType,
-                custom_id: normalizedCustomId
+                note: normalizedNote
             });
         if (updateCount === 0) throw new Error('World not found.');
         logger.info(`[DB] Updated core details for world ${worldId}`);
@@ -113,8 +113,8 @@ async function updateWorld(worldId, updatedData) {
     } catch (error) {
         logger.error(`[DB] Error updating world ${worldId}:`, error);
         if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) {
-            if (error.message.includes('worlds.uq_worlds_customid') && normalizedCustomId) {
-                throw new Error(`Custom ID **${normalizedCustomId}** already used.`);
+            if (error.message.includes('worlds.uq_worlds_note') && normalizedNote) {
+                throw new Error(`Note **${normalizedNote}** already used.`);
             }
         }
         throw error;
@@ -173,15 +173,15 @@ async function getWorldsByName(worldName) {
     catch (error) { logger.error(`[DB] Error getting worlds by name "${worldName}":`, error); return []; }
 }
 
-async function getWorldByCustomId(customId) {
-    if (!customId) return null;
-    try { const world = await knexInstance('worlds').whereRaw('lower(custom_id) = lower(?)', [customId]).first(); return world || null; }
-    catch (error) { logger.error(`[DB] Error getting world by custom ID "${customId}":`, error); return null; }
+async function getWorldByNote(note) {
+    if (!note) return null;
+    try { const world = await knexInstance('worlds').whereRaw('lower(note) = lower(?)', [note]).first(); return world || null; }
+    catch (error) { logger.error(`[DB] Error getting world by note "${note}":`, error); return null; }
 }
 
 async function findWorldByIdentifier(identifier) {
     if (!identifier) return null; const identifierUpper = identifier.toUpperCase();
-    try { let world = await getWorldByName(identifierUpper); if (world) return world; world = await getWorldByCustomId(identifierUpper); if (world) return world; return null; }
+    try { let world = await getWorldByName(identifierUpper); if (world) return world; world = await getWorldByNote(identifierUpper); if (world) return world; return null; }
     catch (error) { logger.error(`[DB] Error in findWorldByIdentifier for "${identifier}":`, error); return null; }
 }
 
@@ -340,55 +340,18 @@ async function getUserPreferences(userId) {
             return {
                 timezone_offset: user.timezone_offset,
                 view_mode: user.view_mode,
-                notifications_enabled: user.notifications_enabled,
-                notification_interval: user.notification_interval,
             };
         }
         return {
             timezone_offset: 0.0,
             view_mode: 'pc',
-            notifications_enabled: true,
-            notification_interval: 6,
         };
     } catch (error) {
         logger.error(`[DB] Error getting preferences for user ${userId}:`, error);
         return {
             timezone_offset: 0.0,
             view_mode: 'pc',
-            notifications_enabled: true,
-            notification_interval: 6,
         };
-    }
-}
-
-async function updateUserNotificationSettings(userId, { notifications_enabled, notification_interval }) {
-    try {
-        const updateData = {};
-        if (notifications_enabled !== undefined) {
-            updateData.notifications_enabled = notifications_enabled;
-        }
-        if (notification_interval !== undefined) {
-            const interval = parseInt(notification_interval, 10);
-            if (!isNaN(interval) && [6, 12, 24, 0].includes(interval)) {
-                updateData.notification_interval = interval;
-                if (interval === 0) {
-                    updateData.notifications_enabled = false;
-                } else {
-                    updateData.notifications_enabled = true;
-                }
-            } else {
-                return false;
-            }
-        }
-
-        if (Object.keys(updateData).length > 0) {
-            await knexInstance('users').where({ id: userId }).update(updateData);
-            logger.info(`[DB] Updated notification settings for user ${userId}:`, updateData);
-        }
-        return true;
-    } catch (error) {
-        logger.error(`[DB] Error updating notification settings for user ${userId}:`, error);
-        return false;
     }
 }
 
@@ -486,45 +449,27 @@ async function getUserStats(username) {
     }
 }
 
-async function getRecentlyAddedWorldsSince(since, limit = 10) {
+
+async function getAllUsers() {
     try {
-        return await knexInstance('worlds')
-            .where('added_date', '>', since)
-            .orderBy('added_date', 'desc')
+        const users = await knexInstance('users').select('id');
+        return users;
+    } catch (error) {
+        logger.error(`[DB] Error getting all users:`, error);
+        return [];
+    }
+}
+
+async function getHistory(action, limit = 10) {
+    try {
+        const history = await knexInstance('history')
+            .where({ action })
+            .orderBy('timestamp', 'desc')
             .limit(limit);
+        return history;
     } catch (error) {
-        logger.error(`[DB] Error getting recently added worlds:`, error);
+        logger.error(`[DB] Error getting history for action ${action}:`, error);
         return [];
-    }
-}
-
-async function getUsersToNotify() {
-    try {
-        const now = DateTime.utc();
-        return await knexInstance('users')
-            .join('whitelist', 'users.username', '=', 'whitelist.username')
-            .where('users.notifications_enabled', true)
-            .andWhere(function() {
-                this.whereNull('users.last_notification_timestamp')
-                    .orWhereRaw('julianday(?) - julianday(users.last_notification_timestamp) > users.notification_interval / 24.0', [now.toISO()]);
-            })
-            .select('users.*');
-    } catch (error) {
-        logger.error(`[DB] Error getting users to notify:`, error);
-        return [];
-    }
-}
-
-async function updateLastNotificationTimestamp(userId, timestamp) {
-    try {
-        await knexInstance('users')
-            .where({ id: userId })
-            .update({ last_notification_timestamp: timestamp });
-        logger.debug(`[DB] Updated last notification timestamp for user ${userId}`);
-        return true;
-    } catch (error) {
-        logger.error(`[DB] Error updating last notification timestamp for user ${userId}:`, error);
-        return false;
     }
 }
 
@@ -539,7 +484,7 @@ module.exports = {
     getWorldById,
     getWorldByName,
     getWorldsByName,
-    getWorldByCustomId,
+    getWorldByNote,
     findWorldByIdentifier,
     getFilteredWorlds,
     searchWorlds: getFilteredWorlds,
@@ -554,12 +499,10 @@ module.exports = {
     updateUserTimezone,
     updateUserViewMode,
     getUserStats,
-    updateUserNotificationSettings,
-    getRecentlyAddedWorldsSince,
-    getUsersToNotify,
-    updateLastNotificationTimestamp,
     addToWhitelist,
     removeFromWhitelist,
     getWhitelist,
     isWhitelisted,
+    getAllUsers,
+    getHistory,
 };

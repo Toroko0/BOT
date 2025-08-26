@@ -111,13 +111,13 @@ async function setupInteractionHandler(client) {
                             choices = dbResult.worlds
                                 .filter(w =>
                                     w.name.toLowerCase().includes(query) ||
-                                    (w.custom_id && w.custom_id.toLowerCase().includes(query))
+                                    (w.note && w.note.toLowerCase().includes(query))
                                 )
                                 .slice(0, CONSTANTS.MAX_SELECT_OPTIONS) // Use constant from constants.js
                                 .map(w => ({
-                                    name: w.custom_id ? `${w.name.toUpperCase()} (${w.custom_id.toUpperCase()})` : w.name.toUpperCase(),
-                                    // Return the identifier that the command expects (name or custom_id)
-                                    value: w.custom_id || w.name
+                                    name: w.note ? `${w.name.toUpperCase()} (${w.note.toUpperCase()})` : w.name.toUpperCase(),
+                                    // Return the identifier that the command expects (name or note)
+                                    value: w.note || w.name
                                 }));
                          } catch(e) {
                              logger.error("[Interaction Handler] Default autocomplete DB error:", e);
@@ -162,14 +162,13 @@ async function setupInteractionHandler(client) {
             }
             // --- Component Handling (Buttons, Select Menus) ---
             else if (interaction.isMessageComponent()) { // Combined check for Button, SelectMenu, etc.
-                 // Routing Logic: commandName_componentType_action_...params
+                 // NEW ROUTING LOGIC: commandName_action_...params
                  const customIdParts = interaction.customId.split('_');
                  const commandName = customIdParts[0];
-                 const componentType = customIdParts[1]; // 'button', 'select', 'modal' (though modal handled separately)
-                 const params = customIdParts.slice(2); // The rest are params for the handler
+                 const params = customIdParts.slice(1); // The rest are params for the handler (e.g., [action, arg1, arg2])
 
-                 if (!commandName || !componentType) {
-                     logger.warn(`[Interaction Handler] Received component interaction with invalid customId format: ${interaction.customId}`);
+                 if (!commandName) {
+                     logger.warn(`[Interaction Handler] Received component interaction with invalid customId format (no command name): ${interaction.customId}`);
                      await safeReplyEphemeral(interaction, "This component seems outdated or invalid.");
                      return;
                  }
@@ -178,28 +177,26 @@ async function setupInteractionHandler(client) {
 
                  if (!command) {
                      logger.error(`[Interaction Handler] Command handler not found for component prefix: ${commandName} (customId: ${interaction.customId})`);
-                     // Update the interaction if possible to remove potentially broken components
                      if (interaction.isRepliable() || interaction.deferred) {
-                         await safeEditEphemeral(interaction, { content: "Cannot process this component (handler missing).", components: []});
+                         await safeEditEphemeral(interaction, { content: "Cannot process this component (handler missing).", components: [] });
                      }
                      return;
                  }
 
-                 // Delegate based on component type and check if handler exists (for other commands)
+                 // Delegate based on component type and check if handler function exists
                  if (interaction.isButton() && typeof command.handleButton === 'function') {
-                     logger.debug(`[Interaction Handler] Routing button ${interaction.customId} to ${commandName}.handleButton`);
-                     await command.handleButton(interaction, params); // params here is customIdParts.slice(2)
+                     logger.debug(`[Interaction Handler] Routing button ${interaction.customId} to ${commandName}.handleButton with params: [${params}]`);
+                     await command.handleButton(interaction, params);
                  } else if (interaction.isStringSelectMenu() && typeof command.handleSelectMenu === 'function') {
-                      logger.debug(`[Interaction Handler] Routing select menu ${interaction.customId} to ${commandName}.handleSelectMenu`);
-                     await command.handleSelectMenu(interaction, params); // params here is customIdParts.slice(2)
+                     logger.debug(`[Interaction Handler] Routing select menu ${interaction.customId} to ${commandName}.handleSelectMenu with params: [${params}]`);
+                     await command.handleSelectMenu(interaction, params);
                  }
-                 // Add handlers for other component types (UserSelect, RoleSelect, etc.) if needed here
-                 // else if (interaction.isUserSelectMenu() && ...) { ... }
+                 // ... other component types like UserSelect, RoleSelect, etc.
                  else {
                      logger.warn(`[Interaction Handler] No suitable handler in ${commandName}.js for ${interaction.componentType} with customId: ${interaction.customId}`);
-                      if (interaction.isRepliable() || interaction.deferred) {
-                           await safeEditEphemeral(interaction, { content: "This component type is not handled correctly.", components: []});
-                      }
+                     if (interaction.isRepliable() || interaction.deferred) {
+                         await safeEditEphemeral(interaction, { content: "This component type is not handled correctly.", components: [] });
+                     }
                  }
             }
             // --- Modal Submit Handling ---

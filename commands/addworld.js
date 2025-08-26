@@ -2,7 +2,7 @@ const { SlashCommandBuilder, ActionRowBuilder, ModalBuilder, TextInputBuilder, T
 const db = require('../database.js');
 const utils = require('../utils.js');
 const { logHistory } = require('../utils/share_and_history.js');
-const { invalidateSearchCache, performSearch } = require('./search.js'); // Assuming search.js exports this
+const { invalidateSearchCache } = require('./search.js'); // Assuming search.js exports this
 const logger = require('../utils/logger.js'); // Added logger
 
 // Function to show the Add World Modal
@@ -36,9 +36,9 @@ async function showAddWorldModal(interaction) {
     .setValue('M') // Default to M
     .setMaxLength(1); // Expect M or O
 
-  const customIdInput = new TextInputBuilder()
-    .setCustomId('customId')
-    .setLabel("Custom ID (Optional)")
+  const noteInput = new TextInputBuilder()
+    .setCustomId('note')
+    .setLabel("Note (Optional)")
     .setStyle(TextInputStyle.Short)
     .setRequired(false)
     .setMaxLength(24); // Optional length constraint
@@ -46,7 +46,7 @@ async function showAddWorldModal(interaction) {
   const firstActionRow = new ActionRowBuilder().addComponents(worldNameInput);
   const secondActionRow = new ActionRowBuilder().addComponents(daysOwnedInput);
   const thirdActionRow = new ActionRowBuilder().addComponents(lockTypeInput);
-  const fourthActionRow = new ActionRowBuilder().addComponents(customIdInput);
+  const fourthActionRow = new ActionRowBuilder().addComponents(noteInput);
 
   modal.addComponents(firstActionRow, secondActionRow, thirdActionRow, fourthActionRow);
   await interaction.showModal(modal);
@@ -76,8 +76,8 @@ module.exports = {
           { name: 'Out Lock (O)', value: 'outlock' }
         ))
     .addStringOption(option =>
-      option.setName('custom_id')
-        .setDescription('Custom ID for the world (optional, unique per user)')
+      option.setName('note')
+        .setDescription('A short note for the world (optional, unique per user)')
         .setRequired(false)
         .setMaxLength(24)),
   showAddWorldModal, // Add this line to export the function
@@ -86,7 +86,7 @@ module.exports = {
     const worldName = interaction.options.getString('world');
     const daysOwned = interaction.options.getInteger('days');
     const lockType = interaction.options.getString('locktype');
-    const customId = interaction.options.getString('custom_id');
+    const note = interaction.options.getString('note');
     const replyOpts = { flags: 1 << 6 }; // Ephemeral
 
     // If options are provided via slash command, add directly
@@ -103,13 +103,14 @@ module.exports = {
         worldName,
         daysOwned || 1, // Default to 1 if not provided
         lockType || 'mainlock', // Default to mainlock if not provided
-        customId,
+        note,
         interaction.user.username
       );
       logger.info('[addworld.js] db.addWorld returned', result);
 
       if (result.success) {
         invalidateSearchCache();
+        await logHistory(result.world.id, interaction.user.id, 'add', `Added world ${result.world.name}`);
         await interaction.reply({ ...replyOpts, content: `✅ ${result.message}` });
       } else {
         logger.error('[addworld.js] Add world via slash failed:', result.message);
@@ -148,7 +149,7 @@ module.exports = {
         const worldName = interaction.fields.getTextInputValue('worldName').trim();
         const daysOwnedStr = interaction.fields.getTextInputValue('daysOwned').trim();
         const lockTypeStr = interaction.fields.getTextInputValue('lockType').trim().toUpperCase();
-        const customId = interaction.fields.getTextInputValue('customId').trim();
+        const note = interaction.fields.getTextInputValue('note').trim();
 
         // --- Input Validation ---
         const daysOwned = parseInt(daysOwnedStr);
@@ -173,16 +174,17 @@ module.exports = {
           worldName,
           daysOwned, // Use validated number
           normalizedLockType,
-          customId || null, // Pass null if empty
+          note || null, // Pass null if empty
           interaction.user.username
         );
 
         if (result.success) {
           invalidateSearchCache();
+          await logHistory(result.world.id, interaction.user.id, 'add', `Added world ${result.world.name}`);
           const row = new ActionRowBuilder()
             .addComponents(
               new ButtonBuilder()
-                .setCustomId('list_button_view_1')
+                .setCustomId('list_view_1')
                 .setLabel('View Worlds')
                 .setStyle(ButtonStyle.Primary)
             );

@@ -34,11 +34,11 @@ module.exports = {
         }
         const confirmRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
-            .setCustomId(`remove_button_confirm_${world.id}`)
+            .setCustomId(`remove_confirm_${world.id}`)
             .setLabel('Confirm Remove')
             .setStyle(ButtonStyle.Danger),
           new ButtonBuilder()
-            .setCustomId(`remove_button_cancel_${world.id}`)
+            .setCustomId(`remove_cancel_${world.id}`)
             .setLabel('Cancel')
             .setStyle(ButtonStyle.Secondary)
         );
@@ -59,7 +59,7 @@ module.exports = {
         const row = new ActionRowBuilder()
             .addComponents(
                 new StringSelectMenuBuilder()
-                    .setCustomId('remove_select_world')
+                    .setCustomId('remove_select')
                     .setPlaceholder('Select a world to remove')
                     .addOptions(options),
             );
@@ -116,23 +116,23 @@ module.exports = {
       }
 
       require('./search.js').invalidateSearchCache(); // Invalidate search cache
+      await logHistory(world.id, interaction.user.id, 'remove', `Removed world ${world.name}`);
 
       const row = new ActionRowBuilder()
         .addComponents(
           new ButtonBuilder()
-            .setCustomId('list_button_view_1')
+            .setCustomId('list_view_1')
             .setLabel('View Worlds')
             .setStyle(ButtonStyle.Primary),
           new ButtonBuilder()
-            .setCustomId('addworld_button_show')
+            .setCustomId('addworld_show')
             .setLabel('Add New World')
             .setStyle(ButtonStyle.Success)
         );
 
       await interaction.update({ // Changed from interaction.reply to interaction.update
         content: `✅ World **${world.name.toUpperCase()}** has been removed from the tracking list.`,
-        components: [row],
-        flags: 1 << 6
+        components: [row]
       });
 
     } else if (action === 'cancel') {
@@ -165,19 +165,18 @@ module.exports = {
 
     const confirmRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`remove_button_confirm_${world.id}`)
+        .setCustomId(`remove_confirm_${world.id}`)
         .setLabel('Confirm Remove')
         .setStyle(ButtonStyle.Danger),
       new ButtonBuilder()
-        .setCustomId(`remove_button_cancel_${world.id}`)
+        .setCustomId(`remove_cancel_${world.id}`)
         .setLabel('Cancel')
         .setStyle(ButtonStyle.Secondary)
     );
 
     await interaction.update({
       content: `⚠️ Are you sure you want to remove **${world.name.toUpperCase()}** from your tracking list?`,
-      components: [confirmRow],
-      flags: 1 << 6
+      components: [confirmRow]
     });
   }
 };

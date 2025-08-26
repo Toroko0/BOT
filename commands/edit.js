@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const db = require('../database.js');
 const logger = require('../utils/logger.js');
+const { logHistory } = require('../utils/share_and_history.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -35,7 +36,7 @@ module.exports = {
             const row = new ActionRowBuilder()
                 .addComponents(
                     new StringSelectMenuBuilder()
-                        .setCustomId('edit_select_world')
+                    .setCustomId('edit_select')
                         .setPlaceholder('Select a world to edit')
                         .addOptions(options),
                 );
@@ -51,7 +52,7 @@ module.exports = {
     async showEditModal(interaction, worldId) {
         const world = await db.getWorldById(worldId);
         const modal = new ModalBuilder()
-            .setCustomId(`edit_modal_submit_${worldId}`)
+            .setCustomId(`edit_submit_${worldId}`)
             .setTitle(`Edit World: ${world.name}`);
 
         const daysOwnedInput = new TextInputBuilder()
@@ -68,17 +69,17 @@ module.exports = {
             .setValue(world.lock_type === 'mainlock' ? 'M' : 'O')
             .setRequired(true);
 
-        const customIdInput = new TextInputBuilder()
-            .setCustomId('customId')
-            .setLabel("Custom ID (Optional)")
+        const noteInput = new TextInputBuilder()
+            .setCustomId('note')
+            .setLabel("Note (Optional)")
             .setStyle(TextInputStyle.Short)
-            .setValue(world.custom_id || '')
+            .setValue(world.note || '')
             .setRequired(false);
 
         modal.addComponents(
             new ActionRowBuilder().addComponents(daysOwnedInput),
             new ActionRowBuilder().addComponents(lockTypeInput),
-            new ActionRowBuilder().addComponents(customIdInput)
+            new ActionRowBuilder().addComponents(noteInput)
         );
 
         await interaction.showModal(modal);
@@ -101,6 +102,7 @@ module.exports = {
 
     async handleModal(interaction, params) {
         const [action, worldIdString] = params;
+        if (action !== 'submit') return; // Should only be submit
         const worldId = parseInt(worldIdString);
         const world = await db.getWorldById(worldId);
 
@@ -114,15 +116,16 @@ module.exports = {
 
         const daysOwned = interaction.fields.getTextInputValue('daysOwned');
         const lockType = interaction.fields.getTextInputValue('lockType').toUpperCase();
-        const customId = interaction.fields.getTextInputValue('customId');
+        const note = interaction.fields.getTextInputValue('note');
 
         const updatedData = {
             daysOwned: parseInt(daysOwned),
             lockType: lockType === 'M' ? 'mainlock' : 'outlock',
-            customId: customId,
+            note: note,
         };
 
         await db.updateWorld(worldId, updatedData);
+        await logHistory(worldId, interaction.user.id, 'edit', `Edited world ${world.name}`);
 
         await interaction.reply({ content: `World **${world.name}** has been updated.`, flags: 1 << 6 });
     }

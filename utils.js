@@ -220,7 +220,7 @@ const formatWorldData = (world) => {
     expiryDate: world.expiry_date || new Date().toISOString(),
     lockType: world.lock_type || 'M',
     isPublic: world.is_public || false,
-    customId: world.custom_id ? world.custom_id.toUpperCase() : null,
+    note: world.note ? world.note.toUpperCase() : null,
     addedBy: world.added_by || null
   };
 };
@@ -237,21 +237,21 @@ const formatStats = (stats) => {
 • Expired: ${stats.expired || 0}`;
 };
 
-function createPaginationRow(baseCustomId, currentPage, totalPages) {
+function createPaginationRow(commandName, currentPage, totalPages) {
     const row = new ActionRowBuilder();
     row.addComponents(
         new ButtonBuilder()
-            .setCustomId(`${baseCustomId}_prev_${currentPage}`)
+            .setCustomId(`${commandName}_prev_${currentPage}`)
             .setLabel('⬅️ Prev')
             .setStyle(ButtonStyle.Primary)
             .setDisabled(currentPage <= 1),
         new ButtonBuilder()
-            .setCustomId(`${baseCustomId}_display_${currentPage}_${totalPages}`)
+            .setCustomId(`${commandName}_page_${currentPage}`)
             .setLabel(`Page ${currentPage}/${totalPages}`)
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(true),
         new ButtonBuilder()
-            .setCustomId(`${baseCustomId}_next_${currentPage}`)
+            .setCustomId(`${commandName}_next_${currentPage}`)
             .setLabel('Next ➡️')
             .setStyle(ButtonStyle.Primary)
             .setDisabled(currentPage >= totalPages)
@@ -340,7 +340,7 @@ function createWorldSelectOption(world, timezoneOffset) {
   const daysLeft = Math.ceil((expiryDateUTC.getTime() - todayUTC.getTime()) / (1000 * 60 * 60 * 24));
 
   return new StringSelectMenuOptionBuilder()
-    .setLabel(`${world.name.substring(0, 25)} (${world.custom_id || 'No ID'})`)
+    .setLabel(`${world.name.substring(0, 25)} (${world.note || 'No Note'})`)
     .setValue(world.id.toString())
     .setDescription(`Expires: ${userLocalExpiry.getUTCDate()}/${userLocalExpiry.getUTCMonth() + 1} (${daysLeft > 0 ? daysLeft : 'EXP'}d left)`);
 }

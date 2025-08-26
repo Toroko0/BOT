@@ -31,32 +31,26 @@ module.exports = {
         await interaction.reply(replyOptions);
     },
     async handleButton(interaction, params) {
-        const action = params[0];
+        const [action] = params;
         const userId = interaction.user.id;
 
-        if (action === 'viewmode') {
-            const currentPrefs = await db.getUserPreferences(userId);
-            const newViewMode = currentPrefs.view_mode === 'pc' ? 'phone' : 'pc';
-            await db.updateUserViewMode(userId, newViewMode);
-            const replyOptions = await getSettingsReplyOptions(userId);
-            await interaction.update(replyOptions);
-        } else if (action === 'timezone') {
-            await showTimezoneModal(interaction);
-        } else if (action === 'back') {
-            await showWorldsList(interaction, 1, { added_by_username: interaction.user.username }, interaction.user.username);
+        switch (action) {
+            case 'viewmode': {
+                const currentPrefs = await db.getUserPreferences(userId);
+                const newViewMode = currentPrefs.view_mode === 'pc' ? 'phone' : 'pc';
+                await db.updateUserViewMode(userId, newViewMode);
+                const replyOptions = await getSettingsReplyOptions(userId);
+                await interaction.update(replyOptions);
+                break;
+            }
+            case 'timezone':
+                await showTimezoneModal(interaction);
+                break;
+            // 'back' action is now handled by the 'list' command.
+            default:
+                logger.warn(`[settings.js] Unknown button action received: ${action}`);
+                break;
         }
-    },
-    async handleSelectMenu(interaction, params) {
-        const action = params[0];
-        if (action !== 'notifications') return;
-
-        const userId = interaction.user.id;
-        const interval = interaction.values[0];
-
-        await db.updateUserNotificationSettings(userId, { notification_interval: interval });
-
-        const replyOptions = await getSettingsReplyOptions(userId);
-        await interaction.update(replyOptions);
     },
     async handleModal(interaction) {
         if (interaction.customId !== 'settings_modal_timezone') return;
