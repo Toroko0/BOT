@@ -220,7 +220,7 @@ const formatWorldData = (world) => {
     expiryDate: world.expiry_date || new Date().toISOString(),
     lockType: world.lock_type || 'M',
     isPublic: world.is_public || false,
-    note: world.note ? world.note.toUpperCase() : null,
+    custom_id: world.custom_id ? world.custom_id.toUpperCase() : null,
     addedBy: world.added_by || null
   };
 };
@@ -340,7 +340,7 @@ function createWorldSelectOption(world, timezoneOffset) {
   const daysLeft = Math.ceil((expiryDateUTC.getTime() - todayUTC.getTime()) / (1000 * 60 * 60 * 24));
 
   return new StringSelectMenuOptionBuilder()
-    .setLabel(`${world.name.substring(0, 25)} (${world.note || 'No Note'})`)
+    .setLabel(`${world.name.substring(0, 25)} (${world.custom_id || 'No ID'})`)
     .setValue(world.id.toString())
     .setDescription(`Expires: ${userLocalExpiry.getUTCDate()}/${userLocalExpiry.getUTCMonth() + 1} (${daysLeft > 0 ? daysLeft : 'EXP'}d left)`);
 }

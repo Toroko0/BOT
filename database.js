@@ -34,16 +34,16 @@ try {
 
 function initializeDatabase() { return Promise.resolve(); }
 
-async function addWorld(worldName, daysOwned, lockType = 'mainlock', note = null, username = null) {
+async function addWorld(worldName, daysOwned, lockType = 'mainlock', custom_id = null, username = null) {
     const worldNameUpper = worldName.toUpperCase();
     const normalizedLockType = String(lockType).toLowerCase() === 'o' || String(lockType).toLowerCase() === 'outlock' ? 'outlock' : 'mainlock';
-    let normalizedNote = note ? String(note).trim().toUpperCase() : null;
+    let normalizedCustomId = custom_id ? String(custom_id).trim().toUpperCase() : null;
     const daysOwnedNum = Math.max(1, Math.min(parseInt(daysOwned, 10) || 1, 180));
 
     if (worldNameUpper.includes(' ')) {
         return { success: false, message: 'World names cannot contain spaces.' };
     }
-    if (normalizedNote === '') { normalizedNote = null; }
+    if (normalizedCustomId === '') { normalizedCustomId = null; }
 
     const now = DateTime.utc().startOf('day');
     const daysLeft = 180 - daysOwnedNum;
@@ -56,7 +56,7 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', note = null
             days_owned: daysOwnedNum,
             expiry_date: expiryDateISO,
             lock_type: normalizedLockType,
-            note: normalizedNote,
+            custom_id: normalizedCustomId,
             added_by_username: username,
             added_date: DateTime.utc().toISO(),
         }).returning('*');
@@ -76,22 +76,22 @@ async function addWorld(worldName, daysOwned, lockType = 'mainlock', note = null
             if (error.message.includes('uq_worlds_name_days_lock')) {
                 return { success: false, message: `A world named **${worldNameUpper}** with the exact same days owned and lock type is already being tracked.` };
             }
-            if (error.message.includes('worlds.uq_worlds_note') && normalizedNote) {
-                return { success: false, message: `Note **${normalizedNote}** already in use.` };
+            if (error.message.includes('worlds.uq_worlds_custom_id') && normalizedCustomId) {
+                return { success: false, message: `Custom ID **${normalizedCustomId}** already in use.` };
             }
             // Fallback for other unique constraint errors
-            return { success: false, message: 'This world conflicts with an existing one (e.g., same name or note).' };
+            return { success: false, message: 'This world conflicts with an existing one (e.g., same name or Custom ID).' };
         }
         return { success: false, message: 'Failed to add world due to a database error.' };
     }
 }
 
 async function updateWorld(worldId, updatedData) {
-    const { daysOwned, lockType, note } = updatedData;
+    const { daysOwned, lockType, custom_id } = updatedData;
     const daysOwnedNum = Math.max(1, Math.min(parseInt(daysOwned, 10) || 1, 180));
     const normalizedLockType = String(lockType).toLowerCase() === 'o' ? 'outlock' : 'mainlock';
-    let normalizedNote = note ? String(note).trim().toUpperCase() : null;
-    if (normalizedNote === '') normalizedNote = null;
+    let normalizedCustomId = custom_id ? String(custom_id).trim().toUpperCase() : null;
+    if (normalizedCustomId === '') normalizedCustomId = null;
 
     const now = DateTime.utc().startOf('day');
     const daysLeft = 180 - daysOwnedNum;
@@ -105,7 +105,7 @@ async function updateWorld(worldId, updatedData) {
                 days_owned: daysOwnedNum,
                 expiry_date: expiryDateISO,
                 lock_type: normalizedLockType,
-                note: normalizedNote
+                custom_id: normalizedCustomId
             });
         if (updateCount === 0) throw new Error('World not found.');
         logger.info(`[DB] Updated core details for world ${worldId}`);
@@ -113,8 +113,8 @@ async function updateWorld(worldId, updatedData) {
     } catch (error) {
         logger.error(`[DB] Error updating world ${worldId}:`, error);
         if (error.code === 'SQLITE_CONSTRAINT' || (error.message && error.message.toLowerCase().includes('unique constraint failed'))) {
-            if (error.message.includes('worlds.uq_worlds_note') && normalizedNote) {
-                throw new Error(`Note **${normalizedNote}** already used.`);
+            if (error.message.includes('worlds.uq_worlds_custom_id') && normalizedCustomId) {
+                throw new Error(`Custom ID **${normalizedCustomId}** already used.`);
             }
         }
         throw error;
@@ -173,15 +173,15 @@ async function getWorldsByName(worldName) {
     catch (error) { logger.error(`[DB] Error getting worlds by name "${worldName}":`, error); return []; }
 }
 
-async function getWorldByNote(note) {
-    if (!note) return null;
-    try { const world = await knexInstance('worlds').whereRaw('lower(note) = lower(?)', [note]).first(); return world || null; }
-    catch (error) { logger.error(`[DB] Error getting world by note "${note}":`, error); return null; }
+async function getWorldByCustomId(custom_id) {
+    if (!custom_id) return null;
+    try { const world = await knexInstance('worlds').whereRaw('lower(custom_id) = lower(?)', [custom_id]).first(); return world || null; }
+    catch (error) { logger.error(`[DB] Error getting world by Custom ID "${custom_id}":`, error); return null; }
 }
 
 async function findWorldByIdentifier(identifier) {
     if (!identifier) return null; const identifierUpper = identifier.toUpperCase();
-    try { let world = await getWorldByName(identifierUpper); if (world) return world; world = await getWorldByNote(identifierUpper); if (world) return world; return null; }
+    try { let world = await getWorldByName(identifierUpper); if (world) return world; world = await getWorldByCustomId(identifierUpper); if (world) return world; return null; }
     catch (error) { logger.error(`[DB] Error in findWorldByIdentifier for "${identifier}":`, error); return null; }
 }
 
@@ -484,7 +484,7 @@ module.exports = {
     getWorldById,
     getWorldByName,
     getWorldsByName,
-    getWorldByNote,
+    getWorldByCustomId,
     findWorldByIdentifier,
     getFilteredWorlds,
     searchWorlds: getFilteredWorlds,
