@@ -169,7 +169,7 @@ function buildReply(interaction, worlds, totalWorlds, page, viewMode, timezoneOf
 
     if (viewMode === 'pc' && worlds.length > 0) {
         const selectOptions = worlds.slice(0, 25).map(world => utils.createWorldSelectOption(world, timezoneOffset));
-        components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('list_info').setPlaceholder('📋 Select a world for details').addOptions(selectOptions)));
+        components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('list_select_info').setPlaceholder('📋 Select a world for details').addOptions(selectOptions)));
     }
 
     const finalContent = tableOutput + footer;
@@ -364,7 +364,8 @@ module.exports = {
         if (cooldown.onCooldown) { await interaction.reply({ content: `⏱️ Please wait ${cooldown.timeLeft} seconds.`, flags: MessageFlags.Ephemeral }); return; }
 
         const [action] = params;
-        if (action === 'info') {
+        // The customId is now 'list_select_info', so the action will be 'select'.
+        if (action === 'select') {
             await interaction.deferUpdate();
             if (!interaction.values || interaction.values.length === 0) return;
             const worldId = parseInt(interaction.values[0], 10);
