@@ -18,21 +18,21 @@ exports.up = async function(knex) {
     table.boolean('is_public').defaultTo(false).comment('Is world visible publicly?');
     table.string('user_id').notNullable().references('id').inTable('users').onDelete('CASCADE'); // Added onDelete CASCADE
     table.timestamp('added_date').defaultTo(knex.fn.now());
-    table.string('custom_id').comment('Optional User-defined ID (UPPERCASE)');
+    table.string('note').comment('Optional User-defined note (UPPERCASE)');
     table.string('added_by').comment('Discord username of adder (for info)');
     // Indices
     table.index(['name', 'user_id'], 'idx_worlds_name_user'); // Specific name for index
     table.index(['user_id'], 'idx_worlds_user');
     table.index(['is_public'], 'idx_worlds_public');
     table.index(['expiry_date'], 'idx_worlds_expiry');
-    table.index(['custom_id', 'user_id'], 'idx_worlds_customid_user');
+    table.index(['note', 'user_id'], 'idx_worlds_note_user');
     table.index(['days_owned'], 'idx_worlds_daysowned');
     // Unique Constraints (handle potential duplicates during migration or in separate script)
     table.unique(['name', 'user_id'], { indexName: 'uq_worlds_name_user' });
-    // Custom ID should be unique per user, allow NULLs
+    // Note should be unique per user, allow NULLs
     // SQLite handles unique constraint with NULL differently, needs explicit check or different approach if needed across DBs
     // For SQLite, a regular unique index allows multiple NULLs.
-    table.unique(['custom_id', 'user_id'], { indexName: 'uq_worlds_customid_user'});
+    table.unique(['note', 'user_id'], { indexName: 'uq_worlds_note_user'});
   });
 
   // Note: The unique constraints added above might fail if duplicate data exists.

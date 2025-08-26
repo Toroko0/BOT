@@ -16,7 +16,7 @@ async function showEditWorldModal(interaction, world) {
     // Pre-fill with current data from the database
     const currentDaysOwned = world.days_owned.toString();
     const currentLockType = world.lock_type === 'mainlock' ? 'M' : 'O';
-    const currentCustomId = world.custom_id || '';
+    const currentNote = world.note || '';
     // Determine if public *in this specific guild* or globally private
     const isPublicInGuild = world.is_public && world.guild_id === interaction.guildId;
     const currentIsPublic = isPublicInGuild ? 'yes' : 'no';
@@ -37,11 +37,11 @@ async function showEditWorldModal(interaction, world) {
         .setRequired(true)
         .setMaxLength(1);
 
-    const customIdInput = new TextInputBuilder()
-        .setCustomId('editCustomId')
-        .setLabel("Custom ID (Optional)")
+    const noteInput = new TextInputBuilder()
+        .setCustomId('editNote')
+        .setLabel("Note (Optional)")
         .setStyle(TextInputStyle.Short)
-        .setValue(currentCustomId)
+        .setValue(currentNote)
         .setRequired(false)
         .setMaxLength(24);
 
@@ -49,7 +49,7 @@ async function showEditWorldModal(interaction, world) {
     const components = [
         new ActionRowBuilder().addComponents(daysOwnedInput),
         new ActionRowBuilder().addComponents(lockTypeInput),
-        new ActionRowBuilder().addComponents(customIdInput),
+        new ActionRowBuilder().addComponents(noteInput),
     ];
     if (interaction.guildId) {
         const isPublicInput = new TextInputBuilder()
@@ -120,8 +120,8 @@ async function showWorldInfo(interaction, world) {
     )
     .setFooter({ text: `World ID: ${world.id} | Added: ${new Date(world.added_date).toLocaleDateString()}` }); // Added footer
 
-  if (world.custom_id) {
-    embed.addFields({ name: '🏷️ Custom ID', value: world.custom_id.toUpperCase(), inline: true });
+  if (world.note) {
+    embed.addFields({ name: '🏷️ Note', value: world.note.toUpperCase(), inline: true });
   }
   if (world.added_by) {
       embed.addFields({ name: '👤 Added By', value: world.added_by, inline: true });
@@ -325,7 +325,7 @@ module.exports = {
            // Get data from modal fields
            const daysOwnedStr = interaction.fields.getTextInputValue('editDaysOwned');
            const lockTypeStr = interaction.fields.getTextInputValue('editLockType').toUpperCase();
-           const customIdStr = interaction.fields.getTextInputValue('editCustomId').trim();
+           const noteStr = interaction.fields.getTextInputValue('editNote').trim();
            // Public status might not exist if modal was shown in DMs
            const isPublicStr = interaction.guildId ? interaction.fields.getTextInputValue('editIsPublic').toLowerCase() : 'no'; // Default to no if not in guild context
 
@@ -345,7 +345,7 @@ module.exports = {
            const updatedData = {
                daysOwned: daysOwned, // Pass validated number
                lockType: normalizedLockType,
-               customId: customIdStr || null, // Ensure empty becomes null
+               note: noteStr || null, // Ensure empty becomes null
            };
 
            try {
@@ -402,12 +402,12 @@ module.exports = {
                 choices = allWorlds
                     .filter(w =>
                         w.name.toLowerCase().includes(identifierQuery) ||
-                        (w.custom_id && w.custom_id.toLowerCase().includes(identifierQuery))
+                        (w.note && w.note.toLowerCase().includes(identifierQuery))
                     )
                     .slice(0, CONSTANTS.MAX_SELECT_OPTIONS) // Ensure final count is within limit
                     .map(w => ({
-                        name: w.custom_id ? `${w.name.toUpperCase()} (${w.custom_id.toUpperCase()})` : w.name.toUpperCase(),
-                        value: w.custom_id || w.name // Prefer custom_id as value
+                        name: w.note ? `${w.name.toUpperCase()} (${w.note.toUpperCase()})` : w.name.toUpperCase(),
+                        value: w.note || w.name // Prefer note as value
                     }));
             } catch (e) {
                 logger.error("[info.js] Autocomplete DB error:", e);

@@ -18,17 +18,17 @@ db.serialize(() => {
     is_public INTEGER DEFAULT 0,
     user_id TEXT NOT NULL,
     added_date TEXT DEFAULT CURRENT_TIMESTAMP,
-    custom_id TEXT COLLATE NOCASE,
+    note TEXT COLLATE NOCASE,
     added_by TEXT,
     UNIQUE(name, user_id),
-    UNIQUE(custom_id, user_id)
+    UNIQUE(note, user_id)
   );`, (err) => {
     if (err) {
       console.error('Error creating new table:', err);
       return;
     }
 
-    db.run(`INSERT OR IGNORE INTO worlds_new (id, name, days_owned, expiry_date, lock_type, is_public, user_id, added_date, custom_id, added_by)
+    db.run(`INSERT OR IGNORE INTO worlds_new (id, name, days_owned, expiry_date, lock_type, is_public, user_id, added_date, note, added_by)
             SELECT id, name, days_owned, expiry_date, lock_type, is_public, user_id, added_date, custom_id, added_by FROM worlds;`, (err) => {
       if (err) {
         console.error('Error copying data:', err);
