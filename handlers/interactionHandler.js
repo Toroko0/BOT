@@ -111,13 +111,13 @@ async function setupInteractionHandler(client) {
                             choices = dbResult.worlds
                                 .filter(w =>
                                     w.name.toLowerCase().includes(query) ||
-                                    (w.note && w.note.toLowerCase().includes(query))
+                                    (w.custom_id && w.custom_id.toLowerCase().includes(query))
                                 )
                                 .slice(0, CONSTANTS.MAX_SELECT_OPTIONS) // Use constant from constants.js
                                 .map(w => ({
-                                    name: w.note ? `${w.name.toUpperCase()} (${w.note.toUpperCase()})` : w.name.toUpperCase(),
-                                    // Return the identifier that the command expects (name or note)
-                                    value: w.note || w.name
+                                    name: w.custom_id ? `${w.name.toUpperCase()} (${w.custom_id.toUpperCase()})` : w.name.toUpperCase(),
+                                    // Return the identifier that the command expects (name or custom_id)
+                                    value: w.custom_id || w.name
                                 }));
                          } catch(e) {
                              logger.error("[Interaction Handler] Default autocomplete DB error:", e);

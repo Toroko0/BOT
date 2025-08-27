@@ -204,8 +204,8 @@ async function exportWorlds(interaction, filters, sortBy) {
         }
 
         const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
-        const notePart = world.note ? ` (${world.note})` : '';
-        const line = `(${lockChar}) ${world.name.toUpperCase()} ${currentDaysOwned}${notePart}\n`;
+        const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
+        const line = `(${lockChar}) ${world.name.toUpperCase()} ${currentDaysOwned}${customIdPart}\n`;
         exportText += line;
     });
     exportText += "```";

@@ -249,8 +249,8 @@ module.exports = {
         let exportText = "```\n";
         allMatchingWorlds.forEach(world => {
             const lockChar = world.lock_type ? world.lock_type.charAt(0).toUpperCase() : 'L';
-            const notePart = world.note ? ` (${world.note})` : '';
-            exportText += `(${lockChar}) ${world.name.toUpperCase()}${notePart}\n`;
+            const customIdPart = world.custom_id ? ` (${world.custom_id})` : '';
+            exportText += `(${lockChar}) ${world.name.toUpperCase()}${customIdPart}\n`;
         });
         exportText += "```";
 

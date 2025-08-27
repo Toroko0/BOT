@@ -36,17 +36,17 @@ async function showAddWorldModal(interaction) {
     .setValue('M') // Default to M
     .setMaxLength(1); // Expect M or O
 
-  const noteInput = new TextInputBuilder()
-    .setCustomId('note')
-    .setLabel("Note (Optional)")
+  const customIdInput = new TextInputBuilder()
+    .setCustomId('custom_id')
+    .setLabel("Custom ID (Optional)")
     .setStyle(TextInputStyle.Short)
     .setRequired(false)
-    .setMaxLength(24); // Optional length constraint
+    .setMaxLength(40); // Optional length constraint
 
   const firstActionRow = new ActionRowBuilder().addComponents(worldNameInput);
   const secondActionRow = new ActionRowBuilder().addComponents(daysOwnedInput);
   const thirdActionRow = new ActionRowBuilder().addComponents(lockTypeInput);
-  const fourthActionRow = new ActionRowBuilder().addComponents(noteInput);
+  const fourthActionRow = new ActionRowBuilder().addComponents(customIdInput);
 
   modal.addComponents(firstActionRow, secondActionRow, thirdActionRow, fourthActionRow);
   await interaction.showModal(modal);
@@ -76,17 +76,17 @@ module.exports = {
           { name: 'Out Lock (O)', value: 'outlock' }
         ))
     .addStringOption(option =>
-      option.setName('note')
-        .setDescription('A short note for the world (optional, unique per user)')
+      option.setName('custom_id')
+        .setDescription('A short custom ID for the world (optional, unique per user)')
         .setRequired(false)
-        .setMaxLength(24)),
+        .setMaxLength(40)),
   showAddWorldModal, // Add this line to export the function
   async execute(interaction) {
     logger.info('[addworld.js] Executing addworld command');
     const worldName = interaction.options.getString('world');
     const daysOwned = interaction.options.getInteger('days');
     const lockType = interaction.options.getString('locktype');
-    const note = interaction.options.getString('note');
+    const custom_id = interaction.options.getString('custom_id');
     const replyOpts = { flags: 1 << 6 }; // Ephemeral
 
     // If options are provided via slash command, add directly
@@ -103,7 +103,7 @@ module.exports = {
         worldName,
         daysOwned || 1, // Default to 1 if not provided
         lockType || 'mainlock', // Default to mainlock if not provided
-        note,
+        custom_id,
         interaction.user.username
       );
       logger.info('[addworld.js] db.addWorld returned', result);
@@ -149,7 +149,7 @@ module.exports = {
         const worldName = interaction.fields.getTextInputValue('worldName').trim();
         const daysOwnedStr = interaction.fields.getTextInputValue('daysOwned').trim();
         const lockTypeStr = interaction.fields.getTextInputValue('lockType').trim().toUpperCase();
-        const note = interaction.fields.getTextInputValue('note').trim();
+        const custom_id = interaction.fields.getTextInputValue('custom_id').trim();
 
         // --- Input Validation ---
         const daysOwned = parseInt(daysOwnedStr);
@@ -174,7 +174,7 @@ module.exports = {
           worldName,
           daysOwned, // Use validated number
           normalizedLockType,
-          note || null, // Pass null if empty
+          custom_id || null, // Pass null if empty
           interaction.user.username
         );
 
