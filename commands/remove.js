@@ -2,6 +2,7 @@ const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, Strin
 const db = require('../database.js');
 const utils = require('../utils.js');
 const { logHistory } = require('../utils/share_and_history.js');
+const { selectWorld } = require('../utils/world_selection.js');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -16,59 +17,57 @@ module.exports = {
   async execute(interaction) {
     const worldName = interaction.options.getString('world');
     
-    // Get all worlds with the given name
-    const { worlds } = await db.getFilteredWorlds({ prefix: worldName, added_by_username: interaction.user.username });
-    
-    if (worlds.length === 0) {
-      await interaction.reply({ 
-        content: `World starting with **${worldName}** not found in your tracking list.`,
-        flags: 1 << 6
-      });
+    await interaction.deferReply({ ephemeral: true });
+
+    const selectionResult = await selectWorld(interaction, worldName, 'remove');
+
+    if (!selectionResult) {
       return;
     }
 
-    if (worlds.length === 1) {
-        const world = worlds[0];
-        if (world.added_by_username !== interaction.user.username) {
-            return interaction.reply({ content: 'You do not have permission to remove this world.', flags: 1 << 6 });
+    const { world, followUpInteraction } = selectionResult;
+
+    // Safeguard: Re-fetch the world from the database to ensure data is not stale.
+    const freshWorld = await db.getWorldById(world.id);
+    if (!freshWorld) {
+        const content = 'The selected world could not be found. It may have been removed.';
+        if (followUpInteraction.isMessageComponent()) {
+            await followUpInteraction.update({ content, components: [] });
+        } else {
+            await followUpInteraction.editReply({ content });
         }
-        const confirmRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`remove_confirm_${world.id}`)
-            .setLabel('Confirm Remove')
-            .setStyle(ButtonStyle.Danger),
-          new ButtonBuilder()
-            .setCustomId(`remove_cancel_${world.id}`)
-            .setLabel('Cancel')
-            .setStyle(ButtonStyle.Secondary)
-        );
+        return;
+    }
 
-        await interaction.reply({
-          content: `⚠️ Are you sure you want to remove **${world.name.toUpperCase()}** from your tracking list?`,
-          components: [confirmRow],
-          flags: 1 << 6
-        });
+    const isAdmin = interaction.user.id === process.env.OWNER_ID;
+    const isOwner = freshWorld.added_by_username === interaction.user.username;
+
+    if (!isAdmin && !isOwner) {
+      const content = 'You do not have permission to remove this world.';
+      if (followUpInteraction.isMessageComponent()) {
+        await followUpInteraction.update({ content, components: [] });
+      } else {
+        await followUpInteraction.editReply({ content });
+      }
+      return;
+    }
+
+    const confirmRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`remove_confirm_${freshWorld.id}`)
+        .setLabel('Confirm Remove')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`remove_cancel_${freshWorld.id}`)
+        .setLabel('Cancel')
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    const content = `⚠️ Are you sure you want to remove **${freshWorld.name.toUpperCase()}** from the tracking list?`;
+    if (followUpInteraction.isMessageComponent()) {
+      await followUpInteraction.update({ content, components: [confirmRow] });
     } else {
-        const options = worlds.map(world => {
-            return {
-                label: `ID: ${world.id}, Days: ${world.days_owned}, Lock: ${world.lock_type}, Added by: ${world.added_by_username}`,
-                value: world.id.toString()
-            }
-        });
-
-        const row = new ActionRowBuilder()
-            .addComponents(
-                new StringSelectMenuBuilder()
-                    .setCustomId('remove_select')
-                    .setPlaceholder('Select a world to remove')
-                    .addOptions(options),
-            );
-
-        await interaction.reply({
-            content: `There are multiple worlds starting with **${worldName}**. Please select the one you want to remove.`,
-            components: [row],
-            flags: 1 << 6
-        });
+      await followUpInteraction.editReply({ content, components: [confirmRow] });
     }
   },
 
@@ -76,11 +75,10 @@ module.exports = {
   async handleButton(interaction, params) {
     const cooldown = utils.checkCooldown(interaction.user.id, 'remove');
     if (cooldown.onCooldown) {
-      await interaction.reply({
+      return interaction.reply({
         content: `Please wait ${cooldown.timeLeft} seconds before using this button again.`,
-        flags: 1 << 6
+        ephemeral: true
       });
-      return;
     }
 
     const [action, worldIdString] = params;
@@ -88,31 +86,26 @@ module.exports = {
 
     if (action === 'confirm') {
       if (isNaN(worldId)) {
-        await interaction.reply({
-          content: 'Invalid World ID provided.',
-          flags: 1 << 6
-        });
-        return;
+        return interaction.update({ content: 'Invalid World ID provided.', components: [], ephemeral: true });
       }
       
       const world = await db.getWorldById(worldId);
 
       if (!world) {
-        await interaction.reply({
-          content: 'World not found.',
-          flags: 1 << 6
-        });
-        return;
+        return interaction.update({ content: 'World not found.', components: [], ephemeral: true });
+      }
+
+      const isAdmin = interaction.user.id === process.env.OWNER_ID;
+      const isOwner = world.added_by_username === interaction.user.username;
+
+      if (!isAdmin && !isOwner) {
+        return interaction.update({ content: 'You do not have permission to remove this world.', components: [], ephemeral: true });
       }
 
       const success = await db.removeWorld(worldId);
 
       if (!success) {
-        await interaction.reply({
-          content: 'An error occurred while removing the world.',
-          flags: 1 << 6
-        });
-        return;
+        return interaction.update({ content: 'An error occurred while removing the world.', components: [], ephemeral: true });
       }
 
       require('./search.js').invalidateSearchCache(); // Invalidate search cache
@@ -130,7 +123,7 @@ module.exports = {
             .setStyle(ButtonStyle.Success)
         );
 
-      await interaction.update({ // Changed from interaction.reply to interaction.update
+      await interaction.update({
         content: `✅ World **${world.name.toUpperCase()}** has been removed from the tracking list.`,
         components: [row]
       });
@@ -138,45 +131,15 @@ module.exports = {
     } else if (action === 'cancel') {
       await interaction.update({
         content: '✅ Removal cancelled.',
-        components: [], // Clear components
-        flags: 1 << 6
+        components: [],
+        ephemeral: true
       });
     } else {
-      // Handle unknown action
       console.error(`Unknown action in remove.js handleButton: ${action}`);
       await interaction.reply({
         content: 'An unknown error occurred. Please try again.',
-        flags: 1 << 6
+        ephemeral: true
       });
     }
-  },
-
-  async handleSelectMenu(interaction, params) {
-    const worldId = parseInt(interaction.values[0]);
-    const world = await db.getWorldById(worldId);
-
-    if (!world) {
-      return interaction.reply({ content: 'This world no longer exists.', flags: 1 << 6 });
-    }
-
-    if (world.added_by_username !== interaction.user.username) {
-        return interaction.reply({ content: 'You do not have permission to remove this world.', flags: 1 << 6 });
-    }
-
-    const confirmRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`remove_confirm_${world.id}`)
-        .setLabel('Confirm Remove')
-        .setStyle(ButtonStyle.Danger),
-      new ButtonBuilder()
-        .setCustomId(`remove_cancel_${world.id}`)
-        .setLabel('Cancel')
-        .setStyle(ButtonStyle.Secondary)
-    );
-
-    await interaction.update({
-      content: `⚠️ Are you sure you want to remove **${world.name.toUpperCase()}** from your tracking list?`,
-      components: [confirmRow]
-    });
   }
 };
