@@ -69,17 +69,17 @@ module.exports = {
             .setValue(world.lock_type === 'mainlock' ? 'M' : 'O')
             .setRequired(true);
 
-        const noteInput = new TextInputBuilder()
-            .setCustomId('note')
-            .setLabel("Note (Optional)")
+        const customIdInput = new TextInputBuilder()
+            .setCustomId('custom_id')
+            .setLabel("Custom ID (Optional)")
             .setStyle(TextInputStyle.Short)
-            .setValue(world.note || '')
+            .setValue(world.custom_id || '')
             .setRequired(false);
 
         modal.addComponents(
             new ActionRowBuilder().addComponents(daysOwnedInput),
             new ActionRowBuilder().addComponents(lockTypeInput),
-            new ActionRowBuilder().addComponents(noteInput)
+            new ActionRowBuilder().addComponents(customIdInput)
         );
 
         await interaction.showModal(modal);
@@ -116,12 +116,12 @@ module.exports = {
 
         const daysOwned = interaction.fields.getTextInputValue('daysOwned');
         const lockType = interaction.fields.getTextInputValue('lockType').toUpperCase();
-        const note = interaction.fields.getTextInputValue('note');
+        const custom_id = interaction.fields.getTextInputValue('custom_id');
 
         const updatedData = {
             daysOwned: parseInt(daysOwned),
             lockType: lockType === 'M' ? 'mainlock' : 'outlock',
-            note: note,
+            custom_id: custom_id,
         };
 
         await db.updateWorld(worldId, updatedData);
