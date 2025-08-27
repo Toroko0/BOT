@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags, StringSelectMenuBuilder } = require('discord.js');
 const db = require('../database.js');
 const utils = require('../utils.js');
 const { invalidateSearchCache } = require('./search.js'); // Assuming search.js exports this
@@ -123,13 +123,13 @@ async function showWorldInfo(interaction, world) {
   if (world.custom_id) {
     embed.addFields({ name: '🏷️ Custom ID', value: world.custom_id.toUpperCase(), inline: true });
   }
-  if (world.added_by) {
-      embed.addFields({ name: '👤 Added By', value: world.added_by, inline: true });
+  if (world.added_by_username) {
+      embed.addFields({ name: '👤 Added By', value: world.added_by_username, inline: true });
   }
 
 
   const components = [];
-  const replyOpts = { flags: MessageFlags.Ephemeral }; // Ephemeral by default
+  const replyOpts = { ephemeral: true }; // Ephemeral by default
 
 
   // Show management buttons only if the user owns the world
@@ -161,7 +161,7 @@ async function showWorldInfo(interaction, world) {
     // Remove button
     mgmtButtonsRow.addComponents(
        new ButtonBuilder()
-        .setCustomId(`info_button_remove_${world.id}`) // Changed prefix
+        .setCustomId(`remove_button_confirm_${world.id}`) // Changed prefix
         .setLabel('🗑️ Remove')
         .setStyle(ButtonStyle.Danger)
     );
@@ -200,24 +200,53 @@ module.exports = {
     .addStringOption(o => o.setName('world').setDescription('World name or custom ID').setRequired(true).setAutocomplete(true)),
 
   async execute(interaction) {
-    const worldIdentifier = interaction.options.getString('world');
-    const replyOpts = { flags: MessageFlags.Ephemeral };
-    const cooldown = utils.checkCooldown(interaction.user.id, 'info_cmd', 3);
-    if (cooldown.onCooldown) { await interaction.reply({ ...replyOpts, content: `⏱️ Wait ${cooldown.timeLeft}s.` }); return; }
+    const worldIdentifier = interaction.options.getString('world').toLowerCase();
+    await interaction.deferReply({ ephemeral: true });
 
-    // Add user silently (handled by interaction handler)
-    // await db.addUser(interaction.user.id, interaction.user.username);
+    const { worlds: allWorlds } = await db.getFilteredWorlds({}, 1, 10000);
+    const accessibleWorlds = allWorlds.filter(w => w.is_public || w.added_by_username === interaction.user.username);
 
-    // Defer early as DB lookup might take time
-    await interaction.deferReply(replyOpts);
+    const matchingWorlds = accessibleWorlds.filter(w =>
+        (w.name && w.name.toLowerCase().startsWith(worldIdentifier)) ||
+        (w.custom_id && w.custom_id.toLowerCase().startsWith(worldIdentifier))
+    );
 
-    const world = await db.findWorldByIdentifier(worldIdentifier);
+    if (matchingWorlds.length === 0) {
+        return interaction.editReply({ content: `❌ World/ID starting with "**${worldIdentifier}**" not found or not accessible to you.` });
+    }
 
-    if (!world) {
-        await interaction.editReply({ content: `❌ World/ID "**${worldIdentifier}**" not found or not accessible.` });
+    if (matchingWorlds.length === 1) {
+        await showWorldInfo(interaction, matchingWorlds[0]);
         return;
     }
-    // showWorldInfo handles editing the reply
+
+    const options = matchingWorlds.map(world => ({
+        label: `ID: ${world.id}, ${world.name}`,
+        description: `Owner: ${world.added_by_username} | ${world.is_public ? 'Public' : 'Private'}`,
+        value: world.id.toString()
+    })).slice(0, 25);
+
+    const selectRow = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+            .setCustomId('info_select_world')
+            .setPlaceholder('Select a world to view info')
+            .addOptions(options)
+    );
+
+    await interaction.editReply({
+        content: `Found multiple worlds matching **${worldIdentifier}**. Please select one.`,
+        components: [selectRow]
+    });
+  },
+
+  async handleSelectMenu(interaction, params) {
+    const worldId = parseInt(interaction.values[0], 10);
+    const world = await db.getWorldById(worldId);
+
+    if (!world) {
+        return interaction.update({ content: 'This world seems to have been removed already.', components: [] });
+    }
+
     await showWorldInfo(interaction, world);
   },
 
@@ -233,7 +262,7 @@ module.exports = {
 
     const world = await db.getWorldById(worldId);
     if (!world) { await interaction.update({ content: '❌ World not found.', embeds: [], components: [], flags: MessageFlags.Ephemeral }); return; }
-    if (world.user_id !== interaction.user.id) { await interaction.reply({ ...replyOpts, content: '❌ You do not own this world.' }); return; }
+    if (world.added_by_username !== interaction.user.username) { await interaction.reply({ ...replyOpts, content: '❌ You do not own this world.' }); return; }
 
     let success = false;
     let feedback = '';
@@ -318,7 +347,7 @@ module.exports = {
            if (!worldId) { await interaction.reply({ ...replyOpts, content: "❌ Error: Missing world ID for edit." }); return; }
 
            const world = await db.getWorldById(worldId);
-           if (!world || world.user_id !== interaction.user.id) {
+           if (!world || world.added_by_username !== interaction.user.username) {
                await interaction.reply({ ...replyOpts, content: '❌ World not found or you do not own it.' }); return;
            }
 
@@ -359,7 +388,7 @@ module.exports = {
                 }
 
                // Update core world details (days, lock, custom ID)
-               await db.updateWorld(worldId, interaction.user.id, updatedData);
+               await db.updateWorld(worldId, updatedData);
                // Separately update visibility
                await db.updateWorldVisibility(worldId, interaction.user.id, makePublic, guildIdForUpdate);
 
