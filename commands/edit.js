@@ -10,49 +10,83 @@ module.exports = {
         .addStringOption(option =>
             option.setName('world')
                 .setDescription('The name of the world to edit.')
-                .setRequired(true)),
+                .setRequired(true)
+                .setAutocomplete(true)),
     async execute(interaction) {
+        await interaction.deferReply({ ephemeral: true });
+
         const worldName = interaction.options.getString('world');
-        const { worlds } = await db.getFilteredWorlds({ prefix: worldName, added_by_username: interaction.user.username });
+        const isAdmin = interaction.user.id === process.env.OWNER_ID;
+
+        const filter = { prefix: worldName };
+        // For non-admins, only search their own worlds.
+        if (!isAdmin) {
+            filter.added_by_username = interaction.user.username;
+        }
+
+        const { worlds } = await db.getFilteredWorlds(filter);
 
         if (worlds.length === 0) {
-            return interaction.reply({ content: `World starting with **${worldName}** not found in your tracking list.`, flags: 1 << 6 });
+            const content = isAdmin ? `No worlds found starting with **${worldName}**.` : `World starting with **${worldName}** not found in your tracking list.`;
+            return interaction.editReply({ content });
         }
 
         if (worlds.length === 1) {
             const world = worlds[0];
-            if (world.added_by_username !== interaction.user.username) {
-                return interaction.reply({ content: 'You do not have permission to edit this world.', flags: 1 << 6 });
-            }
-            await this.showEditModal(interaction, world.id);
-        } else {
-            const options = worlds.map(world => {
-                return {
-                    label: `ID: ${world.id}, Days: ${world.days_owned}, Lock: ${world.lock_type}, Added by: ${world.added_by_username}`,
-                    value: world.id.toString()
-                }
-            });
-
+            // A non-admin can only get here if they own the world, due to the filter.
+            // An admin can get here with any world. No extra permission check needed here.
             const row = new ActionRowBuilder()
                 .addComponents(
-                    new StringSelectMenuBuilder()
-                    .setCustomId('edit_select')
-                        .setPlaceholder('Select a world to edit')
-                        .addOptions(options),
+                    new ButtonBuilder()
+                        .setCustomId(`edit_button_edit_${world.id}`)
+                        .setLabel(`Edit ${world.name}`)
+                        .setStyle(ButtonStyle.Primary),
                 );
 
-            await interaction.reply({
-                content: `There are multiple worlds starting with **${worldName}**. Please select the one you want to edit.`,
-                components: [row],
-                flags: 1 << 6
+            await interaction.editReply({
+                content: `Found one world matching **${worldName}**: **${world.name}** (Owner: ${world.added_by_username}).`,
+                components: [row]
             });
+            return;
         }
+
+        // If multiple worlds are found
+        const options = worlds.map(world => {
+            return {
+                label: `ID: ${world.id}, ${world.name}`,
+                description: `Owner: ${world.added_by_username}`,
+                value: world.id.toString()
+            }
+        }).slice(0, 25); // Max 25 options
+
+        const row = new ActionRowBuilder()
+            .addComponents(
+                new StringSelectMenuBuilder()
+                    .setCustomId('edit_select_world') // Use a more descriptive custom ID
+                    .setPlaceholder('Select a world to edit')
+                    .addOptions(options),
+            );
+
+        await interaction.editReply({
+            content: `Found multiple worlds starting with **${worldName}**. Please select one to edit.`,
+            components: [row]
+        });
     },
 
     async showEditModal(interaction, worldId) {
         const world = await db.getWorldById(worldId);
+        if (!world) {
+            // Use update for components, reply for modals
+            return interaction.update({ content: 'This world no longer exists.', components: [] });
+        }
+
+        const isAdmin = interaction.user.id === process.env.OWNER_ID;
+        if (!isAdmin && world.added_by_username !== interaction.user.username) {
+            return interaction.update({ content: 'You do not have permission to edit this world.', components: [] });
+        }
+
         const modal = new ModalBuilder()
-            .setCustomId(`edit_submit_${worldId}`)
+            .setCustomId(`edit_modal_submit_${worldId}`)
             .setTitle(`Edit World: ${world.name}`);
 
         const daysOwnedInput = new TextInputBuilder()
@@ -85,38 +119,53 @@ module.exports = {
         await interaction.showModal(modal);
     },
 
+    async handleButton(interaction, params) {
+        // Custom ID: edit_button_edit_worldId
+        const [action, worldIdString] = params; // params[0] is 'edit', params[1] is worldId
+        if (action === 'edit' && worldIdString) {
+            const worldId = parseInt(worldIdString, 10);
+            await this.showEditModal(interaction, worldId);
+        } else {
+            logger.warn(`[edit.js] Unknown button action or missing worldId: ${params}`);
+        }
+    },
+
     async handleSelectMenu(interaction, params) {
-        const worldId = parseInt(interaction.values[0]);
-        const world = await db.getWorldById(worldId);
-
-        if (!world) {
-            return interaction.reply({ content: 'This world no longer exists.', flags: 1 << 6 });
-        }
-
-        if (world.added_by_username !== interaction.user.username) {
-            return interaction.reply({ content: 'You do not have permission to edit this world.', flags: 1 << 6 });
-        }
-
+        // Custom ID: edit_select_world
+        const worldId = parseInt(interaction.values[0], 10);
         await this.showEditModal(interaction, worldId);
     },
 
     async handleModal(interaction, params) {
+        // Custom ID: edit_modal_submit_worldId
         const [action, worldIdString] = params;
-        if (action !== 'submit') return; // Should only be submit
+        if (action !== 'submit') return;
+
+        await interaction.deferReply({ ephemeral: true });
+
         const worldId = parseInt(worldIdString);
         const world = await db.getWorldById(worldId);
 
         if (!world) {
-            return interaction.reply({ content: 'This world no longer exists.', flags: 1 << 6 });
+            return interaction.editReply({ content: 'This world no longer exists.' });
         }
 
-        if (world.added_by_username !== interaction.user.username) {
-            return interaction.reply({ content: 'You do not have permission to edit this world.', flags: 1 << 6 });
+        const isAdmin = interaction.user.id === process.env.OWNER_ID;
+        if (!isAdmin && world.added_by_username !== interaction.user.username) {
+            return interaction.editReply({ content: 'You do not have permission to edit this world.' });
         }
 
         const daysOwned = interaction.fields.getTextInputValue('daysOwned');
         const lockType = interaction.fields.getTextInputValue('lockType').toUpperCase();
         const custom_id = interaction.fields.getTextInputValue('custom_id');
+
+        // Basic validation
+        if (isNaN(parseInt(daysOwned)) || parseInt(daysOwned) < 1 || parseInt(daysOwned) > 180) {
+            return interaction.editReply({ content: 'Invalid input for "Days Owned". Please provide a number between 1 and 180.' });
+        }
+        if (lockType !== 'M' && lockType !== 'O') {
+            return interaction.editReply({ content: 'Invalid input for "Lock Type". Please provide M or O.' });
+        }
 
         const updatedData = {
             daysOwned: parseInt(daysOwned),
@@ -127,6 +176,6 @@ module.exports = {
         await db.updateWorld(worldId, updatedData);
         await logHistory(worldId, interaction.user.id, 'edit', `Edited world ${world.name}`);
 
-        await interaction.reply({ content: `World **${world.name}** has been updated.`, flags: 1 << 6 });
+        await interaction.editReply({ content: `✅ World **${world.name}** has been updated successfully.` });
     }
 };
