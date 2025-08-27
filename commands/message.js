@@ -15,11 +15,11 @@ module.exports = {
         const content = interaction.options.getString('content');
         const sender = interaction.user;
 
-        await interaction.reply({ content: 'Sending message to all users...', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Sending message to all whitelisted users...', flags: MessageFlags.Ephemeral });
 
-        const users = await db.getAllUsers();
+        const users = await db.getWhitelistedUsers();
         if (!users || users.length === 0) {
-            await interaction.editReply({ content: 'No users found to send a message to.' });
+            await interaction.editReply({ content: 'No whitelisted users found to send a message to.' });
             return;
         }
 
@@ -39,7 +39,7 @@ module.exports = {
             }
         }
 
-        await interaction.editReply({ content: `Message sent to ${successCount} user(s). Failed to send to ${failCount} user(s).` });
+        await interaction.editReply({ content: `Message sent to ${successCount} whitelisted user(s). Failed to send to ${failCount} user(s).` });
 
         if (successCount > 0) {
             await logHistory(null, sender.id, 'message', content);
