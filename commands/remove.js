@@ -37,11 +37,11 @@ module.exports = {
         // Permission check is implicitly handled by the filter for non-admins.
         const confirmRow = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
-                .setCustomId(`remove_button_confirm_${world.id}`)
+                .setCustomId(`remove_confirm_${world.id}`)
                 .setLabel('Confirm Remove')
                 .setStyle(ButtonStyle.Danger),
             new ButtonBuilder()
-                .setCustomId(`remove_button_cancel_${world.id}`)
+                .setCustomId(`remove_cancel_${world.id}`)
                 .setLabel('Cancel')
                 .setStyle(ButtonStyle.Secondary)
         );
@@ -85,11 +85,11 @@ module.exports = {
 
     const confirmRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-            .setCustomId(`remove_button_confirm_${world.id}`)
+            .setCustomId(`remove_confirm_${world.id}`)
             .setLabel('Confirm Remove')
             .setStyle(ButtonStyle.Danger),
         new ButtonBuilder()
-            .setCustomId(`remove_button_cancel_${world.id}`)
+            .setCustomId(`remove_cancel_${world.id}`)
             .setLabel('Cancel')
             .setStyle(ButtonStyle.Secondary)
     );
@@ -101,7 +101,7 @@ module.exports = {
   },
 
   async handleButton(interaction, params) {
-    // Custom ID: remove_button_action_worldId
+    // Custom ID: remove_action_worldId
     const [action, worldIdString] = params;
     const worldId = parseInt(worldIdString, 10);
 
