@@ -161,7 +161,7 @@ async function showWorldInfo(interaction, world) {
     // Remove button
     mgmtButtonsRow.addComponents(
        new ButtonBuilder()
-        .setCustomId(`remove_button_confirm_${world.id}`) // Changed prefix
+        .setCustomId(`remove_confirm_${world.id}`) // Changed prefix
         .setLabel('🗑️ Remove')
         .setStyle(ButtonStyle.Danger)
     );
@@ -294,11 +294,11 @@ module.exports = {
                 // world and ownership already checked before switch
                 const confirmRow = new ActionRowBuilder().addComponents(
                     new ButtonBuilder()
-                        .setCustomId(`remove_button_confirm_${world.id}`)
+                        .setCustomId(`remove_confirm_${world.id}`)
                         .setLabel('Confirm Remove')
                         .setStyle(ButtonStyle.Danger),
                     new ButtonBuilder()
-                        .setCustomId(`remove_button_cancel_${world.id}`)
+                        .setCustomId(`remove_cancel_${world.id}`)
                         .setLabel('Cancel')
                         .setStyle(ButtonStyle.Secondary)
                 );
