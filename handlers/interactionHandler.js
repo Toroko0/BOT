@@ -63,7 +63,7 @@ async function setupInteractionHandler(client) {
 
         // Whitelist check
         if (interaction.commandName !== 'whitelist' && interaction.user.id !== process.env.OWNER_ID) {
-            const isWhitelisted = await db.isWhitelisted(interaction.user.username);
+            const isWhitelisted = await db.isWhitelisted(interaction.user.id);
             if (!isWhitelisted) {
                 return safeReplyEphemeral(interaction, 'You are not authorized to use this bot.');
             }
