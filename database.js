@@ -250,7 +250,7 @@ async function getFilteredWorlds(filters = {}, page = 1, pageSize = 10, options 
 
 async function removeExpiredWorlds() {
     try {
-        const now = DateTime.utc();
+        const now = DateTime.utc().startOf('day');
         const nowISO = now.toISO();
         
         logger.debug(`[DB] Running cleanup query. Removing worlds with expiry_date < '${nowISO}'`);
@@ -294,20 +294,20 @@ async function getMostRecentWorld() { try { const world = await knexInstance('wo
 
 async function getLeaderboard(page = 1, pageSize = 10) {
     const offset = (page - 1) * pageSize;
-    logger.debug(`[DB] Attempting to get leaderboard, page ${page}`);
+    logger.debug(`[DB] Attempting to get leaderboard for whitelisted users, page ${page}`);
     try {
-        const subquery = knexInstance('users')
-            .leftJoin('worlds', 'users.username', 'worlds.added_by_username')
-            .select('users.username as added_by_username')
+        const subquery = knexInstance('whitelist')
+            .leftJoin('worlds', 'whitelist.username', 'worlds.added_by_username')
+            .select('whitelist.username as added_by_username')
             .count('worlds.id as world_count')
-            .groupBy('users.username')
+            .groupBy('whitelist.username')
             .orderBy('world_count', 'desc')
             .limit(pageSize)
             .offset(offset)
             .as('leaderboard');
 
         const leaderboard = await knexInstance.from(subquery);
-        const totalResult = await knexInstance('users').count({ total: '*' }).first();
+        const totalResult = await knexInstance('whitelist').count({ total: '*' }).first();
         const totalCount = totalResult ? Number(totalResult.total) : 0;
 
         return { leaderboard, total: totalCount };
@@ -359,47 +359,47 @@ async function getUserPreferences(userId) {
     }
 }
 
-async function addToWhitelist(username) {
+async function addToWhitelist(userId, username) {
     try {
-        await knexInstance('whitelist').insert({ username });
-        logger.info(`[DB] Added ${username} to the whitelist.`);
+        await knexInstance('whitelist').insert({ id: userId, username: username });
+        logger.info(`[DB] Added ${username} (${userId}) to the whitelist.`);
     } catch (error) {
         if (error.code === 'SQLITE_CONSTRAINT') {
-            throw new Error(`**${username}** is already on the whitelist.`);
+            throw new Error(`That user is already on the whitelist.`);
         }
         logger.error(`[DB] Error adding to whitelist:`, error);
         throw new Error('An error occurred while adding to the whitelist.');
     }
 }
 
-async function removeFromWhitelist(username) {
+async function removeFromWhitelist(userId) {
     try {
-        const deletedCount = await knexInstance('whitelist').where({ username }).del();
+        const deletedCount = await knexInstance('whitelist').where({ id: userId }).del();
         if (deletedCount === 0) {
-            throw new Error(`**${username}** is not on the whitelist.`);
+            throw new Error(`That user is not on the whitelist.`);
         }
-        logger.info(`[DB] Removed ${username} from the whitelist.`);
+        logger.info(`[DB] Removed user ${userId} from the whitelist.`);
     } catch (error) {
         logger.error(`[DB] Error removing from whitelist:`, error);
         throw new Error('An error occurred while removing from the whitelist.');
     }
 }
 
-async function getWhitelist() {
+async function getWhitelistedUsers() {
     try {
-        return await knexInstance('whitelist').select('username');
+        return await knexInstance('whitelist').select('id', 'username');
     } catch (error) {
-        logger.error(`[DB] Error getting whitelist:`, error);
+        logger.error(`[DB] Error getting whitelisted users:`, error);
         return [];
     }
 }
 
-async function isWhitelisted(username) {
+async function isWhitelisted(userId) {
     try {
-        const result = await knexInstance('whitelist').where({ username }).first();
+        const result = await knexInstance('whitelist').where({ id: userId }).first();
         return !!result;
     } catch (error) {
-        logger.error(`[DB] Error checking whitelist:`, error);
+        logger.error(`[DB] Error checking whitelist for user ${userId}:`, error);
         return false;
     }
 }
@@ -506,7 +506,7 @@ module.exports = {
     getUserStats,
     addToWhitelist,
     removeFromWhitelist,
-    getWhitelist,
+    getWhitelistedUsers,
     isWhitelisted,
     getAllUsers,
     getHistory,

@@ -10,17 +10,17 @@ module.exports = {
             subcommand
                 .setName('add')
                 .setDescription('Add a user to the whitelist.')
-                .addStringOption(option =>
-                    option.setName('username')
-                        .setDescription('The username of the user to add.')
+                .addUserOption(option =>
+                    option.setName('user')
+                        .setDescription('The user to add.')
                         .setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand
                 .setName('remove')
                 .setDescription('Remove a user from the whitelist.')
-                .addStringOption(option =>
-                    option.setName('username')
-                        .setDescription('The username of the user to remove.')
+                .addUserOption(option =>
+                    option.setName('user')
+                        .setDescription('The user to remove.')
                         .setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand
@@ -32,24 +32,30 @@ module.exports = {
         }
 
         const subcommand = interaction.options.getSubcommand();
-        const username = interaction.options.getString('username');
+        const user = interaction.options.getUser('user');
 
         if (subcommand === 'add') {
+            if (!user) {
+                return interaction.reply({ content: 'You must specify a user to add.', ephemeral: true });
+            }
             try {
-                await db.addToWhitelist(username);
-                await interaction.reply({ content: `**${username}** has been added to the whitelist.`, ephemeral: true });
+                await db.addToWhitelist(user.id, user.username);
+                await interaction.reply({ content: `**${user.username}** has been added to the whitelist.`, ephemeral: true });
             } catch (error) {
                 await interaction.reply({ content: `❌ ${error.message}`, ephemeral: true });
             }
         } else if (subcommand === 'remove') {
+            if (!user) {
+                return interaction.reply({ content: 'You must specify a user to remove.', ephemeral: true });
+            }
             try {
-                await db.removeFromWhitelist(username);
-                await interaction.reply({ content: `**${username}** has been removed from the whitelist.`, ephemeral: true });
+                await db.removeFromWhitelist(user.id);
+                await interaction.reply({ content: `**${user.username}** has been removed from the whitelist.`, ephemeral: true });
             } catch (error) {
                 await interaction.reply({ content: `❌ ${error.message}`, ephemeral: true });
             }
         } else if (subcommand === 'list') {
-            const whitelist = await db.getWhitelist();
+            const whitelist = await db.getWhitelistedUsers();
             if (whitelist.length === 0) {
                 return interaction.reply({ content: 'The whitelist is empty.', ephemeral: true });
             }
