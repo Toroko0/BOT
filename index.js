@@ -107,7 +107,9 @@ function setupEventHandlers() {
     });
 
     try {
-        require('./handlers/interactionHandler').setupInteractionHandler(client);
+        const handlerPath = require.resolve('./handlers/interactionHandler');
+        delete require.cache[handlerPath];
+        require(handlerPath).setupInteractionHandler(client);
     } catch (error) {
         logger.error('[Startup] FATAL: Failed to setup interaction handler:', error);
         process.exit(1);
