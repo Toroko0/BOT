@@ -72,9 +72,10 @@ function setupEventHandlers() {
     client.once(Events.ClientReady, async c => {
         logger.info(`Logged in as ${c.user.tag}!`);
         try {
-            logger.info('[Startup] Running database migrations...');
-            await db.knex.migrate.latest();
-            logger.info('[Startup] Database migrations complete.');
+        // Migrations should be run manually via a script, not on startup.
+        // logger.info('[Startup] Running database migrations...');
+        // await db.knex.migrate.latest();
+        // logger.info('[Startup] Database migrations complete.');
 
             logger.info('[Startup] Running one-time startup cleanup...');
             const count = await db.removeExpiredWorlds();
@@ -106,7 +107,9 @@ function setupEventHandlers() {
     });
 
     try {
-        require('./handlers/interactionHandler').setupInteractionHandler(client);
+        const handlerPath = require.resolve('./handlers/interactionHandler');
+        delete require.cache[handlerPath];
+        require(handlerPath).setupInteractionHandler(client);
     } catch (error) {
         logger.error('[Startup] FATAL: Failed to setup interaction handler:', error);
         process.exit(1);
